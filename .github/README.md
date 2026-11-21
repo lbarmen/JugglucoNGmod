@@ -33,7 +33,15 @@ A row is added to the table when the change has been checked on a phone or a wat
 All changes by version and with dates, including the build and checks, are in [mod/CHANGES.md](/mod/CHANGES.md).
 
 ## Download
-There are no ready releases yet. Discussions (Issues) are switched off in this repository.
+There are no ready releases yet.
+
+## Questions, bugs and ideas
+Write them in [Issues](https://github.com/lbarmen/JugglucoNGmod/issues) of this repository. If a problem also happens
+in the official JugglucoNG app, report it to [JugglucoNG Issues](https://github.com/ctqvva/JugglucoNG/issues), checked
+with the official app.
+
+Issues are public. Do not post glucose values, insulin doses, sensor serial numbers or your Nightscout address: cut
+them out of logs and screenshots.
 
 ## More
 - [mod/CHANGES.md](/mod/CHANGES.md) — changes by version.
