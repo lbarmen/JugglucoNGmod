@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JugglucoNGmod widget (tk.glucodata.mod.widget): our strings, mod_widget_ prefix. Upstream's strings.xml is never edited. -->
+<resources>
+    <string name="mod_widget_label" translatable="false">JugglucoNGmod</string>
+    <string name="mod_widget_description">Glucose with trend, 5-minute change and 5-minute average dots</string>
+    <string name="mod_widget_settings_title">Widget settings</string>
+    <string name="mod_widget_shortcut_short">Widget</string>
+    <string name="mod_widget_done">Done</string>
+    <string name="mod_widget_none">No JugglucoNGmod widget on the home screen</string>
+    <string name="mod_widget_pick">Which widget?</string>
+    <string name="mod_widget_item">Widget %1$d</string>
+    <string name="mod_widget_item_size">%1$d × %2$d dp</string>
+    <string name="mod_widget_preview">Preview</string>
+    <string name="mod_widget_example">Example</string>
+
+    <string name="mod_widget_just_now">just now</string>
+    <string name="mod_widget_minutes_ago">%1$d min ago</string>
+
+    <string name="mod_widget_section_look">Look</string>
+    <string name="mod_widget_section_show">Show</string>
+    <string name="mod_widget_opt_transparency">Background transparency</string>
+    <string name="mod_widget_percent">%1$d %%</string>
+    <string name="mod_widget_opt_period">Chart period</string>
+    <string name="mod_widget_hours">%1$d h</string>
+    <string name="mod_widget_opt_dots">Dots</string>
+    <string name="mod_widget_dots_average">5-minute average</string>
+    <string name="mod_widget_dots_each">Every reading</string>
+    <string name="mod_widget_dots_line">Line</string>
+    <string name="mod_widget_opt_delta">Change over 5 min</string>
+    <string name="mod_widget_opt_age">“N min ago”</string>
+    <string name="mod_widget_opt_color">Number colored by range</string>
+    <string name="mod_widget_opt_lines">Range limit lines</string>
+    <string name="mod_widget_opt_layout">Layout</string>
+    <string name="mod_widget_layout_overlay">Text over the chart</string>
+    <string name="mod_widget_layout_top">Number on top, chart below</string>
+    <string name="mod_widget_opt_size">Number size</string>
+    <string name="mod_widget_size_auto">Auto</string>
+
+    <string name="mod_widget_trend_rising_fast">rising fast</string>
+    <string name="mod_widget_trend_rising">rising</string>
+    <string name="mod_widget_trend_rising_slowly">rising slowly</string>
+    <string name="mod_widget_trend_stable">stable</string>
+    <string name="mod_widget_trend_falling_slowly">falling slowly</string>
+    <string name="mod_widget_trend_falling">falling</string>
+    <string name="mod_widget_trend_falling_fast">falling fast</string>
+
+    <!-- Made-up numbers of the static preview in the widget list -->
+    <string name="mod_widget_preview_value" translatable="false">6.2</string>
+    <string name="mod_widget_preview_arrow" translatable="false">↗</string>
+    <string name="mod_widget_preview_delta" translatable="false">+0.2</string>
+</resources>

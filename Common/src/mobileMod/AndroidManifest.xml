@@ -38,5 +38,34 @@
             android:name="tk.glucodata.mod.watch.ModWatchStarter"
             android:authorities="${applicationId}.mod-watch"
             android:exported="false" />
+        <!-- Widget "JugglucoNGmod": redrawn on upstream's in-package "new reading" broadcast (they send it to every
+             receiver of the package), on the system's widget update and by our own explicit "N min ago" alarm.
+             Not exported: the system's widget service and this app reach it anyway, other apps cannot fake a reading. -->
+        <receiver
+            android:name="tk.glucodata.mod.widget.ModWidgetProvider"
+            android:exported="false"
+            android:label="@string/mod_widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="tk.glucodata.action.GLUCOSE_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/mod_widget_info" />
+        </receiver>
+        <!-- Widget settings: the launcher (another app) opens it when the widget is placed and from "Settings" on the
+             widget, so it is exported with the APPWIDGET_CONFIGURE filter; it closes at once for an id that is not one
+             of our widgets. Own task, not in recents: it does not bring up the app's main window behind it. -->
+        <activity
+            android:name="tk.glucodata.mod.widget.ModWidgetConfigActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:label="@string/mod_widget_settings_title"
+            android:taskAffinity=""
+            android:theme="@style/Theme.AppCompat.NoActionBar">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
     </application>
 </manifest>

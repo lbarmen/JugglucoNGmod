@@ -25,3 +25,7 @@ Common/src/mobile/java/tk/glucodata/mod/
 Common/src/mobileMod/
 Common/src/mobile/res/values/mod_*
 Common/src/mobile/res/values-ru/mod_*
+# widget block (feature/widget): layouts, the widget description and drawables with the mod_ prefix next to theirs
+Common/src/mobile/res/layout/mod_*
+Common/src/mobile/res/xml/mod_*
+Common/src/mobile/res/drawable/mod_*
