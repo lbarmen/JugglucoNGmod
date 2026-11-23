@@ -1,7 +1,5 @@
 package tk.glucodata.mod.carelink
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
@@ -10,6 +8,7 @@ import androidx.compose.ui.res.stringResource
 import tk.glucodata.R
 import tk.glucodata.ui.components.CardPosition
 import tk.glucodata.ui.components.SettingsItem
+import tk.glucodata.ui.symbols.Symbols
 
 /**
  * JugglucoNGmod, CareLink (stage 4e): the "CareLink" row in upstream's settings, sharing section - one line there
@@ -25,7 +24,7 @@ fun ModCareLinkEntry(sharingColor: Color) {
     SettingsItem(
         title = stringResource(R.string.mod_carelink_title),
         subtitle = stringResource(R.string.mod_carelink_entry_subtitle),
-        icon = Icons.Default.CloudDownload,
+        icon = Symbols.CloudDownloadFilled,
         iconTint = sharingColor,
         position = CardPosition.MIDDLE,
         onClick = {

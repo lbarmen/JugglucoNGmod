@@ -14,11 +14,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BatteryChargingFull
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Science
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -46,6 +41,7 @@ import tk.glucodata.ui.components.CardPosition
 import tk.glucodata.ui.components.SectionLabel
 import tk.glucodata.ui.components.SettingsItem
 import tk.glucodata.ui.components.SettingsSwitchItem
+import tk.glucodata.ui.symbols.Symbols
 import tk.glucodata.ui.util.ConnectedButtonGroup
 import java.util.Locale
 
@@ -138,7 +134,7 @@ internal fun CareLinkScreen(model: CareLinkViewModel, actions: CareLinkScreenAct
                 SettingsItem(
                     title = stringResource(R.string.mod_carelink_insulin),
                     subtitle = state.insulinName ?: stringResource(R.string.mod_carelink_insulin_none),
-                    icon = Icons.Default.Science,
+                    icon = Symbols.ScienceFilled,
                     iconTint = MaterialTheme.colorScheme.primary,
                     position = CardPosition.TOP,
                     onClick = if (state.insulinChoices.isEmpty()) null else ({ pickInsulin = true }),
@@ -307,19 +303,19 @@ private fun PhoneRows(state: CareLinkUiState, actions: CareLinkScreenActions) {
     val rows = ArrayList<PhoneRow>(3)
     if (!state.batteryExempt) {
         rows += PhoneRow(stringResource(R.string.mod_carelink_battery_exempt), stringResource(R.string.mod_carelink_battery_exempt_hint),
-            Icons.Default.BatteryChargingFull, actions.onBattery)
+            Symbols.BatterySaverFilled, actions.onBattery)
     }
     if (!state.notificationsAllowed) {
         rows += PhoneRow(stringResource(R.string.mod_carelink_notifications),
             stringResource(R.string.mod_carelink_notifications_hint, state.warnAfterMin),
-            Icons.Default.Notifications, actions.onNotifications)
+            Symbols.NotificationsFilled, actions.onNotifications)
     } else if (state.channelOff) {
         // the app may notify, our channel is off: Android drops the warnings silently (critic 4d, N6)
         rows += PhoneRow(stringResource(R.string.mod_carelink_channel_off), stringResource(R.string.mod_carelink_channel_off_hint),
-            Icons.Default.Notifications, actions.onSound)
+            Symbols.NotificationsFilled, actions.onSound)
     }
     rows += PhoneRow(stringResource(R.string.mod_carelink_sound), stringResource(R.string.mod_carelink_sound_hint),
-        Icons.AutoMirrored.Filled.VolumeUp, actions.onSound)
+        Symbols.VolumeUpFilled, actions.onSound)
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         rows.forEachIndexed { i, r ->
             SettingsItem(title = r.title, subtitle = r.hint, icon = r.icon, iconTint = tint,
