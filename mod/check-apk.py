@@ -146,7 +146,9 @@ def buildconfig_version_code(variant_dir):
 def check_names():
     """For every upstream values* dir that defines one of our overridden names, our source set defines it too
     (a new upstream locale with its own app_name or watch_face_name would show the upstream name there)."""
-    for name, our_src, value in (('app_name', 'mod', APP_NAME), ('watch_face_name', 'wearMod', WATCHFACE_NAME)):
+    # watch_face_name: upstream's face, renamed by our wearMod strings (our own face is mod_watch_face_name)
+    names = (('app_name', 'mod', APP_NAME), ('watch_face_name', 'wearMod', upstream_watchface_name()))
+    for name, our_src, value in names:
         upstream = set()
         for f in glob.glob('Common/src/*/res/values*/strings.xml'):
             parts = f.replace('\\', '/').split('/')
