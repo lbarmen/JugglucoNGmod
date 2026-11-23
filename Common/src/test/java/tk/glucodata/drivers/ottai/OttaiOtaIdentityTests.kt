@@ -11,10 +11,15 @@ import org.junit.Test
 
 class OttaiOtaIdentityTests {
     @Test fun signedInGlobalAndSyaiAccountsAreEligibleAlongsideCnPhoneAccounts() {
-        for (base in listOf(OttaiConstants.API_BASE_GLOBAL, OttaiConstants.API_BASE_SYAI)) {
-            assertTrue(OttaiCloudClient.supportsOtaSession(base, OttaiRegistry.SessionProfile.WATCH, true))
-            assertFalse(OttaiCloudClient.supportsOtaSession(base, OttaiRegistry.SessionProfile.WATCH, false))
-        }
+        val phone = OttaiRegistry.SessionProfile.GLOBAL_PHONE
+        val watch = OttaiRegistry.SessionProfile.WATCH
+        assertTrue(OttaiCloudClient.supportsOtaSession(OttaiConstants.API_BASE_GLOBAL, phone, true))
+        assertFalse(OttaiCloudClient.supportsOtaSession(OttaiConstants.API_BASE_GLOBAL, phone, false))
+        assertFalse(OttaiCloudClient.supportsOtaSession(OttaiConstants.API_BASE_GLOBAL, watch, true))
+        assertTrue(OttaiCloudClient.requiresGlobalSignIn(OttaiConstants.API_BASE_GLOBAL, watch))
+        assertFalse(OttaiCloudClient.requiresGlobalSignIn(OttaiConstants.API_BASE_GLOBAL, phone))
+        assertFalse(OttaiCloudClient.requiresGlobalSignIn(OttaiConstants.API_BASE_SYAI, watch))
+        assertTrue(OttaiCloudClient.supportsOtaSession(OttaiConstants.API_BASE_SYAI, watch, true))
         assertTrue(OttaiCloudClient.supportsOtaSession(OttaiConstants.API_BASE, OttaiRegistry.SessionProfile.CN_PHONE, true))
         assertFalse(OttaiCloudClient.supportsOtaSession(OttaiConstants.API_BASE, OttaiRegistry.SessionProfile.WATCH, true))
         assertFalse(OttaiCloudClient.supportsOtaSession("https://example.invalid", OttaiRegistry.SessionProfile.WATCH, true))
@@ -44,7 +49,8 @@ class OttaiOtaIdentityTests {
             })
             try {
                 assertThrows(OttaiOtaCloudException::class.java) { client.judgeOta("001122334455", "V1.7") }
-                assertEquals(1, exchanges)
+                // A generic "Error" refusal gets one paced retry; both attempts are exchanges.
+                assertEquals(2, exchanges)
                 assertEquals("https://api.ottai.com/cgm/security/app/server/security/exchangeKey", connection.url.toString())
                 val headerId = connection.getRequestProperty("deviceId")
                 assertEquals("ottai:a:$suffix", headerId)

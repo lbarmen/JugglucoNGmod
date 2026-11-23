@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JugglucoNGmod widget: one picture drawn by our code (tk.glucodata.mod.widget.ModWidgetRenderer). Also the initial
+     layout: without a picture it is fully transparent, no text. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/mod_widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <ImageView
+        android:id="@+id/mod_widget_image"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="fitCenter"
+        android:importantForAccessibility="yes" />
+</FrameLayout>
