@@ -8,7 +8,9 @@ A version is a tag `mod-<JugglucoNG version>-<our number>` on `main`; it is set 
 Each version has two lists: "For the user" - what is visible in the app, "Build and checks" - everything else.
 A new line goes into the "After …" section, in the same pull request (PR) as the change itself.
 
-## After candidate 2 (in `main`, no tag yet)
+## After mod-1.3.3-10 (in `main`, no tag yet)
+
+## mod-1.3.3-10 — 2026-11-23 (based on JugglucoNG 1.3.3-Alpha; candidate 10, checked on a phone and a watch)
 For the user:
 - 2026-11-21 — home-screen widget "JugglucoNGmod" next to the author's two, in the xDrip look: transparent, the number
   in range color, trend arrow, change over 5 min, "N min ago", 3 h of dots where each dot is a 5-minute average; a
