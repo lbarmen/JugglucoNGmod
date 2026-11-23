@@ -10,6 +10,12 @@ A new line goes into the "After …" section, in the same pull request (PR) as t
 
 ## After candidate 2 (in `main`, no tag yet)
 For the user:
+- 2026-11-21 — home-screen widget "JugglucoNGmod" next to the author's two, in the xDrip look: transparent, the number
+  in range color, trend arrow, change over 5 min, "N min ago", 3 h of dots where each dot is a 5-minute average; a
+  stale reading is grey and struck through. One row of icons high by default, resizable. Its own settings window with
+  a live preview, per widget, opened on placement and from the widget's "Settings"; an app-icon shortcut "Widget
+  settings" while a widget is placed. The author's files are not changed. Checked on a phone with candidate 9 (on
+  1.3.2-Alpha); merged into `main` after 1.3.3-Alpha, the tag comes with the first 1.3.3 candidate checked on a phone.
 - 2026-11-17 — renamed to JugglucoNGmod (candidates 1-2 were built under the former name and package): app name
   "JugglucoNGmod" (watch face too), package `tk.glucodata.ng.mod` (installs as a new app), repository
   `lbarmen/JugglucoNGmod`; inside: folder `mod/`, build type `mod`, hook mark `MOD-HOOK`, tags `mod-X.Y.Z-N`. The
