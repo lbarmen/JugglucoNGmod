@@ -7,7 +7,7 @@ Common/src/wearMod/
 Common/src/testMobile/java/mod/
 .github/workflows/mod-*.yml
 .github/README.md
-# phone only (CareLink, widget): code seen by every phone build and by their debug tests, never by the watch;
+# phone only (CareLink, watch, widget): code seen by every phone build and by their debug tests, never by the watch;
 # components in the manifest of the phone `mod` build only; strings with the mod_ prefix next to theirs
 Common/src/mobile/java/tk/glucodata/mod/
 Common/src/mobileMod/
