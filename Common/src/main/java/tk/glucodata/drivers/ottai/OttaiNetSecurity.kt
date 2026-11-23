@@ -1,6 +1,9 @@
 package tk.glucodata.drivers.ottai
 
+import java.io.EOFException
 import java.math.BigInteger
+import java.net.ConnectException
+import java.net.SocketTimeoutException
 import java.security.KeyFactory
 import java.security.KeyPair
 import java.security.MessageDigest
@@ -36,6 +39,12 @@ internal class OttaiNetSecurity(
     private val clock: () -> Long = System::currentTimeMillis,
     private val keyPair: () -> KeyPair = OttaiBleAuth::generateKeyPair,
     private val randomBytes: (Int) -> ByteArray = { size -> ByteArray(size).also { SecureRandom().nextBytes(it) } },
+    private val pause: (Long) -> Unit = { delayMs ->
+        try { Thread.sleep(delayMs) } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw OttaiOtaCloudException("cancelled")
+        }
+    },
 ) {
     internal data class Reply(val status: Int, val json: JSONObject?)
     private class Secret(val id: String, val expires: Long, val aes: ByteArray, val signing: ByteArray) {
@@ -47,6 +56,10 @@ internal class OttaiNetSecurity(
     private var lastNonce = 0L
 
     fun close() { secret?.clear(); secret = null }
+
+    private companion object {
+        const val EXCHANGE_RETRY_MS = 700L
+    }
 
     fun request(method: String, path: String, query: Map<String, String> = emptyMap(), body: String? = null): JSONObject =
         checked(requestReply(method, path, query, body), "ota_request")
@@ -98,22 +111,39 @@ internal class OttaiNetSecurity(
     }
 
     private fun establish(): Secret {
-        val pair = keyPair()
-        val (x, y) = OttaiBleAuth.publicCoords(pair.public as ECPublicKey)
-        val publicX = encode(x)
-        val publicY = encode(y)
         var result: JSONObject? = null
-        repeat(2) { attempt ->
-            if (result == null) {
-                val timestamp = now()
-                val body = JSONObject().put("clientPubKeyX", publicX).put("clientPubKeyY", publicY)
-                    .put("clientTimestamp", timestamp)
-                    .put("clientSignature", sha256("$deviceId$publicX$publicY$timestamp"))
-                val reply = exchange(body)
-                val raw = reply.json
-                if (attempt == 0 && raw?.optString("code") == "CLIENT_CLOCK_OFFSET" && raw.optLong("currentTime") > 0) {
-                    clockOffset = raw.getLong("currentTime") - clock()
-                } else result = protocol("ota_exchange_response") { checked(reply, "ota_exchange").getJSONObject("data") }
+        var pair = keyPair()
+        var clockCorrected = false
+        var retried = false
+        while (result == null) {
+            checkCancellation()
+            val (x, y) = OttaiBleAuth.publicCoords(pair.public as ECPublicKey)
+            val publicX = encode(x)
+            val publicY = encode(y)
+            val timestamp = now()
+            val body = JSONObject().put("clientPubKeyX", publicX).put("clientPubKeyY", publicY)
+                .put("clientTimestamp", timestamp)
+                .put("clientSignature", sha256("$deviceId$publicX$publicY$timestamp"))
+            val reply = try {
+                exchange(body)
+            } catch (error: Exception) {
+                if (error !is ConnectException && error !is SocketTimeoutException && error !is EOFException) throw error
+                null
+            }
+            val raw = reply?.json
+            if (!clockCorrected && raw?.optString("code") == "CLIENT_CLOCK_OFFSET" && raw.optLong("currentTime") > 0) {
+                clockCorrected = true
+                clockOffset = raw.getLong("currentTime") - clock()
+            } else if (!retried && (reply == null || transientExchangeRefusal(reply))) {
+                // Field report: the gateway answered one exchange with a bare "Error" and the
+                // next attempt seconds later succeeded. A new key exchange is stateless, so one
+                // paced retry keeps a momentary refusal from reaching the user.
+                retried = true
+                pause(EXCHANGE_RETRY_MS)
+                pair = keyPair()
+            } else {
+                if (reply == null) throw OttaiOtaCloudException("ota_exchange_network")
+                result = protocol("ota_exchange_response") { checked(reply, "ota_exchange").getJSONObject("data") }
             }
         }
         return protocol("ota_exchange_crypto") {
@@ -166,6 +196,20 @@ internal class OttaiNetSecurity(
             throw OttaiOtaCloudException(diagnostic, businessCode, reply.status)
         }
         return requireNotNull(json)
+    }
+
+    /**
+     * A refusal that says nothing about this client: a server error, an empty body, or a generic
+     * failure code. Named security/auth/clock codes are definite answers and are not retried.
+     */
+    private fun transientExchangeRefusal(reply: Reply): Boolean {
+        if (successful(reply)) return false
+        // A 4xx is a definite refusal of this client, with or without a body.
+        if (reply.status !in 200..299 && reply.status < 500) return false
+        // A named security/account/clock refusal is definite whatever status carries it.
+        val code = reply.json?.optString("code").orEmpty()
+        if (code.matches(Regex("(?:NET_SECURITY_[A-Z_]+|AuthFailed_[A-Za-z_]+|CLIENT_CLOCK_OFFSET)"))) return false
+        return true
     }
 
     private fun successful(reply: Reply): Boolean {

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JugglucoNGmod widget (tk.glucodata.mod.widget): Russian strings. -->
+<resources>
+    <string name="mod_widget_description">Сахар с трендом, изменением за 5 мин и точками — средними за 5 мин</string>
+    <string name="mod_widget_settings_title">Настройки виджета</string>
+    <string name="mod_widget_shortcut_short">Виджет</string>
+    <string name="mod_widget_done">Готово</string>
+    <string name="mod_widget_none">На главном экране нет виджета JugglucoNGmod</string>
+    <string name="mod_widget_pick">Какой виджет?</string>
+    <string name="mod_widget_item">Виджет %1$d</string>
+    <string name="mod_widget_item_size">%1$d × %2$d dp</string>
+    <string name="mod_widget_preview">Предпросмотр</string>
+    <string name="mod_widget_example">Пример</string>
+
+    <string name="mod_widget_just_now">только что</string>
+    <string name="mod_widget_minutes_ago">%1$d мин назад</string>
+
+    <string name="mod_widget_section_look">Вид</string>
+    <string name="mod_widget_section_show">Показывать</string>
+    <string name="mod_widget_opt_transparency">Прозрачность фона</string>
+    <string name="mod_widget_percent">%1$d %%</string>
+    <string name="mod_widget_opt_period">Период графика</string>
+    <string name="mod_widget_hours">%1$d ч</string>
+    <string name="mod_widget_opt_dots">Точки</string>
+    <string name="mod_widget_dots_average">Среднее за 5 мин</string>
+    <string name="mod_widget_dots_each">Каждое показание</string>
+    <string name="mod_widget_dots_line">Линия</string>
+    <string name="mod_widget_opt_delta">Дельта за 5 мин</string>
+    <string name="mod_widget_opt_age">«N мин назад»</string>
+    <string name="mod_widget_opt_color">Цвет цифры по диапазону</string>
+    <string name="mod_widget_opt_lines">Линии границ диапазона</string>
+    <string name="mod_widget_opt_layout">Расположение</string>
+    <string name="mod_widget_layout_overlay">Текст поверх графика</string>
+    <string name="mod_widget_layout_top">Цифра сверху, график ниже</string>
+    <string name="mod_widget_opt_size">Размер цифры</string>
+    <string name="mod_widget_size_auto">Авто</string>
+
+    <string name="mod_widget_trend_rising_fast">быстро растёт</string>
+    <string name="mod_widget_trend_rising">растёт</string>
+    <string name="mod_widget_trend_rising_slowly">медленно растёт</string>
+    <string name="mod_widget_trend_stable">стабильно</string>
+    <string name="mod_widget_trend_falling_slowly">медленно падает</string>
+    <string name="mod_widget_trend_falling">падает</string>
+    <string name="mod_widget_trend_falling_fast">быстро падает</string>
+</resources>
