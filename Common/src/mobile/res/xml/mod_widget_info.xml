@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JugglucoNGmod widget: one row of icons high by default (as xDrip: minHeight 40dp), four cells wide, resizable.
+     The settings window opens when the widget is placed (configure) and from "Settings" on a long press
+     (reconfigurable). Redrawn by our receiver only: updatePeriodMillis 0. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:configure="tk.glucodata.mod.widget.ModWidgetConfigActivity"
+    android:description="@string/mod_widget_description"
+    android:initialLayout="@layout/mod_widget"
+    android:minWidth="110dp"
+    android:minHeight="40dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="40dp"
+    android:previewImage="@drawable/mod_widget_preview_dots"
+    android:previewLayout="@layout/mod_widget_preview"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellWidth="4"
+    android:targetCellHeight="1"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen"
+    android:widgetFeatures="reconfigurable" />

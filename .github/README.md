@@ -26,6 +26,7 @@ What the app itself can do is in the [author's README](/README.md).
 | Signing | upstream key | own key, fingerprint in [`mod/mod-cert.sha256`](/mod/mod-cert.sha256) | 1.3.2-2 |
 | In-app update | — | from the releases of this repository (none published yet) | 1.3.2-2 |
 | Clone mode, BloodControl service (for AiDEX) | present | do not work: they need secrets of the JugglucoNG author | 1.3.2-2 |
+| Home-screen widget | two widgets: a card with the number, arrow and a 6 h chart (not transparent), and the number with arrow; no change over 5 min, no reading age | a third widget "JugglucoNGmod" in the xDrip look: transparent, number in range color, arrow, change over 5 min, "N min ago", 3 h of 5-minute dots; own settings window with a live preview (checked on a phone, 2026-11-21) | next |
 
 Two apps on one sensor interfere with each other: connect a sensor to one of them only.
 
