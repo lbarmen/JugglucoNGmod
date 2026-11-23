@@ -8,6 +8,9 @@ Run from the repository root after `bash mod/gradlew-mod.sh ... assembleMobileMo
 --mode release  additionally the signature must equal mod/mod-cert.sha256
 --no-vendor     skip the vendor library check (emulator x86_64 build has no vendor libraries)
 --manifest P    update-manifest.json must describe the phone APK (required with --mode release)
+
+  python3 mod/check-apk.py --trial-absent PHONE_APK
+                only: a phone APK built with -PmodRelease=N (N >= 1) has no CareLink trial (marker strings)
 """
 import argparse
 import fnmatch
@@ -274,6 +277,75 @@ def check_xml_drawable_constructors(apk):
         check(c in ctors, f'wear dex: {c} has its no-arg constructor (inflated from {len(files)} drawable XML)')
 
 
+MOD_STARTER = 'tk.glucodata.mod.carelink.ModCareLinkStarter'
+# Strings that only the CareLink trial code has (part 4p; Common/src/modTrial and .../mod/carelink/trial): the command
+# action, the log tag, the address of the trial session. Release builds rename classes (R8, no -dontobfuscate), so the
+# trial is found by these, not by class names.
+TRIAL_MARKERS = [b'tk.glucodata.ng.mod.CARELINK_TRIAL', b'ModCareLinkTrial', b'trial.invalid']
+
+
+def dex_marker_hits(apk):
+    """Which trial markers occur in the raw dex files of [apk] (the string pool holds them whole)."""
+    found = set()
+    with zipfile.ZipFile(apk) as z:
+        dexes = [n for n in z.namelist() if re.fullmatch(r'classes\d*\.dex', n)]
+        for n in dexes:
+            raw = z.read(n)
+            found.update(m.decode() for m in TRIAL_MARKERS if m in raw)
+    return dexes, found
+
+
+def check_trial(phone, release):
+    """Test build (N = 0): every trial marker is in the phone dex - otherwise the trial vanished silently.
+    Candidate (N >= 1): none of them, in the dex or in the manifest."""
+    dexes, found = dex_marker_hits(phone)
+    names = [m.decode() for m in TRIAL_MARKERS]
+    if release == 0:
+        missing = sorted(set(names) - found)
+        check(dexes and not missing, f'phone dex (test build): CareLink trial markers present {sorted(found)}'
+              + (f' (missing: {missing})' if missing else ''))
+    else:
+        tree = manifest_tree(phone)
+        in_manifest = [m for m in names if m in tree]
+        check(dexes and not found and not in_manifest,
+              f'phone (candidate -mod{release}): no CareLink trial marker in {len(dexes)} dex file(s) or the manifest'
+              + (f' (found: {sorted(found) + in_manifest})' if found or in_manifest else ''))
+
+
+def manifest_tree(apk):
+    return run([build_tool('aapt2'), 'dump', 'xmltree', '--file', 'AndroidManifest.xml', apk])
+
+
+def check_mod_components(phone, wear, release):
+    """Our phone-only code (CareLink, stage 4): components declared in Common/src/mobileMod/AndroidManifest.xml are
+    in the phone APK; the watch gets none of our classes. Searched with the dot / slash after `mod`: the package
+    itself is tk.glucodata.ng.mod, our classes are tk.glucodata.mod.* The CareLink trial: in a test build, not in a
+    candidate (check_trial)."""
+    check_trial(phone, release)
+    tree = manifest_tree(phone)
+    check(MOD_STARTER in tree and f'{PACKAGE}.mod-carelink' in tree,
+          f'phone manifest: {MOD_STARTER} (authority {PACKAGE}.mod-carelink) - source set mobileMod is in the build')
+    wtree = manifest_tree(wear)
+    bad = sorted(set(re.findall(r'tk\.glucodata\.mod\.[\w.$]+', wtree)))
+    check(not bad and 'mod-carelink' not in wtree,
+          'wear manifest: none of our components (tk.glucodata.mod.*)' + (f' (found: {bad[:10]})' if bad else ''))
+    hits = set()
+    with zipfile.ZipFile(wear) as z:
+        tmp = os.path.join(os.environ.get('RUNNER_TEMP', '/tmp'), 'mod-wear-dex-ours')
+        os.makedirs(tmp, exist_ok=True)
+        dexes = [n for n in z.namelist() if re.fullmatch(r'classes\d*\.dex', n)]
+        for n in dexes:
+            path = z.extract(n, tmp)
+            hits.update(re.findall(r'Ltk/glucodata/mod/[\w/$]+', run([build_tool('dexdump'), path])))
+            with open(path, 'rb') as f:
+                raw = f.read()
+            if b'tk/glucodata/mod/' in raw or b'tk.glucodata.mod.' in raw:
+                hits.add(f'(string in {n})')
+            os.remove(path)
+    check(dexes and not hits, f'wear dex: none of our classes tk/glucodata/mod/ in {len(dexes)} dex file(s)'
+          + (f' (found: {sorted(hits)[:10]})' if hits else ''))
+
+
 def check_upstream_hooks():
     """Upstream files of HEAD: only MOD-HOOK changes within the budget - mod/check-hooks.py (marks <-> mod/HOOKS.md,
     every changed hunk next to a mark, at most 15 files and 60 lines). Replaced "0 changes in upstream files" so that
@@ -301,15 +373,35 @@ def check_manifest(path, phone, phone_code):
         check(art.get('sha256') == hashlib.sha256(data).hexdigest(), 'manifest: sha256 = phone APK')
 
 
+def trial_absent(phone):
+    """--trial-absent: a phone APK built like a candidate (-PmodRelease=1, one-time key) inside the test build job has
+    no CareLink trial. Only that - no wear, signature or update manifest checks."""
+    pkg, code, name, _ = badging(phone)
+    m = re.search(r'-mod(\d+)$', name)
+    release = int(m.group(1)) if m else 0
+    check(pkg == PACKAGE and release >= 1, f'phone: package {pkg}, versionName {name} is a candidate build (-modN, N >= 1)')
+    if release >= 1:
+        check_trial(phone, release)
+    print(f'\n{len(failures)} check(s) failed' if failures else '\nAll checks passed')
+    sys.exit(1 if failures else 0)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--phone', required=True)
-    ap.add_argument('--wear', required=True)
-    ap.add_argument('--release', type=int, required=True)
-    ap.add_argument('--mode', choices=['test', 'release'], required=True)
+    ap.add_argument('--trial-absent', metavar='PHONE_APK',
+                    help='only: the CareLink trial is not in this candidate-like phone APK (part 4p)')
+    ap.add_argument('--phone')
+    ap.add_argument('--wear')
+    ap.add_argument('--release', type=int)
+    ap.add_argument('--mode', choices=['test', 'release'])
     ap.add_argument('--no-vendor', action='store_true')
     ap.add_argument('--manifest', help='update-manifest.json to check against the phone APK')
     a = ap.parse_args()
+    if a.trial_absent:
+        trial_absent(a.trial_absent)
+    missing = [f'--{n}' for n in ('phone', 'wear', 'release', 'mode') if getattr(a, n) is None]
+    if missing:
+        ap.error(f'required: {" ".join(missing)} (or --trial-absent PHONE_APK alone)')
     codes = {}
 
     up_code = int(build_gradle_value('appVersionCode'))
@@ -340,6 +432,7 @@ def main():
     check_watchface_name(a.wear)
     check_watchface_resources(a.wear)
     check_xml_drawable_constructors(a.wear)
+    check_mod_components(a.phone, a.wear, a.release)
     if not a.no_vendor:
         check_vendor(a.phone)
     check_upstream_hooks()

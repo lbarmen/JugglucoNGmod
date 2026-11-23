@@ -6,7 +6,8 @@
 // What this script does, all for the `mod` build type only:
 //  - creates `mod` from upstream `release` (initWith), then adds exactly our changes:
 //    package suffix .mod, version suffix -modN, own versionCode, own update repo,
-//    no SourceForge fallback, -DAPPSUFFIX for the native side, our R8 rules mod/proguard-mod.pro;
+//    no SourceForge fallback, -DAPPSUFFIX for the native side, our R8 rules mod/proguard-mod.pro and
+//    mod/proguard-mod-trial.pro; test builds (N = 0) of the phone also get Common/src/modTrial/java (CareLink trial);
 //  - fails the build loudly if `mod` no longer matches `release` apart from those changes
 //    (upstream added a flag to `release` that initWith did not copy, etc.);
 //  - fails the build if any of the four signing properties is missing or empty,
@@ -43,6 +44,18 @@ gradle.beforeProject { Project p ->
             // Our R8 rules after upstream's (mod/proguard-mod.pro: constructors of classes inflated from XML).
             final String MOD_PROGUARD = 'proguard-mod.pro'
             mod.proguardFile(p.rootProject.file("mod/${MOD_PROGUARD}"))
+            // CareLink trial entry point (part 4p): always added - in a candidate it matches nothing.
+            final String MOD_TRIAL_PROGUARD = 'proguard-mod-trial.pro'
+            mod.proguardFile(p.rootProject.file("mod/${MOD_TRIAL_PROGUARD}"))
+            // CareLink trial sources (part 4p): test builds of the phone only (source set mobileMod = phone + mod); a
+            // candidate and the watch never get them. The source set's `kotlin` dirs: AGP's built-in Kotlin compiles .kt
+            // only from them (plus the default src/<set>/java); an extra java dir reaches javac alone, which skips .kt -
+            // upstream's extra java.srcDirs hold .java only (runs 43936569206 variant API java dir, 43940679304
+            // sourceSets java.srcDir: no trial class in the APK).
+            if (modRelease == 0) {
+                android.sourceSets.maybeCreate('mobileMod').kotlin.srcDir('src/modTrial/java')
+                p.logger.lifecycle("MOD: mobileMod gets the CareLink trial (src/modTrial/java, test build)")
+            }
             def appSuffixFlag = "-DAPPSUFFIX=\"quotes(${MOD_SUFFIX})\""
             mod.externalNativeBuild.cmake.cppFlags.add(appSuffixFlag)
             mod.externalNativeBuild.cmake.cFlags.add(appSuffixFlag)
@@ -57,7 +70,7 @@ gradle.beforeProject { Project p ->
             same('shrinkResources', release.shrinkResources, mod.shrinkResources)
             same('debuggable', release.debuggable, mod.debuggable)
             same('jniDebuggable', release.jniDebuggable, mod.jniDebuggable)
-            same('proguardFiles', release.proguardFiles*.name + [MOD_PROGUARD], mod.proguardFiles*.name)
+            same('proguardFiles', release.proguardFiles*.name + [MOD_PROGUARD, MOD_TRIAL_PROGUARD], mod.proguardFiles*.name)
             same('consumerProguardFiles', release.consumerProguardFiles*.name, mod.consumerProguardFiles*.name)
             same('manifestPlaceholders', release.manifestPlaceholders, mod.manifestPlaceholders)
             same('matchingFallbacks', release.matchingFallbacks, mod.matchingFallbacks)

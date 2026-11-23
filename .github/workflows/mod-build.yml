@@ -3,7 +3,9 @@
 # test-build (push to main or feature/**, not a push of .md files only; or Run workflow with release 0):
 #   no environment, no secrets. Signed with a one-time key the job creates and deletes itself; release number 0
 #   (versionName ...-mod0). Its APKs are for checks and the emulator only, never for a phone or a
-#   watch: Android would not install the next build over it.
+#   watch: Android would not install the next build over it. The phone of a test build carries the
+#   CareLink trial (Common/src/modTrial); a last step builds the phone again as a candidate would
+#   (-PmodRelease=1, another one-time key, nothing uploaded) and checks the trial is not in it.
 #
 # Candidate (Run workflow on main with release 1..99 and the block branches to test, space-separated,
 # may be empty): main + those branches merged in this run, signed with our key; the APKs stay on the
@@ -138,6 +140,31 @@ jobs:
             mod-checks.txt
           if-no-files-found: warn
           retention-days: 14
+
+      # CareLink trial (part 4p): a phone built like a candidate (-PmodRelease=1) has no trial. After the upload on
+      # purpose: this APK has the same file name and replaces the -mod0 one; nothing of it is uploaded. Its own
+      # one-time key (the build step's key is gone with its kdir).
+      - name: Candidate-like phone (-mod1) has no CareLink trial
+        run: |
+          set -euo pipefail
+          umask 077
+          start=$(date +%s)
+          kdir=$(mktemp -d "$RUNNER_TEMP/mod-onetime-trial.XXXXXX")
+          trap 'rm -rf "$kdir"' EXIT
+          pw=$(openssl rand -hex 24)
+          echo "::add-mask::$pw"
+          keytool -genkeypair -keystore "$kdir/onetime.p12" -storetype PKCS12 \
+            -storepass "$pw" -keypass "$pw" -alias onetime -keyalg RSA -keysize 2048 -validity 2 \
+            -dname "CN=JugglucoNGmod one-time test key" > /dev/null 2>&1
+          export ORG_GRADLE_PROJECT_thekeyfile="$kdir/onetime.p12"
+          export ORG_GRADLE_PROJECT_thepassword="$pw"
+          export ORG_GRADLE_PROJECT_thekeyalias=onetime
+          export ORG_GRADLE_PROJECT_thekeypassword="$pw"
+          bash mod/gradlew-mod.sh :Common:assembleMobileMod \
+            -PmodRelease=1 --no-daemon --no-configuration-cache --stacktrace
+          phone=$(ls Common/build/outputs/apk/mobile/mod/*.apk)
+          python3 mod/check-apk.py --trial-absent "$phone"
+          echo "candidate-like phone build and check: $(( ($(date +%s) - start) / 60 )) min"
 
   candidate-precheck:
     name: mod candidate precheck (inputs, branches, no new upstream code)
