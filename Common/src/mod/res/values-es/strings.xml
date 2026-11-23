@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JugglucoNGmod: own app name, overrides upstream app_name (Common/src/main/res/values-es). -->
+<resources>
+    <string name="app_name">JugglucoNGmod</string>
+</resources>

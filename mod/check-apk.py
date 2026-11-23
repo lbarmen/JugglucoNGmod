@@ -120,21 +120,23 @@ def buildconfig_version_code(variant_dir):
 
 
 def check_names():
-    """For every upstream values* dir that defines app_name, our mod source set defines it too."""
-    upstream = set()
-    for f in glob.glob('Common/src/*/res/values*/strings.xml'):
-        src = f.split('/')[2]
-        if src in ('mod', 'mobileMod', 'wearMod'):
-            continue
-        if re.search(r'name="app_name"', open(f, encoding='utf-8').read()):
-            upstream.add(f.split('/')[4])
-    ours = set()
-    for f in glob.glob('Common/src/mod/res/values*/strings.xml'):
-        if re.search(rf'name="app_name">{re.escape(APP_NAME)}<', open(f, encoding='utf-8').read()):
-            ours.add(f.split('/')[4])
-    missing = sorted(upstream - ours)
-    check(not missing and upstream, f'app_name "{APP_NAME}" for all {len(upstream)} upstream values* dirs'
-          + (f' (missing: {missing})' if missing else ''))
+    """For every upstream values* dir that defines one of our overridden names, our source set defines it too
+    (a new upstream locale with its own app_name or watch_face_name would show the upstream name there)."""
+    for name, our_src, value in (('app_name', 'mod', APP_NAME), ('watch_face_name', 'wearMod', WATCHFACE_NAME)):
+        upstream = set()
+        for f in glob.glob('Common/src/*/res/values*/strings.xml'):
+            parts = f.replace('\\', '/').split('/')
+            if parts[2] in ('mod', 'mobileMod', 'wearMod'):
+                continue
+            if re.search(rf'name="{name}"', open(f, encoding='utf-8').read()):
+                upstream.add(parts[4])
+        ours = set()
+        for f in glob.glob(f'Common/src/{our_src}/res/values*/strings.xml'):
+            if re.search(rf'name="{name}"[^>]*>{re.escape(value)}<', open(f, encoding='utf-8').read()):
+                ours.add(f.replace('\\', '/').split('/')[4])
+        missing = sorted(upstream - ours)
+        check(not missing and upstream, f'{name} "{value}" in {our_src} for all {len(upstream)} upstream values* dirs'
+              + (f' (missing: {missing})' if missing else ''))
 
 
 def check_icon():
