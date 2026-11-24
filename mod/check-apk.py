@@ -435,6 +435,12 @@ def check_xml_drawable_constructors(apk):
 
 
 MOD_STARTER = 'tk.glucodata.mod.carelink.ModCareLinkStarter'
+# Every CareLink component of Common/src/mobileMod/AndroidManifest.xml (joint branch, critic of part 6, C6-1: the
+# manifest is merged by hand when CareLink and the watch block meet - a lost receiver would stop the pump data quietly)
+MOD_CARELINK_COMPONENTS = [MOD_STARTER, 'tk.glucodata.mod.carelink.CareLinkLoginActivity',
+                           'tk.glucodata.mod.carelink.CareLinkActivity',
+                           'tk.glucodata.mod.carelink.CareLinkAlarmReceiver',
+                           'tk.glucodata.mod.carelink.CareLinkBootReceiver']
 # Strings that only the CareLink trial code has (part 4p; Common/src/modTrial and .../mod/carelink/trial): the command
 # action, the log tag, the address of the trial session. Release builds rename classes (R8, no -dontobfuscate), so the
 # trial is found by these, not by class names.
@@ -474,18 +480,30 @@ def manifest_tree(apk):
 
 
 def check_mod_components(phone, wear, release):
-    """Our phone-only code (CareLink, stage 4): components declared in Common/src/mobileMod/AndroidManifest.xml are
-    in the phone APK; the watch gets none of our classes. Searched with the dot / slash after `mod`: the package
-    itself is tk.glucodata.ng.mod, our classes are tk.glucodata.mod.* The CareLink trial: in a test build, not in a
-    candidate (check_trial)."""
+    """Our phone-only code (CareLink, stage 4): every CareLink component declared in
+    Common/src/mobileMod/AndroidManifest.xml is in the phone APK, the boot receiver with both of its actions. The
+    watch gets none of our phone-only code: no CareLink class (tk.glucodata.mod.carelink) and none of the phone
+    components of the watch block. Our watch classes (tk.glucodata.mod.watch, .health; check_wear_components) do belong
+    there - joint branch, critic of part 6, V6-1: the former 'no tk.glucodata.mod.* in the watch' predates the watch
+    block. Searched with the dot / slash after `mod`: the package itself is tk.glucodata.ng.mod. The CareLink trial: in
+    a test build, not in a candidate (check_trial)."""
     check_trial(phone, release)
     tree = manifest_tree(phone)
-    check(MOD_STARTER in tree and f'{PACKAGE}.mod-carelink' in tree,
-          f'phone manifest: {MOD_STARTER} (authority {PACKAGE}.mod-carelink) - source set mobileMod is in the build')
+    blocks = component_blocks(tree)
+    missing = [c for c in MOD_CARELINK_COMPONENTS if c not in blocks]
+    check(not missing and f'{PACKAGE}.mod-carelink' in tree,
+          f'phone manifest: our {len(MOD_CARELINK_COMPONENTS)} CareLink components (authority {PACKAGE}.mod-carelink)'
+          ' - source set mobileMod is in the build' + (f' (missing: {missing})' if missing else ''))
+    boot = blocks.get('tk.glucodata.mod.carelink.CareLinkBootReceiver', '')
+    check('android.intent.action.BOOT_COMPLETED' in boot and 'android.intent.action.MY_PACKAGE_REPLACED' in boot,
+          'CareLink boot receiver: BOOT_COMPLETED and MY_PACKAGE_REPLACED')
     wtree = manifest_tree(wear)
-    bad = sorted(set(re.findall(r'tk\.glucodata\.mod\.[\w.$]+', wtree)))
+    bad = sorted(set(re.findall(r'tk\.glucodata\.mod\.carelink[\w.$]*', wtree))
+                 | {c for c in MOD_PHONE_COMPONENTS if c in wtree})
     check(not bad and 'mod-carelink' not in wtree,
-          'wear manifest: none of our components (tk.glucodata.mod.*)' + (f' (found: {bad[:10]})' if bad else ''))
+          'wear manifest: none of our phone components (CareLink, watch block phone side)'
+          + (f' (found: {bad[:10]})' if bad else ''))
+    phone_only = [c.replace('.', '/') for c in MOD_PHONE_COMPONENTS]
     hits = set()
     with zipfile.ZipFile(wear) as z:
         tmp = os.path.join(os.environ.get('RUNNER_TEMP', '/tmp'), 'mod-wear-dex-ours')
@@ -493,14 +511,16 @@ def check_mod_components(phone, wear, release):
         dexes = [n for n in z.namelist() if re.fullmatch(r'classes\d*\.dex', n)]
         for n in dexes:
             path = z.extract(n, tmp)
-            hits.update(re.findall(r'Ltk/glucodata/mod/[\w/$]+', run([build_tool('dexdump'), path])))
+            dump = run([build_tool('dexdump'), path])
+            hits.update(re.findall(r'Ltk/glucodata/mod/carelink/[\w/$]+', dump))
+            hits.update(f'L{c};' for c in phone_only if f'L{c};' in dump)
             with open(path, 'rb') as f:
                 raw = f.read()
-            if b'tk/glucodata/mod/' in raw or b'tk.glucodata.mod.' in raw:
+            if b'tk/glucodata/mod/carelink' in raw or b'tk.glucodata.mod.carelink' in raw:
                 hits.add(f'(string in {n})')
             os.remove(path)
-    check(dexes and not hits, f'wear dex: none of our classes tk/glucodata/mod/ in {len(dexes)} dex file(s)'
-          + (f' (found: {sorted(hits)[:10]})' if hits else ''))
+    check(dexes and not hits, f'wear dex: no phone-only class of ours (CareLink, watch block phone side) in '
+          f'{len(dexes)} dex file(s)' + (f' (found: {sorted(hits)[:10]})' if hits else ''))
 
 
 def check_upstream_hooks():
