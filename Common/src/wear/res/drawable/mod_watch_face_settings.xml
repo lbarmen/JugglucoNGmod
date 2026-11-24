@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JugglucoNGmod, watch block (part 3c2): launcher icon of "Graph hours", the editor of our watch face - a small
+     glucose curve with two target lines and a clock hand mark on a teal disc. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#FF00897B"
+        android:pathData="M24,1 A23,23 0 1,1 23.99,1 Z" />
+    <!-- target lines -->
+    <path
+        android:fillColor="#99FFFFFF"
+        android:pathData="M10,18 L38,18 L38,19.5 L10,19.5 Z M10,30 L38,30 L38,31.5 L10,31.5 Z" />
+    <!-- the curve -->
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M10,26 L16,22 L22,27 L28,15 L34,21 L38,19" />
+    <!-- hour ticks -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M15.25,34 L16.75,34 L16.75,38 L15.25,38 Z M23.25,34 L24.75,34 L24.75,38 L23.25,38 Z M31.25,34 L32.75,34 L32.75,38 L31.25,38 Z" />
+</vector>

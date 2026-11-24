@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  JugglucoNGmod, watch block (part 7c): our watch build's copy of upstream's `novalue` icon
+  (Common/src/main/res/drawable-anydpi-v24/novalue.xml, a white oval), which this source set overrides in the mod
+  watch APK only. Wear OS draws it at the bottom of every watch face as the icon of upstream's ongoing activity
+  (WearOngoingActivity.setStaticIcon); the owner asked for it to be barely visible, not gone. Same 24 dp box, a dot
+  of radius 1.5 at a quarter alpha. Upstream's notification small icons on the watch use the same picture and turn
+  faint too (accepted). The phone keeps upstream's oval.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+  <path
+      android:fillColor="#40FFFFFF"
+      android:pathData="M12,10.5a1.5,1.5 0,1 1,0 3a1.5,1.5 0,1 1,0 -3z" />
+</vector>

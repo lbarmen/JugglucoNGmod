@@ -20,8 +20,23 @@ For the user:
   saved. Two hooks in the author's files, 3 lines (`carelink-settings`, `carelink-tempbasal`, see HOOKS.md). On a
   phone since 2026-11-18 (candidates 3 and 4, computer builds 6 and 8, candidates 9 and 10 with the 1.3.3-Alpha);
   the tag comes with the next candidate from `main`.
+- 2026-11-23 — watch block for a Wear OS watch with JugglucoNGmod on the phone and the watch: own watch face
+  "JugglucoNGmod" (whole circle; glucose, arrow, change over 5 min, age in seconds, 1/3/6 h chart with hour lines and
+  the forecast, time, date, phone and watch battery, the pump's active insulin with CareLink; a reading on the face
+  0–1 s after the phone; chart length in the "Graph hours" app entry; the author's face is "JugglucoNGmod classic");
+  "Snooze alarm" app entry for a watch button (snoozes on the watch and the phone); the phone's alarm settings sent to
+  the watch, on the watch vibration only, own watch alarm screen with large buttons; glucose missed while away from
+  the phone filled in from the phone (up to 72 h); heart rate and steps from the watch (Health Services) on the
+  phone's "JugglucoNGmod watch" screen. The author's files are not changed. On the owner's phone and watch since
+  2026-11-18 (candidates 4 and 5, computer builds 6–8, candidates 9 and 10 with the 1.3.3-Alpha); the tag comes with
+  the next candidate from `main`.
 
 Build and checks:
+- 2026-11-23 — watch block JVM tests (about 480: shared code, watch, phone side); contract tests that turn red when
+  the author changes code we copy (`ModAlarmContractTest`, `HistoryGapFillTest`), what to compare after a merge is in
+  `mod/SYNC.md`. `mod/check-apk.py`: our watch components and permissions in the wear APK, both face names, our faint
+  dot instead of the author's ongoing-activity icon; the watch APK carries our watch classes, never CareLink's or the
+  watch block's phone side. `mod/mod-init.gradle`: Health Services for the watch `mod` build only.
 - 2026-11-18 — CareLink JVM tests (231) on made-up cloud answers, no personal data: sign-in, parsing, journal and
   basal writers, poller, scheduler, the window model, a contract test of the `carelink-tempbasal` hook.
 - 2026-11-16 — CareLink trial (`Common/src/modTrial/`): test builds `-mod0` carry a fake CareLink for emulator

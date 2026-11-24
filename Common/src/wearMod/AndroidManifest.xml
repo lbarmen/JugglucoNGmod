@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JugglucoNGmod: components of the watch `mod` build only (source set wear + build type mod). The classes live in
+     Common/src/wear/java/tk/glucodata/mod/ (compiled by every watch build, never by the phone); declared here they
+     exist only in MOD. The Health Services layer (tk.glucodata.mod.health.hs) is in Common/src/wearMod/java - only
+     this build has the library. No package attribute: the namespace comes from Common/build.gradle. VIBRATE comes from
+     upstream's Common/src/main/AndroidManifest.xml. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- Heart rate and steps (part 4b): Health Services needs API 30, upstream's watch minSdk is 26. Our code calls the
+         library only on API 30+ (HealthSubscription.supported); the Galaxy Watch 5 Pro runs API 34. -->
+    <uses-sdk tools:overrideLibrary="androidx.health.services.client" />
+    <!-- Heart rate: BODY_SENSORS comes from upstream's watch manifest (without maxSdkVersion - with their targetSdk 35 it
+         stays the heart rate permission on Android 16 too, so we leave it as theirs). In the background: the right
+         name, without the trailing space of upstream's entry. Android 16 names, for a later targetSdk 36. -->
+    <uses-permission android:name="android.permission.BODY_SENSORS_BACKGROUND" />
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND" />
+    <!-- Day steps -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <!-- Subscribe again after a restart of the watch (upstream declares it too; merged into one) -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <application>
+        <!-- "Snooze alarm": a launcher entry without a screen for a hardware button of the watch. Theme.NoDisplay
+             (the activity finishes inside onCreate), out of recents and history, its own task so it never brings
+             the main app forward. Exported: the launcher and the button settings start it. showWhenLocked: a press
+             on a locked watch snoozes the alert at once, as the alarm screen itself shows over the lock. -->
+        <activity
+            android:name="tk.glucodata.mod.watch.SnoozeButtonActivity"
+            android:exported="true"
+            android:showWhenLocked="true"
+            android:label="@string/mod_watch_snooze_label"
+            android:icon="@drawable/mod_watch_snooze"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity="${applicationId}.modsnooze">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <!-- Our Data Layer messages (/mod/...). Exported like upstream's MessageReceiver: Google Play services
+             delivers them; only our phone app (same package and signature) can send them. -->
+        <service
+            android:name="tk.glucodata.mod.watch.ModWearListener"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data android:host="*" android:pathPrefix="/mod/" android:scheme="wear" />
+            </intent-filter>
+        </service>
+        <!-- Our watch face "Juggluco JugglucoNGmod" (part 3b), declared as upstream declares theirs, except the
+             editor: no wearableConfigurationAction at all. Their WATCH_FACE_EDITOR action is handled only by their
+             WatchFaceConfigActivity, which would open for our face; and Wear OS skips a face whose action is any
+             other value (watch log 18.11.2026, Galaxy Watch 5 Pro: "invalid wearableConfigurationAction ... Skipping
+             this WatchFace" - our face was missing from the picker). So the face has no "Customise"; its one setting
+             (graph hours, our preference, not a UserStyleSchema) opens from the "Graph hours" app entry. -->
+        <service
+            android:name="tk.glucodata.mod.watch.face.ModWatchFaceService"
+            android:directBootAware="true"
+            android:exported="true"
+            android:label="@string/mod_watch_face_name"
+            android:permission="android.permission.BIND_WALLPAPER">
+            <intent-filter>
+                <action android:name="android.service.wallpaper.WallpaperService" />
+                <category android:name="com.google.android.wearable.watchface.category.WATCH_FACE" />
+            </intent-filter>
+            <meta-data android:name="android.service.wallpaper.square_mode" android:value="false" />
+            <meta-data
+                android:name="com.google.android.wearable.watchface.preview"
+                android:resource="@drawable/mod_watch_face_preview" />
+            <meta-data
+                android:name="com.google.android.wearable.watchface.preview_circular"
+                android:resource="@drawable/mod_watch_face_preview" />
+            <meta-data
+                android:name="android.service.wallpaper"
+                android:resource="@xml/mod_watch_face" />
+        </service>
+        <!-- Our face's editor (part 3c): graph hours 1 / 3 / 6, opened from its own launcher entry "Graph hours"
+             (part 3c2; the face has no "Customise", see above - a test reads this file). Exported: a launcher entry. -->
+        <activity
+            android:name="tk.glucodata.mod.watch.face.FaceSettingsActivity"
+            android:exported="true"
+            android:label="@string/mod_watch_face_graph_setting"
+            android:icon="@drawable/mod_watch_face_settings"
+            android:theme="@android:style/Theme.DeviceDefault"
+            android:excludeFromRecents="true"
+            android:taskAffinity="${applicationId}.modfacesettings">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <!-- Heart rate and steps (part 4b). The page "JugglucoNGmod - health": permissions, subscription, last batch,
+             "Send now"; its own launcher entry and task, never upstream's watch app. -->
+        <activity
+            android:name="tk.glucodata.mod.health.HealthActivity"
+            android:exported="true"
+            android:label="@string/mod_watch_health_label"
+            android:icon="@drawable/mod_watch_health"
+            android:theme="@android:style/Theme.DeviceDefault"
+            android:launchMode="singleTask"
+            android:taskAffinity="${applicationId}.modhealth">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <!-- Health Services hands the collected data here; only Health Services can bind it (its permission). -->
+        <service
+            android:name="tk.glucodata.mod.health.hs.ModHealthListenerService"
+            android:exported="true"
+            android:permission="com.google.android.wearable.healthservices.permission.PASSIVE_DATA_BINDING" />
+        <!-- Registers the Health Services source at process start (no hook in upstream's Application). -->
+        <provider
+            android:name="tk.glucodata.mod.health.hs.ModHealthStarter"
+            android:authorities="${applicationId}.modhealthstarter"
+            android:exported="false" />
+        <!-- Our alarm screen (part 8): opened instead of upstream's tk.glucodata.ui.AlarmActivity (their registry,
+             filled by ModAlarmStarter below), declared as theirs is in the watch build (their wear and main manifests
+             merged): private, own task without affinity, out of recents, over the lock screen, screen on, one
+             instance, their theme. A test reads this block. -->
+        <activity
+            android:name="tk.glucodata.mod.watch.alarm.ModAlarmActivity"
+            android:exported="false"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:autoRemoveFromRecents="true"
+            android:showOnLockScreen="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.AppCompat.NoActionBar" />
+        <!-- Puts our alarm screen in upstream's slot at process start (no hook in their Application); its own
+             provider, so a failure here or in the health starter never stops the other. -->
+        <provider
+            android:name="tk.glucodata.mod.watch.alarm.ModAlarmStarter"
+            android:authorities="${applicationId}.modalarmstarter"
+            android:exported="false" />
+        <!-- Watch restart or app update: subscribe again. -->
+        <receiver
+            android:name="tk.glucodata.mod.health.hs.ModHealthBootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

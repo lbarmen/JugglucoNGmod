@@ -40,6 +40,22 @@ in another way, which the app cannot do yet.
 For now do not delete pump records by hand, neither in the app's journal nor in Nightscout: the basal may come back as
 a second record, or sending treatments to Nightscout may stop.
 
+### Galaxy Watch (Wear OS)
+For a Wear OS watch with JugglucoNGmod on both the phone and the watch (checked on a Galaxy Watch 5 Pro).
+- Own watch face "JugglucoNGmod" on the whole circle: glucose in range color, trend arrow and change over 5 min,
+  reading age in seconds, a 1, 3 or 6 h chart with hour lines and the forecast, time, date, phone and watch battery;
+  with CareLink, the pump's active insulin. A new reading is on the face 0–1 s after the phone has it. The chart
+  length is set in the "Graph hours" app entry. The author's face stays, named "JugglucoNGmod classic".
+- "Snooze alarm": an app entry without a screen, meant for a watch button; it snoozes the alarm going on, on the
+  watch and on the phone.
+- The phone's alarm settings come to the watch (duration, repeat, vibration, snooze, active hours, mode,
+  thresholds). On the watch an alarm only vibrates; own alarm screen with large buttons one above the other.
+- Glucose missed while the watch was away from the phone is filled in from the phone (up to 72 h).
+- Heart rate (a per-minute average) and steps from the watch go to the phone: the "JugglucoNGmod watch" screen, a
+  shortcut on the app icon.
+
+The watch is updated by hand: install the watch APK as a file or via adb; the watch has no in-app update.
+
 ## How it differs from the official app
 
 | What | JugglucoNG 1.3.2-Alpha | JugglucoNGmod | Since |
@@ -52,6 +68,9 @@ a second record, or sending treatments to Nightscout may stop.
 | Clone mode, BloodControl service (for AiDEX) | present | do not work: they need secrets of the JugglucoNG author | 1.3.2-2 |
 | Home-screen widget | two widgets: a card with the number, arrow and a 6 h chart (not transparent), and the number with arrow; no change over 5 min, no reading age | a third widget "JugglucoNGmod" in the xDrip look: transparent, number in range color, arrow, change over 5 min, "N min ago", 3 h of 5-minute dots; own settings window with a live preview (checked on a phone, 2026-11-21) | 1.3.3-10 |
 | MiniMed 740G pump (CareLink) | — | every 5 min from the CareLink cloud: pump boluses and carbs in the journal, the real basal on the chart, the pump's active insulin in "IoB", sent to Nightscout; own "CareLink" window and warnings (checked on a phone, 2026-11-18 – 2026-11-23) | after 1.3.3-10 |
+| Own watch face | the author's face | own face "JugglucoNGmod" on the whole circle: glucose, arrow, change, age in seconds, 1/3/6 h chart with hour lines and forecast, both batteries, the pump's active insulin with CareLink; the author's face is "JugglucoNGmod classic" (checked on a watch, 2026-11-18 – 2026-11-23) | after 1.3.3-10 |
+| Alarms on the watch | only on/off of each alarm comes from the phone; buttons 52 dp | the phone's alarm settings come to the watch; vibration only; own alarm screen with large buttons; "Snooze alarm" for a watch button snoozes on the watch and the phone (checked on a watch, 2026-11-21) | after 1.3.3-10 |
+| Heart rate and steps | — | from the watch to the phone: the "JugglucoNGmod watch" screen (checked on a watch, 2026-11-20) | after 1.3.3-10 |
 
 Two apps on one sensor interfere with each other: connect a sensor to one of them only.
 

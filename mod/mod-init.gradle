@@ -11,7 +11,8 @@
 //  - fails the build loudly if `mod` no longer matches `release` apart from those changes
 //    (upstream added a flag to `release` that initWith did not copy, etc.);
 //  - fails the build if any of the four signing properties is missing or empty,
-//    so a `mod` APK can never silently fall back to upstream's public everyone.keystore.
+//    so a `mod` APK can never silently fall back to upstream's public everyone.keystore;
+//  - adds Health Services to the watch `mod` build (watch block, part 4b).
 //
 // Release number N: -PmodRelease=N (0 = test build, 1..99 = published releases).
 
@@ -27,6 +28,15 @@ gradle.beforeProject { Project p ->
         throw new GradleException("MOD: -PmodRelease must be 0..99, got '$relRaw'")
     }
     final int modRelease = relRaw.toInteger()
+
+    // Watch block (part 4b): Health Services (heart rate and steps on the watch) for the watch `mod` build only; the
+    // code that names it is in Common/src/wearMod/java. configureEach: the configuration appears only once AGP has
+    // made the wearMod source set (after finalizeDsl below creates `mod`). Upstream builds and their unit tests never
+    // see the library. Its minSdk 30 is overridden in Common/src/wearMod/AndroidManifest.xml (the code checks SDK 30).
+    final String MOD_HEALTH_SERVICES = 'androidx.health:health-services-client:1.1.0'
+    p.configurations.configureEach { c ->
+        if (c.name == 'wearModImplementation') p.dependencies.add(c.name, MOD_HEALTH_SERVICES)
+    }
 
     p.pluginManager.withPlugin('com.android.application') {
         def comps = p.extensions.getByName('androidComponents')
