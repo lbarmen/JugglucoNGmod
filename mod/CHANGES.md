@@ -8,7 +8,10 @@ A version is a tag `mod-<JugglucoNG version>-<our number>` on `main`; it is set 
 Each version has two lists: "For the user" - what is visible in the app, "Build and checks" - everything else.
 A new line goes into the "After …" section, in the same pull request (PR) as the change itself.
 
-## After mod-1.3.3-10 (in `main`, no tag yet)
+## After mod-1.3.3-11 (in `main`, no tag yet)
+
+## mod-1.3.3-11 — 2026-11-24 (based on JugglucoNG 1.3.3-Alpha; candidate 11, the first GitHub release; the same
+code as candidate 10, checked on a phone and a watch)
 For the user:
 - 2026-11-23 — CareLink for the MiniMed 740G pump: every 5 min (or 10, 15) the app takes the pump data from the
   Medtronic CareLink cloud (sent there by MiniMed Mobile). The journal gets the pump boluses and the carbs from the
@@ -37,6 +40,9 @@ For the user:
   the next candidate from `main`.
 
 Build and checks:
+- 2026-11-24 — GitHub releases are on (repository variable `MOD_PUBLISH_RELEASES`): a candidate of `main` alone
+  becomes a normal, latest release with the phone APK, the watch APK and `update-manifest.json` for the in-app
+  update, its tag set by the release; candidates with block branches stay on their run page only.
 - 2026-11-23 — watch block JVM tests (about 480: shared code, watch, phone side); contract tests that turn red when
   the author changes code we copy (`ModAlarmContractTest`, `HistoryGapFillTest`), what to compare after a merge is in
   `mod/SYNC.md`. `mod/check-apk.py`: our watch components and permissions in the wear APK, both face names, our faint
