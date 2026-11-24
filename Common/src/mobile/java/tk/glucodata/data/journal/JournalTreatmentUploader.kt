@@ -546,7 +546,8 @@ object JournalTreatmentUploader : JournalTreatmentUploadBridge {
             type == JournalEntryType.CARBS ||
             type == JournalEntryType.FINGERSTICK ||
             type == JournalEntryType.ACTIVITY ||
-            type == JournalEntryType.NOTE
+            type == JournalEntryType.NOTE ||
+            type == JournalEntryType.TEMP_BASAL // MOD-HOOK:carelink-tempbasal
     }
 
     internal fun shouldUploadTreatment(

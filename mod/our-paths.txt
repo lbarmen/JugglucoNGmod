@@ -7,6 +7,12 @@ Common/src/wearMod/
 Common/src/testMobile/java/mod/
 .github/workflows/mod-*.yml
 .github/README.md
+# phone only (CareLink, watch, widget): code seen by every phone build and by their debug tests, never by the watch;
+# components in the manifest of the phone `mod` build only; strings with the mod_ prefix next to theirs
+Common/src/mobile/java/tk/glucodata/mod/
+Common/src/mobileMod/
+# CareLink trial (part 4p): test builds of the phone only (mod/mod-init.gradle adds it with -PmodRelease=0)
+Common/src/modTrial/
 # watch block (feature/watch): code shared by the phone and the watch (message format, ongoing alert) - seen by every
 # build and by both of their JVM test tasks; its tests next to theirs
 Common/src/main/java/tk/glucodata/mod/
@@ -18,11 +24,6 @@ Common/src/testWear/java/mod/
 Common/src/wear/res/values/mod_*
 Common/src/wear/res/values-ru/mod_*
 Common/src/wear/res/drawable/mod_*
-# phone only: code seen by every phone build and by their debug tests, never by the watch; components in the manifest
-# of the phone `mod` build only; strings with the mod_ prefix (the same lines as the CareLink block - one copy stays
-# when both blocks are merged)
-Common/src/mobile/java/tk/glucodata/mod/
-Common/src/mobileMod/
 Common/src/mobile/res/values/mod_*
 Common/src/mobile/res/values-ru/mod_*
 # widget block (feature/widget): layouts, the widget description and drawables with the mod_ prefix next to theirs

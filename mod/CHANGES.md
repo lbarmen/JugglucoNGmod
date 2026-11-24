@@ -8,7 +8,28 @@ A version is a tag `mod-<JugglucoNG version>-<our number>` on `main`; it is set 
 Each version has two lists: "For the user" - what is visible in the app, "Build and checks" - everything else.
 A new line goes into the "After …" section, in the same pull request (PR) as the change itself.
 
-## After candidate 2 (in `main`, no tag yet)
+## After mod-1.3.3-10 (in `main`, no tag yet)
+For the user:
+- 2026-11-23 — CareLink for the MiniMed 740G pump: every 5 min (or 10, 15) the app takes the pump data from the
+  Medtronic CareLink cloud (sent there by MiniMed Mobile). The journal gets the pump boluses and the carbs from the
+  pump's bolus calculator, the chart the real basal (normal and temporary; a pump stop is a gap with a note), the
+  "IoB" chip the pump's active insulin; the author's code sends the records to Nightscout. Own "CareLink" window from
+  the settings: sign-in on the Medtronic page (the app does not see or keep the user name and password; the session
+  is encrypted with an Android Keystore key and goes into no backup), reservoir, pump battery, active insulin, data
+  age, "Update now", interval, warning delay. Notifications: sign in again, no pump data for N min, pump records not
+  saved. Two hooks in the author's files, 3 lines (`carelink-settings`, `carelink-tempbasal`, see HOOKS.md). On a
+  phone since 2026-11-18 (candidates 3 and 4, computer builds 6 and 8, candidates 9 and 10 with the 1.3.3-Alpha);
+  the tag comes with the next candidate from `main`.
+
+Build and checks:
+- 2026-11-18 — CareLink JVM tests (231) on made-up cloud answers, no personal data: sign-in, parsing, journal and
+  basal writers, poller, scheduler, the window model, a contract test of the `carelink-tempbasal` hook.
+- 2026-11-16 — CareLink trial (`Common/src/modTrial/`): test builds `-mod0` carry a fake CareLink for emulator
+  scenarios; `mod-build.yml` builds the phone once more like a candidate and checks the trial is not in it.
+- 2026-11-16 — `mod/check-apk.py`: the phone APK has the CareLink components, the watch APK has none.
+  `mod/check-secrets.sh`: pre-push patterns (JWT, e-mail, Windows home path, raw cloud folder).
+
+## mod-1.3.3-10 — 2026-11-23 (based on JugglucoNG 1.3.3-Alpha; candidate 10, checked on a phone and a watch)
 For the user:
 - 2026-11-21 — home-screen widget "JugglucoNGmod" next to the author's two, in the xDrip look: transparent, the number
   in range color, trend arrow, change over 5 min, "N min ago", 3 h of dots where each dot is a 5-minute average; a
