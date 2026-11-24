@@ -30,6 +30,11 @@ For the user:
   phone's "JugglucoNGmod watch" screen. The author's files are not changed. On the owner's phone and watch since
   2026-11-18 (candidates 4 and 5, computer builds 6–8, candidates 9 and 10 with the 1.3.3-Alpha); the tag comes with
   the next candidate from `main`.
+- 2026-11-18 — launcher icon of the phone and the watch: the author's icon with an orange "M" badge in the
+  bottom-right corner, to tell JugglucoNGmod apart from the official JugglucoNG (`Common/src/mod/res/`: the author's
+  foreground picture is layered under our badge, so a new author's icon comes through; the badge stays inside the
+  round mask of the watch). On the owner's phone and watch since 2026-11-18 (candidates 4 to 10); the tag comes with
+  the next candidate from `main`.
 
 Build and checks:
 - 2026-11-23 — watch block JVM tests (about 480: shared code, watch, phone side); contract tests that turn red when
@@ -52,10 +57,6 @@ For the user:
   a live preview, per widget, opened on placement and from the widget's "Settings"; an app-icon shortcut "Widget
   settings" while a widget is placed. The author's files are not changed. Checked on a phone with candidate 9 (on
   1.3.2-Alpha); merged into `main` after 1.3.3-Alpha, the tag comes with the first 1.3.3 candidate checked on a phone.
-- 2026-11-18 — launcher icon of the phone and the watch: the author's icon with an orange "M" badge in the
-  bottom-right corner, to tell JugglucoNGmod apart from the official JugglucoNG (`Common/src/mod/res/`: the author's
-  foreground picture is layered under our badge, so a new author's icon comes through; the badge stays inside the
-  round mask of the watch).
 - 2026-11-17 — renamed to JugglucoNGmod (candidates 1-2 were built under the former name and package): app name
   "JugglucoNGmod" (watch face too), package `tk.glucodata.ng.mod` (installs as a new app), repository
   `lbarmen/JugglucoNGmod`; inside: folder `mod/`, build type `mod`, hook mark `MOD-HOOK`, tags `mod-X.Y.Z-N`. The
