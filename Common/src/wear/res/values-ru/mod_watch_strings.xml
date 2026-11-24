@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="mod_watch_snooze_label">Отложить тревогу</string>
+    <string name="mod_watch_snooze_done">Тревога отложена</string>
+    <string name="mod_watch_snooze_no_alarm">Тревоги нет</string>
+    <string name="mod_watch_snooze_no_phone">Телефон не на связи</string>
+
+    <string-array name="mod_watch_face_days">
+        <item>Пн</item>
+        <item>Вт</item>
+        <item>Ср</item>
+        <item>Чт</item>
+        <item>Пт</item>
+        <item>Сб</item>
+        <item>Вс</item>
+    </string-array>
+    <string-array name="mod_watch_face_months">
+        <item>янв</item>
+        <item>фев</item>
+        <item>мар</item>
+        <item>апр</item>
+        <item>мая</item>
+        <item>июн</item>
+        <item>июл</item>
+        <item>авг</item>
+        <item>сен</item>
+        <item>окт</item>
+        <item>ноя</item>
+        <item>дек</item>
+    </string-array>
+    <string name="mod_watch_face_percent">%1$d %%</string>
+    <string name="mod_watch_face_minutes">%1$d мин</string>
+    <string name="mod_watch_face_seconds">%1$d с</string>
+    <string name="mod_watch_face_hours">%1$d ч</string>
+    <string name="mod_watch_face_iob">%1$s ЕД</string>
+    <string name="mod_watch_face_phone">телефон</string>
+    <string name="mod_watch_face_watch">часы</string>
+
+    <string name="mod_watch_face_graph_setting">Часы графика</string>
+    <string name="mod_watch_face_graph_setting_description">Сколько часов показывает график сахара</string>
+    <string name="mod_watch_face_graph_1">1 час</string>
+    <string name="mod_watch_face_graph_3">3 часа</string>
+    <string name="mod_watch_face_graph_6">6 часов</string>
+
+    <string name="mod_watch_health_label">JugglucoNGmod — здоровье</string>
+    <string name="mod_watch_health_access">Доступ: пульс %1$s, шаги %2$s, в фоне %3$s</string>
+    <string name="mod_watch_health_yes">да</string>
+    <string name="mod_watch_health_no">нет</string>
+    <string name="mod_watch_health_subscription">Подписка: %1$s</string>
+    <string name="mod_watch_health_none">нет</string>
+    <string name="mod_watch_health_hr">пульс</string>
+    <string name="mod_watch_health_steps">шаги</string>
+    <string name="mod_watch_health_last_batch">Последняя пачка: %1$s</string>
+    <string name="mod_watch_health_minutes_ago">%1$d мин назад</string>
+    <string name="mod_watch_health_never">не было</string>
+    <string name="mod_watch_health_waiting">Ждут отправки: %1$d</string>
+    <string name="mod_watch_health_error">Ошибка: %1$s</string>
+    <string name="mod_watch_health_allow">Разрешить доступ</string>
+    <string name="mod_watch_health_send">Отправить сейчас</string>
+    <string name="mod_watch_health_old_android">Для пульса и шагов нужен Android 11 или новее</string>
+</resources>

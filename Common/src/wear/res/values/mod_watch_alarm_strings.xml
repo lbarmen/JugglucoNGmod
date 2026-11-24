@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JugglucoNGmod, watch block (part 8): our alarm screen's strings (mod_watch_ prefix); its buttons use upstream's
+     "snooze" and "notification_dismiss_action_dismiss". -->
+<resources>
+    <!-- The alert's threshold under the value: "Threshold 10.0" -->
+    <string name="mod_watch_alarm_threshold">Threshold %1$s</string>
+</resources>

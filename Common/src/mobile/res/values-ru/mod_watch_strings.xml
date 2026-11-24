@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="mod_watch_screen_title">Часы JugglucoNGmod</string>
+    <string name="mod_watch_screen_short">Часы</string>
+    <string name="mod_watch_screen_no_data">нет данных</string>
+    <string name="mod_watch_screen_hint">Сюда приходят пульс и шаги с JugglucoNGmod на часах.</string>
+    <string name="mod_watch_screen_no_database">Данные часов не открылись.</string>
+    <string name="mod_watch_screen_heart_rate">Пульс: %1$s</string>
+    <string name="mod_watch_screen_bpm_at">%1$d уд/мин в %2$s</string>
+    <string name="mod_watch_screen_steps">Шаги за сегодня: %1$s</string>
+    <string name="mod_watch_screen_battery">Заряд часов: %1$s</string>
+    <string name="mod_watch_screen_percent">%1$d %%</string>
+    <string name="mod_watch_screen_percent_charging">%1$d %%, заряжаются</string>
+    <string name="mod_watch_screen_last_batch">Последняя пачка: %1$s</string>
+    <string name="mod_watch_screen_minutes_ago">%1$d мин назад (%2$s)</string>
+    <string name="mod_watch_screen_hours_ago">%1$d ч назад (%2$s)</string>
+    <string name="mod_watch_screen_days_ago">%1$d дн. назад (%2$s)</string>
+    <string name="mod_watch_screen_value_at">%1$s в %2$s</string>
+    <string name="mod_watch_screen_newer">Ждут пачки от более новой версии на часах: %1$d (обновите приложение на телефоне)</string>
+</resources>

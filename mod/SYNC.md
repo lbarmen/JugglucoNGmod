@@ -51,6 +51,20 @@ app; what to check on the phone before installing (risk flags, spec 3.6). A cand
 - the release is broken at the author's and we skip it - only by the owner's word: the variable
   `MOD_SYNC_SKIP=<mark>` (`gh variable set`), the reminder stays quiet until the next release.
 
+**Our code that copies theirs without a hook** — after a merge, if their file changed, check ours still matches:
+- `WearSync2.kt` (request format `[u8 ver][i64 fromSec][u8 force]`, `VERSION`, the 14-day deep line in `onRequest`),
+  `WearMessagePath.SYNC2_REQ`, `NotificationHistorySource.getRawHistory` — copied by our watch's history hole check
+  `Common/src/wear/java/tk/glucodata/mod/watch/HistoryGapFill.kt`; the test `HistoryGapFillTest` turns red on a change.
+
+**Our watch alarm screen** (`Common/src/wear/java/tk/glucodata/mod/watch/alarm/`, watch part 8) replaces their watch
+`ui/AlarmActivity.kt` through `ui/AlarmActivityAccess.register` and copies its logic step by step. If either file,
+`WearAlarmActivityHost.kt`, `Specific.registerBridges`, `AlarmActionReceiver`, `AlarmLaunchReceiver.launchFlags` or
+their `.ui.AlarmActivity` manifest entries changed: compare with `ModAlarmActivity.kt` / `AlarmContent.kt` / our
+`wearMod/AndroidManifest.xml` entry and carry the change over (new extras, a new lifecycle step, another way to
+register); `ModAlarmContractTest` turns red on most such changes. Rollback to a watch build without our screen
+(theirs, or ours before part 8) installed over it: an alarm notification already showing names `ModAlarmActivity`, so
+tapping it opens nothing until the next alarm builds a new one - tell the owner, nothing to fix.
+
 **Once a month** — `python -X utf8 mod/juggluco-summary.py` (the Juggluco summary; there is no `python3` in Git Bash
 on this machine): carry over only a fix of the sensor, alarms or watch that JugglucoNG does not have, and by the
 owner's word.

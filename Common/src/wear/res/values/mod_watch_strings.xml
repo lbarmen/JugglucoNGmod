@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JugglucoNGmod, watch block: our watch strings (mod_watch_ prefix), next to upstream's; never in their strings.xml. -->
+<resources>
+    <!-- Launcher name of the screenless entry the user puts on a hardware button -->
+    <string name="mod_watch_snooze_label">Snooze alarm</string>
+    <!-- Short texts after a press of that button: snoozed on the watch or the phone / no alarm anywhere / no phone reached -->
+    <string name="mod_watch_snooze_done">Alarm snoozed</string>
+    <string name="mod_watch_snooze_no_alarm">No alarm</string>
+    <string name="mod_watch_snooze_no_phone">Phone not connected</string>
+
+    <!-- Our watch face (part 3a): the date line "Tue 17 Nov" - weekdays from Monday, months from January -->
+    <string-array name="mod_watch_face_days">
+        <item>Mon</item>
+        <item>Tue</item>
+        <item>Wed</item>
+        <item>Thu</item>
+        <item>Fri</item>
+        <item>Sat</item>
+        <item>Sun</item>
+    </string-array>
+    <string-array name="mod_watch_face_months">
+        <item>Jan</item>
+        <item>Feb</item>
+        <item>Mar</item>
+        <item>Apr</item>
+        <item>May</item>
+        <item>Jun</item>
+        <item>Jul</item>
+        <item>Aug</item>
+        <item>Sep</item>
+        <item>Oct</item>
+        <item>Nov</item>
+        <item>Dec</item>
+    </string-array>
+    <!-- A battery percent on the face, "64%" -->
+    <string name="mod_watch_face_percent">%1$d%%</string>
+    <!-- How old the glucose value is, "2 min" -->
+    <string name="mod_watch_face_minutes">%1$d min</string>
+    <!-- The same under two minutes while the screen is lit, "45 s" -->
+    <string name="mod_watch_face_seconds">%1$d s</string>
+    <!-- The same from 100 minutes on, in whole hours, "1 h" -->
+    <string name="mod_watch_face_hours">%1$d h</string>
+    <!-- The pump's active insulin beside the glucose value: "2.3 U", "99+ U", "— U" (unknown or too old) -->
+    <string name="mod_watch_face_iob">%1$s U</string>
+    <!-- Battery row words: "phone 64%   watch 81%" -->
+    <string name="mod_watch_face_phone">phone</string>
+    <string name="mod_watch_face_watch">watch</string>
+
+    <!-- Our watch face (part 3b): its name in the watch face list (upstream's face is "JugglucoNGmod classic" in our app: Common/src/wearMod/res/values/strings.xml) -->
+    <string name="mod_watch_face_name" translatable="false">JugglucoNGmod</string>
+    <!-- The face's one setting: how many hours the graph shows -->
+    <string name="mod_watch_face_graph_setting">Graph hours</string>
+    <string name="mod_watch_face_graph_setting_description">How many hours the glucose graph shows</string>
+    <string name="mod_watch_face_graph_1">1 hour</string>
+    <string name="mod_watch_face_graph_3">3 hours</string>
+    <string name="mod_watch_face_graph_6">6 hours</string>
+
+    <!-- Heart rate and steps page (part 4b): its name in the watch's app list and its title -->
+    <string name="mod_watch_health_label">JugglucoNGmod — health</string>
+    <!-- "Access: heart rate yes, steps yes, background no" -->
+    <string name="mod_watch_health_access">Access: heart rate %1$s, steps %2$s, background %3$s</string>
+    <string name="mod_watch_health_yes">yes</string>
+    <string name="mod_watch_health_no">no</string>
+    <!-- "Subscription: heart rate, steps" -->
+    <string name="mod_watch_health_subscription">Subscription: %1$s</string>
+    <string name="mod_watch_health_none">none</string>
+    <string name="mod_watch_health_hr">heart rate</string>
+    <string name="mod_watch_health_steps">steps</string>
+    <!-- When the last batch went to the phone: "Last batch: 3 min ago" / "Last batch: never" -->
+    <string name="mod_watch_health_last_batch">Last batch: %1$s</string>
+    <string name="mod_watch_health_minutes_ago">%1$d min ago</string>
+    <string name="mod_watch_health_never">never</string>
+    <!-- Rows queued on the watch -->
+    <string name="mod_watch_health_waiting">Waiting to send: %1$d</string>
+    <!-- A failure class name, e.g. "Error: TimeoutException" -->
+    <string name="mod_watch_health_error">Error: %1$s</string>
+    <string name="mod_watch_health_allow">Allow access</string>
+    <string name="mod_watch_health_send">Send now</string>
+    <string name="mod_watch_health_old_android">Heart rate and steps need Android 11 or newer</string>
+</resources>

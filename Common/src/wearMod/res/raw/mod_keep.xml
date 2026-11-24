@@ -4,6 +4,9 @@
      R ids these compile to 0 ("String resource ID #0x0" in getUserStyleSchema; upstream 1.3.2 wear has the
      same bug), and the 7 *_style_name strings and 6 color icons are shrunk away. mod/gradlew-mod.sh builds
      wear with final R ids (real ids in the code); this file keeps the resources, since inlined ids are not
-     seen as uses. mod/check-apk.py verifies both against the sources. Remove once upstream fixes it. -->
+     seen as uses. mod/check-apk.py verifies both against the sources. Remove once upstream fixes it.
+     Our own watch face (watch part 3b): its name, setting labels, preview and wallpaper description are kept
+     too, whatever the shrinker sees (the system reads them, not our code); so is upstream's face name, which our
+     wearMod/res/values*/strings.xml renames to "JugglucoNGmod classic" (watch part 3c2). -->
 <resources xmlns:tools="http://schemas.android.com/tools"
-    tools:keep="@string/*_style_name,@drawable/red,@drawable/green,@drawable/blue,@drawable/yellow,@drawable/gray,@drawable/white" />
+    tools:keep="@string/*_style_name,@drawable/red,@drawable/green,@drawable/blue,@drawable/yellow,@drawable/gray,@drawable/white,@string/mod_watch_face_*,@string/watch_face_name,@array/mod_watch_face_*,@drawable/mod_watch_face_preview,@xml/mod_watch_face" />

@@ -7,3 +7,8 @@
 # NoSuchMethodException: ComplicationDrawable.<init> [] on complication_*_style.xml.
 # mod/check-apk.py checks every class named in drawable XML of the wear sources against the wear dex.
 -keep class androidx.wear.watchface.complications.rendering.ComplicationDrawable { public <init>(); }
+
+# CareLink (phone): our exception classes keep their names, so the class written to upstream's debug log and shown in
+# the CareLink window stays readable (critic 4e, N3). Names only - the classes may still be removed when unused; the
+# watch has none of them (mod/check-apk.py: no tk.glucodata.mod.carelink classes in the wear dex).
+-keepnames class tk.glucodata.mod.carelink.**Exception

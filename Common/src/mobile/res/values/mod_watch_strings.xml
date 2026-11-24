@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JugglucoNGmod, watch block (part 5): the phone's check screen of heart rate and steps from the watch, and its
+     launcher shortcut. -->
+<resources>
+    <string name="mod_watch_screen_title">JugglucoNGmod watch</string>
+    <string name="mod_watch_screen_short">Watch</string>
+    <string name="mod_watch_screen_no_data">no data</string>
+    <string name="mod_watch_screen_hint">Heart rate and steps come here from JugglucoNGmod on the watch.</string>
+    <string name="mod_watch_screen_no_database">The watch data could not be opened.</string>
+    <string name="mod_watch_screen_heart_rate">Heart rate: %1$s</string>
+    <string name="mod_watch_screen_bpm_at">%1$d bpm at %2$s</string>
+    <string name="mod_watch_screen_steps">Steps today: %1$s</string>
+    <string name="mod_watch_screen_battery">Watch battery: %1$s</string>
+    <string name="mod_watch_screen_percent">%1$d%%</string>
+    <string name="mod_watch_screen_percent_charging">%1$d%%, charging</string>
+    <string name="mod_watch_screen_last_batch">Last batch: %1$s</string>
+    <string name="mod_watch_screen_minutes_ago">%1$d min ago (%2$s)</string>
+    <string name="mod_watch_screen_hours_ago">%1$d h ago (%2$s)</string>
+    <string name="mod_watch_screen_days_ago">%1$d d ago (%2$s)</string>
+    <string name="mod_watch_screen_value_at">%1$s at %2$s</string>
+    <string name="mod_watch_screen_newer">Batches from a newer watch app waiting: %1$d (update the phone app)</string>
+</resources>

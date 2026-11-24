@@ -4,6 +4,75 @@
      start only in MOD. No package attribute: the namespace comes from Common/build.gradle. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
+        <!-- CareLink starter: runs on every process start, schedules nothing until a CareLink sign-in exists -->
+        <provider
+            android:name="tk.glucodata.mod.carelink.ModCareLinkStarter"
+            android:authorities="${applicationId}.mod-carelink"
+            android:exported="false" />
+        <!-- CareLink sign-in: the Medtronic page in a WebView. Not exported: only our own CareLink window opens it.
+             configChanges - rotation, keyboard and theme do not recreate the window, or the page would reload and a
+             code typed from mail or SMS would be lost. -->
+        <activity
+            android:name="tk.glucodata.mod.carelink.CareLinkLoginActivity"
+            android:exported="false"
+            android:theme="@style/Theme.AppCompat.NoActionBar"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|uiMode|density" />
+        <!-- The CareLink window: sign-in, state, settings. Not exported: opened from upstream's settings (our row), our
+             launcher shortcut and our notifications - all of this app. -->
+        <activity
+            android:name="tk.glucodata.mod.carelink.CareLinkActivity"
+            android:exported="false"
+            android:label="@string/mod_carelink_title"
+            android:theme="@style/Theme.AppCompat.NoActionBar" />
+        <!-- CareLink poll alarm: only our own PendingIntent sends it -->
+        <receiver
+            android:name="tk.glucodata.mod.carelink.CareLinkAlarmReceiver"
+            android:exported="false" />
+        <!-- CareLink: arm the poll alarm again after a reboot and an app update. With an intent filter Android 12+
+             wants exported stated; only the system sends these actions (RECEIVE_BOOT_COMPLETED is in their manifest). -->
+        <receiver
+            android:name="tk.glucodata.mod.carelink.CareLinkBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+        <!-- Watch block: our Data Layer messages from the watch (/mod/...). Exported like upstream's MessageReceiver:
+             Google Play services delivers them; only our watch app (same package and signature) can send them. -->
+        <service
+            android:name="tk.glucodata.mod.watch.ModPhoneListener"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data android:host="*" android:pathPrefix="/mod/" android:scheme="wear" />
+            </intent-filter>
+            <!-- our watch app (capability of upstream's wear/res/values/wear.xml) became reachable: tick at once -->
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.CAPABILITY_CHANGED" />
+                <data android:host="*" android:path="/jugglucowatch" android:scheme="wear" />
+            </intent-filter>
+            <!-- heart rate and steps batches of our watch app (part 5): DataClient items /mod/health/batch/<seq> -->
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.DATA_CHANGED" />
+                <data android:host="*" android:pathPrefix="/mod/health/batch/" android:scheme="wear" />
+            </intent-filter>
+        </service>
+        <!-- Watch block, part 5: the check screen "JugglucoNGmod watch" (heart rate, steps, watch battery, last batch).
+             Opened by our dynamic launcher shortcut, which the system starts as this app: not exported. -->
+        <activity
+            android:name="tk.glucodata.mod.watch.ModWatchActivity"
+            android:exported="false"
+            android:label="@string/mod_watch_screen_title"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+            android:taskAffinity="${applicationId}.modwatch" />
+        <!-- Watch block starter: on every process start registers the battery receiver and posts the /mod/tick
+             cycle (WorkManager, after Application.onCreate). Not exported: nobody queries it. -->
+        <provider
+            android:name="tk.glucodata.mod.watch.ModWatchStarter"
+            android:authorities="${applicationId}.mod-watch"
+            android:exported="false" />
         <!-- Widget "JugglucoNGmod": redrawn on upstream's in-package "new reading" broadcast (they send it to every
              receiver of the package), on the system's widget update and by our own explicit "N min ago" alarm.
              Not exported: the system's widget service and this app reach it anyway, other apps cannot fake a reading. -->

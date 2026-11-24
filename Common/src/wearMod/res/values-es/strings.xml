@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- JugglucoNGmod: own watch face name, overrides upstream Common/src/wear/res/values-es/strings.xml. -->
+<!-- JugglucoNGmod: upstream's own watch face in our watch app (overrides upstream's wear/res/values-es/strings.xml).
+     Same name as in values/ ("JugglucoNGmod classic", watch part 3c2): "JugglucoNGmod" is our own face here. -->
 <resources>
-    <string name="watch_face_name" translatable="false">JugglucoNGmod</string>
+    <string name="watch_face_name" translatable="false">JugglucoNGmod classic</string>
 </resources>

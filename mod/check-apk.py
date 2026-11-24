@@ -8,6 +8,9 @@ Run from the repository root after `bash mod/gradlew-mod.sh ... assembleMobileMo
 --mode release  additionally the signature must equal mod/mod-cert.sha256
 --no-vendor     skip the vendor library check (emulator x86_64 build has no vendor libraries)
 --manifest P    update-manifest.json must describe the phone APK (required with --mode release)
+
+  python3 mod/check-apk.py --trial-absent PHONE_APK
+                only: a phone APK built with -PmodRelease=N (N >= 1) has no CareLink trial (marker strings)
 """
 import argparse
 import fnmatch
@@ -22,7 +25,28 @@ import zipfile
 
 PACKAGE = 'tk.glucodata.ng.mod'
 APP_NAME = 'JugglucoNGmod'
-WATCHFACE_NAME = 'JugglucoNGmod'
+# Our own watch face (watch block, part 3b) carries this name; upstream's face keeps theirs as a spare.
+MOD_WATCHFACE_NAME = 'JugglucoNGmod'
+# Our components that must be in the wear APK (declared in Common/src/wearMod/AndroidManifest.xml).
+MOD_WEAR_COMPONENTS = ['tk.glucodata.mod.watch.SnoozeButtonActivity', 'tk.glucodata.mod.watch.ModWearListener',
+                       'tk.glucodata.mod.watch.face.ModWatchFaceService',
+                       'tk.glucodata.mod.watch.face.FaceSettingsActivity',
+                       # heart rate and steps (watch part 4b)
+                       'tk.glucodata.mod.health.HealthActivity', 'tk.glucodata.mod.health.hs.ModHealthListenerService',
+                       'tk.glucodata.mod.health.hs.ModHealthStarter', 'tk.glucodata.mod.health.hs.ModHealthBootReceiver',
+                       # our alarm screen and its starter (watch part 8)
+                       'tk.glucodata.mod.watch.alarm.ModAlarmActivity', 'tk.glucodata.mod.watch.alarm.ModAlarmStarter']
+# Permissions the wear APK must request, exact names (watch part 4b; upstream's watch manifest has
+# 'BODY_SENSORS_BACKGROUND ' with a trailing space, which no system knows).
+MOD_WEAR_PERMISSIONS = ['android.permission.BODY_SENSORS', 'android.permission.BODY_SENSORS_BACKGROUND',
+                        'android.permission.health.READ_HEART_RATE',
+                        'android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND',
+                        'android.permission.ACTIVITY_RECOGNITION', 'android.permission.RECEIVE_BOOT_COMPLETED']
+# Upstream's watch minSdk: Health Services (minSdk 30) is overridden in our manifest, never raises it.
+UPSTREAM_WEAR_MIN_SDK = '26'
+# Our phone components of the watch block (declared in Common/src/mobileMod/AndroidManifest.xml, watch parts 1, 2, 5).
+MOD_PHONE_COMPONENTS = ['tk.glucodata.mod.watch.ModPhoneListener', 'tk.glucodata.mod.watch.ModWatchStarter',
+                        'tk.glucodata.mod.watch.ModWatchActivity']
 # Must match packagingOptions.jniLibs.excludes in upstream Common/build.gradle.
 VENDOR_EXCLUDES = ['libdata-handle-lib*.so', 'libnative-algorithm-*.so', 'libnative-algorithm-jni-*.so',
                    'libnative-encrypy-decrypt-v110.so', 'libnative-sensitivity-v110.so', 'libnative-struct2json.so']
@@ -122,7 +146,9 @@ def buildconfig_version_code(variant_dir):
 def check_names():
     """For every upstream values* dir that defines one of our overridden names, our source set defines it too
     (a new upstream locale with its own app_name or watch_face_name would show the upstream name there)."""
-    for name, our_src, value in (('app_name', 'mod', APP_NAME), ('watch_face_name', 'wearMod', WATCHFACE_NAME)):
+    # watch_face_name: upstream's face, renamed by our wearMod strings (our own face is mod_watch_face_name)
+    names = (('app_name', 'mod', APP_NAME), ('watch_face_name', 'wearMod', upstream_watchface_name()))
+    for name, our_src, value in names:
         upstream = set()
         for f in glob.glob('Common/src/*/res/values*/strings.xml'):
             parts = f.replace('\\', '/').split('/')
@@ -180,11 +206,145 @@ def check_vendor(apk):
           + (f' — {bad}' if bad else ''))
 
 
+def upstream_watchface_name():
+    """Upstream's face name as our watch app shows it: renamed by our Common/src/wearMod/res/values/strings.xml to
+    "JugglucoNGmod classic" (watch part 3c2), so the face list tells it from ours and from the official app's."""
+    m = re.search(r'name="watch_face_name"[^>]*>([^<]*)<',
+                  open('Common/src/wearMod/res/values/strings.xml', encoding='utf-8').read())
+    return m.group(1) if m else None
+
+
+def check_resource_string(dump, name, want, what):
+    m = re.search(rf'string/{re.escape(name)}\b.*?\n\s*\(\)\s*"([^"]*)"', dump, re.S)
+    check(m and m.group(1) == want, f'{what} "{want}" in wear APK'
+          + ('' if m else ' (not found)') + (f' (got "{m.group(1)}")' if m and m.group(1) != want else ''))
+
+
 def check_watchface_name(apk):
     out = run([build_tool('aapt2'), 'dump', 'resources', apk])
-    m = re.search(r'string/watch_face_name.*?\n\s*\(\)\s*"([^"]*)"', out, re.S)
-    check(m and m.group(1) == WATCHFACE_NAME, f'watch face name "{WATCHFACE_NAME}" in wear APK'
-          + ('' if m else ' (not found)') + (f' (got "{m.group(1)}")' if m and m.group(1) != WATCHFACE_NAME else ''))
+    check_resource_string(out, 'watch_face_name', upstream_watchface_name(), "upstream's watch face name")
+    check_resource_string(out, 'mod_watch_face_name', MOD_WATCHFACE_NAME, 'our watch face name')
+
+
+def novalue_fill_colors(apk):
+    """The fill colours of the vector `drawable/novalue` in [apk] (its anydpi file; paths may be shortened)."""
+    out = run([build_tool('aapt2'), 'dump', 'resources', apk])
+    m = re.search(r'drawable/novalue\n((?:\s+\(.*\n)+)', out)
+    files = re.findall(r'\(anydpi[^)]*\) \(file\) (\S+) type=XML', m.group(1)) if m else []
+    if not files:
+        return None
+    tree = run([build_tool('aapt2'), 'dump', 'xmltree', '--file', files[0], apk])
+    return set(c.lower() for c in re.findall(r'fillColor\([^)]*\)=(#[0-9a-fA-F]+)', tree))
+
+
+def check_novalue(wear, phone):
+    """Watch part 7c: the icon of upstream's ongoing activity, drawn by Wear OS at the bottom of every face, is our
+    faint dot in the wear APK (Common/src/wearMod/res/drawable-anydpi-v24/novalue.xml overrides theirs); the phone
+    keeps upstream's."""
+    ours = set(c.lower() for c in re.findall(r'android:fillColor="(#[0-9A-Fa-f]+)"',
+               open('Common/src/wearMod/res/drawable-anydpi-v24/novalue.xml', encoding='utf-8').read()))
+    in_wear = novalue_fill_colors(wear)
+    check(in_wear == ours, f'wear APK: novalue is our faint dot {sorted(ours)}' + ('' if in_wear == ours else f' (got {in_wear})'))
+    in_phone = novalue_fill_colors(phone)
+    check(in_phone is not None and in_phone != ours, "phone APK: novalue is upstream's" + (f' (got {in_phone})' if in_phone == ours or in_phone is None else ''))
+
+
+def check_wear_components(apk):
+    """Our watch components are in the wear APK's manifest; our face is a wallpaper service without an editor action
+    (upstream's WATCH_FACE_EDITOR would open their WatchFaceConfigActivity, any other value hides the face), and our
+    editor is an app entry of its own ("Graph hours")."""
+    out = run([build_tool('aapt2'), 'dump', 'xmltree', '--file', 'AndroidManifest.xml', apk])
+    names = set(re.findall(r'A: (?:http://schemas.android.com/apk/res/android:)?name\([^)]*\)="([^"]+)"', out))
+    missing = [c for c in MOD_WEAR_COMPONENTS if c not in names]
+    check(not missing, f'wear APK declares our {len(MOD_WEAR_COMPONENTS)} components'
+          + (f' (missing: {missing})' if missing else ''))
+    block = editor = ''
+    for m in re.finditer(r'E: (?:service|activity)\b(?:(?!\n\s*E: (?:service|activity|receiver|provider)\b)[\s\S])*',
+                         out):
+        if 'tk.glucodata.mod.watch.face.ModWatchFaceService' in m.group(0):
+            block = m.group(0)
+        if 'tk.glucodata.mod.watch.face.FaceSettingsActivity' in m.group(0):
+            editor = m.group(0)
+    check('android.permission.BIND_WALLPAPER' in block and 'android.service.wallpaper.WallpaperService' in block
+          and 'wearableConfigurationAction' not in block,
+          'our watch face: BIND_WALLPAPER, wallpaper service filter, no editor action (Wear OS leaves a face with an '
+          'action other than WATCH_FACE_EDITOR out of the picker - watch, 18.11.2026)')
+    check('WEARABLE_CONFIGURATION' not in editor and 'WATCH_FACE_EDITOR' not in editor,
+          'our watch face editor: not a face editor by action (no WEARABLE_CONFIGURATION, no WATCH_FACE_EDITOR)')
+    check('android.intent.action.MAIN' in editor and 'android.intent.category.LAUNCHER' in editor,
+          'our watch face editor: own launcher entry "Graph hours" (watch part 3c2)')
+    check_wear_alarm(apk, out)
+    check_wear_health(apk, out)
+
+
+def check_wear_alarm(apk, xmltree):
+    """Our alarm screen (watch part 8): private, over the lock screen, turns the screen on, one instance - as
+    upstream's; its starter private."""
+    blocks = component_blocks(xmltree)
+    screen = blocks.get('tk.glucodata.mod.watch.alarm.ModAlarmActivity', '')
+    false = r'=(?:false|\(type 0x12\)0x0)\b'
+    true = r'=(?:true|\(type 0x12\)0xffffffff)\b'
+    check(re.search(r'exported\([^)]*\)' + false, screen) is not None
+          and re.search(r'showWhenLocked\([^)]*\)' + true, screen) is not None
+          and re.search(r'turnScreenOn\([^)]*\)' + true, screen) is not None
+          and re.search(r'launchMode\([^)]*\)=(?:2|\(type 0x10\)0x2|singleTask)\b', screen) is not None,
+          'our alarm screen: not exported, showWhenLocked, turnScreenOn, singleTask')
+    starter = blocks.get('tk.glucodata.mod.watch.alarm.ModAlarmStarter', '')
+    check(re.search(r'exported\([^)]*\)' + false, starter) is not None, 'alarm screen starter: not exported')
+
+
+def check_phone_components(apk):
+    """Our phone watch-block components (watch part 5, joints critic N2): the Data Layer listener with the snooze
+    messages, the watch-app capability and the heart rate and steps batches (DATA_CHANGED on /mod/health/batch/),
+    the private starter and the check screen, not exported (opened by our dynamic shortcut)."""
+    out = run([build_tool('aapt2'), 'dump', 'xmltree', '--file', 'AndroidManifest.xml', apk])
+    blocks = component_blocks(out)
+    missing = [c for c in MOD_PHONE_COMPONENTS if c not in blocks]
+    check(not missing, f'phone APK declares our {len(MOD_PHONE_COMPONENTS)} watch components'
+          + (f' (missing: {missing})' if missing else ''))
+    listener = blocks.get('tk.glucodata.mod.watch.ModPhoneListener', '')
+    check('com.google.android.gms.wearable.MESSAGE_RECEIVED' in listener
+          and 'com.google.android.gms.wearable.DATA_CHANGED' in listener and '="/mod/health/batch/"' in listener,
+          'phone listener: /mod/ messages and DATA_CHANGED of /mod/health/batch/')
+    screen = blocks.get('tk.glucodata.mod.watch.ModWatchActivity', '')
+    check(re.search(r'exported\([^)]*\)=(?:false|\(type 0x12\)0x0)\b', screen) is not None,
+          'phone watch screen: not exported')
+    starter = blocks.get('tk.glucodata.mod.watch.ModWatchStarter', '')
+    check(re.search(r'exported\([^)]*\)=(?:false|\(type 0x12\)0x0)\b', starter) is not None, 'phone watch starter: not exported')
+
+
+def component_blocks(xmltree):
+    """Each activity/service/receiver/provider element of an `aapt2 dump xmltree` manifest, by its name."""
+    blocks = {}
+    for m in re.finditer(r'E: (?:service|activity|receiver|provider)\b'
+                         r'(?:(?!\n\s*E: (?:service|activity|receiver|provider|application)\b)[\s\S])*', xmltree):
+        name = re.search(r'A: (?:http://schemas.android.com/apk/res/android:)?name\([^)]*\)="([^"]+)"', m.group(0))
+        if name:
+            blocks[name.group(1)] = m.group(0)
+    return blocks
+
+
+def check_wear_health(apk, xmltree):
+    """Heart rate and steps (watch part 4b): exact permission names, the Health Services binding of our listener, the
+    boot receiver's actions, the page's launcher entry, a private starter, and upstream's minSdk kept."""
+    perms = set(re.findall(r"^uses-permission(?:-sdk-23)?: name='([^']*)'", run([build_tool('aapt2'), 'dump', 'permissions', apk]), re.M))
+    missing = [p for p in MOD_WEAR_PERMISSIONS if p not in perms]
+    check(not missing, f'wear APK requests our {len(MOD_WEAR_PERMISSIONS)} health permissions by their exact names'
+          + (f' (missing: {missing})' if missing else ''))
+    blocks = component_blocks(xmltree)
+    listener = blocks.get('tk.glucodata.mod.health.hs.ModHealthListenerService', '')
+    check('com.google.android.wearable.healthservices.permission.PASSIVE_DATA_BINDING' in listener,
+          'health listener: bound only by Health Services (PASSIVE_DATA_BINDING)')
+    boot = blocks.get('tk.glucodata.mod.health.hs.ModHealthBootReceiver', '')
+    check('android.intent.action.BOOT_COMPLETED' in boot and 'android.intent.action.MY_PACKAGE_REPLACED' in boot,
+          'health boot receiver: BOOT_COMPLETED and MY_PACKAGE_REPLACED')
+    page = blocks.get('tk.glucodata.mod.health.HealthActivity', '')
+    check('android.intent.category.LAUNCHER' in page, 'health page: own launcher entry')
+    starter = blocks.get('tk.glucodata.mod.health.hs.ModHealthStarter', '')
+    check(re.search(r'exported\([^)]*\)=(?:false|\(type 0x12\)0x0)\b', starter) is not None, 'health starter: not exported')
+    sdk = re.search(r"^(?:minSdkVersion|sdkVersion):'([^']*)'", run([build_tool('aapt2'), 'dump', 'badging', apk]), re.M)
+    check(sdk is not None and sdk.group(1) == UPSTREAM_WEAR_MIN_SDK,
+          f"wear minSdk {sdk.group(1) if sdk else '?'} (upstream's {UPSTREAM_WEAR_MIN_SDK}; Health Services overridden)")
 
 
 def const_only_resources():
@@ -274,6 +434,95 @@ def check_xml_drawable_constructors(apk):
         check(c in ctors, f'wear dex: {c} has its no-arg constructor (inflated from {len(files)} drawable XML)')
 
 
+MOD_STARTER = 'tk.glucodata.mod.carelink.ModCareLinkStarter'
+# Every CareLink component of Common/src/mobileMod/AndroidManifest.xml (joint branch, critic of part 6, C6-1: the
+# manifest is merged by hand when CareLink and the watch block meet - a lost receiver would stop the pump data quietly)
+MOD_CARELINK_COMPONENTS = [MOD_STARTER, 'tk.glucodata.mod.carelink.CareLinkLoginActivity',
+                           'tk.glucodata.mod.carelink.CareLinkActivity',
+                           'tk.glucodata.mod.carelink.CareLinkAlarmReceiver',
+                           'tk.glucodata.mod.carelink.CareLinkBootReceiver']
+# Strings that only the CareLink trial code has (part 4p; Common/src/modTrial and .../mod/carelink/trial): the command
+# action, the log tag, the address of the trial session. Release builds rename classes (R8, no -dontobfuscate), so the
+# trial is found by these, not by class names.
+TRIAL_MARKERS = [b'tk.glucodata.ng.mod.CARELINK_TRIAL', b'ModCareLinkTrial', b'trial.invalid']
+
+
+def dex_marker_hits(apk):
+    """Which trial markers occur in the raw dex files of [apk] (the string pool holds them whole)."""
+    found = set()
+    with zipfile.ZipFile(apk) as z:
+        dexes = [n for n in z.namelist() if re.fullmatch(r'classes\d*\.dex', n)]
+        for n in dexes:
+            raw = z.read(n)
+            found.update(m.decode() for m in TRIAL_MARKERS if m in raw)
+    return dexes, found
+
+
+def check_trial(phone, release):
+    """Test build (N = 0): every trial marker is in the phone dex - otherwise the trial vanished silently.
+    Candidate (N >= 1): none of them, in the dex or in the manifest."""
+    dexes, found = dex_marker_hits(phone)
+    names = [m.decode() for m in TRIAL_MARKERS]
+    if release == 0:
+        missing = sorted(set(names) - found)
+        check(dexes and not missing, f'phone dex (test build): CareLink trial markers present {sorted(found)}'
+              + (f' (missing: {missing})' if missing else ''))
+    else:
+        tree = manifest_tree(phone)
+        in_manifest = [m for m in names if m in tree]
+        check(dexes and not found and not in_manifest,
+              f'phone (candidate -mod{release}): no CareLink trial marker in {len(dexes)} dex file(s) or the manifest'
+              + (f' (found: {sorted(found) + in_manifest})' if found or in_manifest else ''))
+
+
+def manifest_tree(apk):
+    return run([build_tool('aapt2'), 'dump', 'xmltree', '--file', 'AndroidManifest.xml', apk])
+
+
+def check_mod_components(phone, wear, release):
+    """Our phone-only code (CareLink, stage 4): every CareLink component declared in
+    Common/src/mobileMod/AndroidManifest.xml is in the phone APK, the boot receiver with both of its actions. The
+    watch gets none of our phone-only code: no CareLink class (tk.glucodata.mod.carelink) and none of the phone
+    components of the watch block. Our watch classes (tk.glucodata.mod.watch, .health; check_wear_components) do belong
+    there - joint branch, critic of part 6, V6-1: the former 'no tk.glucodata.mod.* in the watch' predates the watch
+    block. Searched with the dot / slash after `mod`: the package itself is tk.glucodata.ng.mod. The CareLink trial: in
+    a test build, not in a candidate (check_trial)."""
+    check_trial(phone, release)
+    tree = manifest_tree(phone)
+    blocks = component_blocks(tree)
+    missing = [c for c in MOD_CARELINK_COMPONENTS if c not in blocks]
+    check(not missing and f'{PACKAGE}.mod-carelink' in tree,
+          f'phone manifest: our {len(MOD_CARELINK_COMPONENTS)} CareLink components (authority {PACKAGE}.mod-carelink)'
+          ' - source set mobileMod is in the build' + (f' (missing: {missing})' if missing else ''))
+    boot = blocks.get('tk.glucodata.mod.carelink.CareLinkBootReceiver', '')
+    check('android.intent.action.BOOT_COMPLETED' in boot and 'android.intent.action.MY_PACKAGE_REPLACED' in boot,
+          'CareLink boot receiver: BOOT_COMPLETED and MY_PACKAGE_REPLACED')
+    wtree = manifest_tree(wear)
+    bad = sorted(set(re.findall(r'tk\.glucodata\.mod\.carelink[\w.$]*', wtree))
+                 | {c for c in MOD_PHONE_COMPONENTS if c in wtree})
+    check(not bad and 'mod-carelink' not in wtree,
+          'wear manifest: none of our phone components (CareLink, watch block phone side)'
+          + (f' (found: {bad[:10]})' if bad else ''))
+    phone_only = [c.replace('.', '/') for c in MOD_PHONE_COMPONENTS]
+    hits = set()
+    with zipfile.ZipFile(wear) as z:
+        tmp = os.path.join(os.environ.get('RUNNER_TEMP', '/tmp'), 'mod-wear-dex-ours')
+        os.makedirs(tmp, exist_ok=True)
+        dexes = [n for n in z.namelist() if re.fullmatch(r'classes\d*\.dex', n)]
+        for n in dexes:
+            path = z.extract(n, tmp)
+            dump = run([build_tool('dexdump'), path])
+            hits.update(re.findall(r'Ltk/glucodata/mod/carelink/[\w/$]+', dump))
+            hits.update(f'L{c};' for c in phone_only if f'L{c};' in dump)
+            with open(path, 'rb') as f:
+                raw = f.read()
+            if b'tk/glucodata/mod/carelink' in raw or b'tk.glucodata.mod.carelink' in raw:
+                hits.add(f'(string in {n})')
+            os.remove(path)
+    check(dexes and not hits, f'wear dex: no phone-only class of ours (CareLink, watch block phone side) in '
+          f'{len(dexes)} dex file(s)' + (f' (found: {sorted(hits)[:10]})' if hits else ''))
+
+
 def check_upstream_hooks():
     """Upstream files of HEAD: only MOD-HOOK changes within the budget - mod/check-hooks.py (marks <-> mod/HOOKS.md,
     every changed hunk next to a mark, at most 15 files and 60 lines). Replaced "0 changes in upstream files" so that
@@ -301,15 +550,35 @@ def check_manifest(path, phone, phone_code):
         check(art.get('sha256') == hashlib.sha256(data).hexdigest(), 'manifest: sha256 = phone APK')
 
 
+def trial_absent(phone):
+    """--trial-absent: a phone APK built like a candidate (-PmodRelease=1, one-time key) inside the test build job has
+    no CareLink trial. Only that - no wear, signature or update manifest checks."""
+    pkg, code, name, _ = badging(phone)
+    m = re.search(r'-mod(\d+)$', name)
+    release = int(m.group(1)) if m else 0
+    check(pkg == PACKAGE and release >= 1, f'phone: package {pkg}, versionName {name} is a candidate build (-modN, N >= 1)')
+    if release >= 1:
+        check_trial(phone, release)
+    print(f'\n{len(failures)} check(s) failed' if failures else '\nAll checks passed')
+    sys.exit(1 if failures else 0)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--phone', required=True)
-    ap.add_argument('--wear', required=True)
-    ap.add_argument('--release', type=int, required=True)
-    ap.add_argument('--mode', choices=['test', 'release'], required=True)
+    ap.add_argument('--trial-absent', metavar='PHONE_APK',
+                    help='only: the CareLink trial is not in this candidate-like phone APK (part 4p)')
+    ap.add_argument('--phone')
+    ap.add_argument('--wear')
+    ap.add_argument('--release', type=int)
+    ap.add_argument('--mode', choices=['test', 'release'])
     ap.add_argument('--no-vendor', action='store_true')
     ap.add_argument('--manifest', help='update-manifest.json to check against the phone APK')
     a = ap.parse_args()
+    if a.trial_absent:
+        trial_absent(a.trial_absent)
+    missing = [f'--{n}' for n in ('phone', 'wear', 'release', 'mode') if getattr(a, n) is None]
+    if missing:
+        ap.error(f'required: {" ".join(missing)} (or --trial-absent PHONE_APK alone)')
     codes = {}
 
     up_code = int(build_gradle_value('appVersionCode'))
@@ -338,8 +607,12 @@ def main():
     check_icon()
     check_native()
     check_watchface_name(a.wear)
+    check_novalue(a.wear, a.phone)
+    check_wear_components(a.wear)
+    check_phone_components(a.phone)
     check_watchface_resources(a.wear)
     check_xml_drawable_constructors(a.wear)
+    check_mod_components(a.phone, a.wear, a.release)
     if not a.no_vendor:
         check_vendor(a.phone)
     check_upstream_hooks()

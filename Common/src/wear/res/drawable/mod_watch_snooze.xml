@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JugglucoNGmod, watch block: launcher icon of "Snooze alarm" - an alarm clock with a Z on an amber disc. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#FFFFB300"
+        android:pathData="M24,1 A23,23 0 1,1 23.99,1 Z" />
+    <group
+        android:translateX="11"
+        android:translateY="11"
+        android:scaleX="1.0833"
+        android:scaleY="1.0833">
+        <!-- clock face: ring of radii 9 and 7 around (12,13) -->
+        <path
+            android:fillColor="#FF000000"
+            android:pathData="M12,4 A9,9 0 1,1 11.99,4 Z M12,6 A7,7 0 1,0 12.01,6 Z" />
+        <!-- bells -->
+        <path
+            android:fillColor="#FF000000"
+            android:pathData="M3.3,7.2 L2,5.7 L6.6,1.8 L7.9,3.3 Z M20.7,7.2 L16.1,3.3 L17.4,1.8 L22,5.7 Z" />
+        <!-- the Z -->
+        <path
+            android:fillColor="#FF000000"
+            android:pathData="M9,9 L15,9 L15,10.8 L11.4,15.2 L15,15.2 L15,17 L9,17 L9,15.2 L12.6,10.8 L9,10.8 Z" />
+    </group>
+</vector>
