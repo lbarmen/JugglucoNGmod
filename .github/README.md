@@ -13,7 +13,7 @@ The same JugglucoNG plus a few changes of our own. The author's code is not rewr
 own files (the folder [`mod/`](/mod) and the resources of the `mod` build type), so that JugglucoNG updates can be
 merged easily. The author's files have only short marked hooks: 3 lines in 2 files at the moment ([registry of hooks](/mod/HOOKS.md)).
 
-Based on JugglucoNG 1.3.3-Alpha. Latest version: 1.3.3-10 of 2026-11-23 (tag `mod-1.3.3-10`, see [mod/CHANGES.md](/mod/CHANGES.md)).
+Based on JugglucoNG 1.3.3-Alpha. Latest version: 1.3.3-11 of 2026-11-24 (tag `mod-1.3.3-11`, [release](https://github.com/lbarmen/JugglucoNGmod/releases/latest), see [mod/CHANGES.md](/mod/CHANGES.md)).
 What the app itself can do is in the [author's README](/README.md).
 
 ## What JugglucoNGmod adds
@@ -63,15 +63,15 @@ The watch is updated by hand: install the watch APK as a file or via adb; the wa
 | Wear OS watch face | cannot be added: "String resource ID #0x0" | can be added and works (checked on a watch, 2026-11-15) | 1.3.2-2 |
 | Install | — | own package name `tk.glucodata.ng.mod`: installs next to the official app, not over it | 1.3.2-2 |
 | Name | JugglucoNG | "JugglucoNGmod" in 16 languages, watch face "JugglucoNGmod" | 1.3.2-2 |
-| Icon (phone and watch) | the author's icon | the author's icon with an orange "M" badge in the corner: easy to tell apart from the official app (checked on a phone and a watch, 2026-11-18 – 2026-11-23) | after 1.3.3-10 |
+| Icon (phone and watch) | the author's icon | the author's icon with an orange "M" badge in the corner: easy to tell apart from the official app (checked on a phone and a watch, 2026-11-18 – 2026-11-23) | 1.3.3-11 |
 | Signing | upstream key | own key, fingerprint in [`mod/mod-cert.sha256`](/mod/mod-cert.sha256) | 1.3.2-2 |
-| In-app update | — | from the releases of this repository (none published yet) | 1.3.2-2 |
+| In-app update | — | from the releases of this repository (the first is 1.3.3-11): Settings → "App updates" → "Check automatically"; phone only, the watch is updated by hand | 1.3.2-2 |
 | Clone mode, BloodControl service (for AiDEX) | present | do not work: they need secrets of the JugglucoNG author | 1.3.2-2 |
 | Home-screen widget | two widgets: a card with the number, arrow and a 6 h chart (not transparent), and the number with arrow; no change over 5 min, no reading age | a third widget "JugglucoNGmod" in the xDrip look: transparent, number in range color, arrow, change over 5 min, "N min ago", 3 h of 5-minute dots; own settings window with a live preview (checked on a phone, 2026-11-21) | 1.3.3-10 |
-| MiniMed 740G pump (CareLink) | — | every 5 min from the CareLink cloud: pump boluses and carbs in the journal, the real basal on the chart, the pump's active insulin in "IoB", sent to Nightscout; own "CareLink" window and warnings (checked on a phone, 2026-11-18 – 2026-11-23) | after 1.3.3-10 |
-| Own watch face | the author's face | own face "JugglucoNGmod" on the whole circle: glucose, arrow, change, age in seconds, 1/3/6 h chart with hour lines and forecast, both batteries, the pump's active insulin with CareLink; the author's face is "JugglucoNGmod classic" (checked on a watch, 2026-11-18 – 2026-11-23) | after 1.3.3-10 |
-| Alarms on the watch | only on/off of each alarm comes from the phone; buttons 52 dp | the phone's alarm settings come to the watch; vibration only; own alarm screen with large buttons; "Snooze alarm" for a watch button snoozes on the watch and the phone (checked on a watch, 2026-11-21) | after 1.3.3-10 |
-| Heart rate and steps | — | from the watch to the phone: the "JugglucoNGmod watch" screen (checked on a watch, 2026-11-20) | after 1.3.3-10 |
+| MiniMed 740G pump (CareLink) | — | every 5 min from the CareLink cloud: pump boluses and carbs in the journal, the real basal on the chart, the pump's active insulin in "IoB", sent to Nightscout; own "CareLink" window and warnings (checked on a phone, 2026-11-18 – 2026-11-23) | 1.3.3-11 |
+| Own watch face | the author's face | own face "JugglucoNGmod" on the whole circle: glucose, arrow, change, age in seconds, 1/3/6 h chart with hour lines and forecast, both batteries, the pump's active insulin with CareLink; the author's face is "JugglucoNGmod classic" (checked on a watch, 2026-11-18 – 2026-11-23) | 1.3.3-11 |
+| Alarms on the watch | only on/off of each alarm comes from the phone; buttons 52 dp | the phone's alarm settings come to the watch; vibration only; own alarm screen with large buttons; "Snooze alarm" for a watch button snoozes on the watch and the phone (checked on a watch, 2026-11-21) | 1.3.3-11 |
+| Heart rate and steps | — | from the watch to the phone: the "JugglucoNGmod watch" screen (checked on a watch, 2026-11-20) | 1.3.3-11 |
 
 Two apps on one sensor interfere with each other: connect a sensor to one of them only.
 
@@ -79,7 +79,14 @@ A row is added to the table when the change has been checked on a phone or a wat
 All changes by version and with dates, including the build and checks, are in [mod/CHANGES.md](/mod/CHANGES.md).
 
 ## Download
-There are no ready releases yet.
+[The latest release](https://github.com/lbarmen/JugglucoNGmod/releases/latest): `JugglucoNGmod-<version>.apk` for the phone, `JugglucoNGmod-<version>-wear.apk` for
+a Wear OS watch. Each release is built in GitHub Actions from the tagged commit; the SHA-256 of the signing
+certificate is in the release text and in [`mod/mod-cert.sha256`](/mod/mod-cert.sha256).
+- Phone: open the APK on the phone and allow installing from that app. It installs next to the official
+  JugglucoNG, not over it. Later versions: Settings → "App updates" → "Check automatically" - the app tells you
+  about a new release; nothing downloads or installs on its own.
+- Watch: there is no in-app update on the watch. Install the watch APK with adb over "Wireless debugging" of the
+  watch (`adb install -r JugglucoNGmod-<version>-wear.apk`); the phone and the watch should run the same version.
 
 ## Questions, bugs and ideas
 Write them in [Issues](https://github.com/lbarmen/JugglucoNGmod/issues) of this repository. If a problem also happens
