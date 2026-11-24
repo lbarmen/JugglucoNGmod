@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JugglucoNGmod, phone and watch (build type mod): orange "M" badge for the launcher icon (layered over upstream's foreground in
+     mod_launcher_foreground.xml). Transparent except the bottom-right corner; the badge stays inside the adaptive icon
+     safe zone (circle of 66dp around 54,54), so no launcher mask cuts it. "M" is a path: vectors have no text. -->
+<vector
+    android:height="108dp"
+    android:width="108dp"
+    android:viewportHeight="108"
+    android:viewportWidth="108"
+    xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- white ring -->
+    <path android:fillColor="#FFFFFF"
+          android:pathData="M55.8,68a12.2,12.2 0 1,0 24.4,0a12.2,12.2 0 1,0 -24.4,0"/>
+    <!-- orange disc -->
+    <path android:fillColor="#FF8F00"
+          android:pathData="M57,68a11,11 0 1,0 22,0a11,11 0 1,0 -22,0"/>
+    <!-- bold white "M" -->
+    <path android:fillColor="#FFFFFF"
+          android:pathData="M62,73L62,63L64.6,63L68,67.4L71.4,63L74,63L74,73L71.4,73L71.4,67L68,71.4L64.6,67L64.6,73Z"/>
+</vector>

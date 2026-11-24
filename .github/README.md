@@ -62,7 +62,8 @@ The watch is updated by hand: install the watch APK as a file or via adb; the wa
 |---|---|---|---|
 | Wear OS watch face | cannot be added: "String resource ID #0x0" | can be added and works (checked on a watch, 2026-11-15) | 1.3.2-2 |
 | Install | — | own package name `tk.glucodata.ng.mod`: installs next to the official app, not over it | 1.3.2-2 |
-| Name and icon | JugglucoNG | "JugglucoNGmod" in 16 languages, the author's icon on another background color, watch face "JugglucoNGmod" | 1.3.2-2 |
+| Name | JugglucoNG | "JugglucoNGmod" in 16 languages, watch face "JugglucoNGmod" | 1.3.2-2 |
+| Icon (phone and watch) | the author's icon | the author's icon with an orange "M" badge in the corner: easy to tell apart from the official app (checked on a phone and a watch, 2026-11-18 – 2026-11-23) | after 1.3.3-10 |
 | Signing | upstream key | own key, fingerprint in [`mod/mod-cert.sha256`](/mod/mod-cert.sha256) | 1.3.2-2 |
 | In-app update | — | from the releases of this repository (none published yet) | 1.3.2-2 |
 | Clone mode, BloodControl service (for AiDEX) | present | do not work: they need secrets of the JugglucoNG author | 1.3.2-2 |

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JugglucoNGmod, phone and watch (build type mod): launcher icon foreground = upstream's foreground picture (@mipmap/ic_launcher_foreground,
+     taken as is, so a new upstream icon comes through automatically) with our "M" badge on top. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@mipmap/ic_launcher_foreground"/>
+    <item android:drawable="@drawable/mod_launcher_badge"/>
+</layer-list>
