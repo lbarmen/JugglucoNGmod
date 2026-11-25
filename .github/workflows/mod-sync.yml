@@ -496,9 +496,10 @@ jobs:
           elif [ "$jvm_red" = 1 ]; then
             echo "JVM tests: no results - the JVM command is red before any test ran (see the rows under the JVM row)" | tee out/junit-summary.txt
           fi
-          # our tests in each set, phone and watch: a set without them is red (it never reached them, or lost them)
+          # our tests in each set, phone and watch: a set without one of our classes that ran a test (tests > 0) is
+          # red (it never reached them, lost them, or all of them were switched off)
           for d in testMobileDebugUnitTest testWearDebugUnitTest; do
-            if ! compgen -G "Common/build/test-results/$d/TEST-mod.*.xml" > /dev/null; then
+            if ! grep -lsE '<testsuite [^>]*tests="[1-9]' Common/build/test-results/$d/TEST-mod.*.xml > /dev/null; then
               echo "OUR TESTS DID NOT RUN in $d" | tee -a out/ours.txt
               echo "| Our tests (mod.*) in $d | **red**: none ran | 0 s |" | tee -a out/tests.md
               fail=1

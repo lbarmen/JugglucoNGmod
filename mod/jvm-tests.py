@@ -61,7 +61,10 @@ XML_FETCH = re.compile(r'MavenArtifactFetcher|Failed to fetch maven artifact')
 XML_CAUSE = re.compile(r'IOException|response code|status code|timed out|Connection reset|UnknownHostException|'
                        r'Too Many Requests')
 # the only Gradle failure a class retry may answer: a test task whose tests ran and some failed
-TEST_FAILED = re.compile(r"Execution failed for task '?[^'\s]*:test\w*UnitTest'?[ .(].*?There were failing tests", re.S)
+TEST_FAILED = re.compile(r"Execution failed for task '?[^'\s]*:(test\w*UnitTest)'?[ .(].*?There were failing tests",
+                         re.S)
+# ...and not a crashed or broken test executor, even inside the same block
+EXEC_FAIL = re.compile(r'non-zero exit value|unexpected problem|Could not complete execution', re.I)
 # a compile or build error: red even when a download sign stands next to it
 BUILD_ERR = re.compile(r'^e: |Compilation error|Compilation failed|Script compilation error', re.M)
 COMPILE_TASK = re.compile(r"Execution failed for task '[^']*:compile[^']*'")
@@ -115,7 +118,23 @@ def missing_tasks(results, tasks):
 def only_test_failures(log):
     """Every "What went wrong" block is a test task with failing tests (no crashed executor, no other task)."""
     blocks = WRONG.findall(log)
-    return bool(blocks) and all(TEST_FAILED.search(b) for b in blocks)
+    return bool(blocks) and all(TEST_FAILED.search(b) and not EXEC_FAIL.search(b) for b in blocks)
+
+
+def failing_tasks(log):
+    """Test tasks for which Gradle wrote "There were failing tests"."""
+    return {m.group(1) for b in WRONG.findall(log) for m in [TEST_FAILED.search(b)] if m}
+
+
+def ours_ran(results, task):
+    """One of our classes ran at least one test in this task's reports (a class with tests="0" does not count)."""
+    for f in (Path(results) / task.rsplit(':', 1)[-1]).glob(f'TEST-{OURS}*.xml'):
+        try:
+            if int(ET.parse(f).getroot().get('tests') or 0) > 0:
+                return True
+        except (ET.ParseError, ValueError):
+            pass
+    return False
 
 
 def classify(log, results, tasks=None):
@@ -138,11 +157,15 @@ def classify(log, results, tasks=None):
         kind, why = 'build', 'failed with no failed test and no download sign'
     elif len(real) > FLAKY_MAX:
         kind = 'many'
-    elif not only_test_failures(log) or missing:
-        # something else failed too (another task, a crashed test executor, a task with no report): a class retry
-        # would run only the failed classes and could turn the step green over it
+    elif not only_test_failures(log) or missing or failing_tasks(log) - {c['task'] for c in real}:
+        # something else failed too (another task, a crashed test executor, a task with no report, a task Gradle calls
+        # red with no failed class in its reports): a class retry would run only the failed classes and could turn
+        # the step green over it
         kind = 'build'
+        silent = sorted(failing_tasks(log) - {c['task'] for c in real})
         why = ('no test report from ' + ', '.join(t.rsplit(':', 1)[-1] for t in missing) if missing else
+               'Gradle reports failing tests in ' + ', '.join(silent) + ' but no class of it failed in the reports'
+               if silent and only_test_failures(log) else
                'another failure next to the red tests (not only "There were failing tests")')
     else:
         kind = 'flaky'
@@ -226,8 +249,7 @@ def retry_classes(cmd, results, real):
     if not ok:
         return False, 'exit %d' % rc if rc else ''
     # green only when every test task has its reports and our classes ran in each of them
-    no_ours = [t.rsplit(':', 1)[-1] for t in tasks
-               if not any((Path(results) / t.rsplit(':', 1)[-1]).glob(f'TEST-{OURS}*.xml'))]
+    no_ours = [t.rsplit(':', 1)[-1] for t in tasks if not ours_ran(results, t)]
     if missing_tasks(results, tasks) or no_ours:
         return False, 'our tests did not run in ' + ', '.join(no_ours or missing_tasks(results, tasks))
     return True, ''
@@ -461,7 +483,8 @@ def self_test():
         check('flow network 3 times: exit, calls, deps', (rc != 0, len(calls), deps), (True, 3, 'partial'))
         check('flow network 3 times: red row', 'download failure on all 3 attempts' in notes, True)
 
-        flaky = dict(rc=1, log=LOG_TESTS, xml={**ok_m, **ok_w, f'{WEAR}/TEST-tk.B.xml': _suite('tk.B', [FLAKY_FAIL], 2)})
+        flaky = dict(rc=1, log=LOG_TESTS.replace(MOB, WEAR),
+                     xml={**ok_m, **ok_w, f'{WEAR}/TEST-tk.B.xml': _suite('tk.B', [FLAKY_FAIL], 2)})
         rc, calls, notes, deps, tot = _flow(tmp, [flaky, dict(rc=0, log='ok', xml={f'{WEAR}/TEST-tk.B.xml': _suite('tk.B', tests=2)})])
         check('flow flaky then green: exit, deps', (rc, deps), (0, 'complete'))
         check('flow flaky: retry command', calls[1],[':Common:' + WEAR, '--tests', 'tk.B', '--continue', '--no-daemon'])
@@ -502,6 +525,26 @@ def self_test():
                                                        xml={**flaky_m, f'{WEAR}/TEST-tk.B.xml': _suite('tk.B', tests=2)}),
                                                   retry_ok])
         check('flow flaky, retry green, but no our class in the wear set: red',
+              (rc != 0, len(calls), f'our tests did not run in {WEAR}' in notes), (True, 2, True))
+        # second review: Gradle calls the mobile task red but no mobile class failed in the reports; one block with
+        # both failing tests and a killed executor; our wear class present but with tests="0"
+        log_mw = LOG_TESTS + LOG_TESTS.replace(MOB, WEAR)
+        flaky_w = {**ok_m, **ok_w, f'{WEAR}/TEST-tk.B.xml': _suite('tk.B', [FLAKY_FAIL], 2)}
+        retry_w = dict(rc=0, log='ok', xml={f'{WEAR}/TEST-tk.B.xml': _suite('tk.B', tests=2)})
+        rc, calls, notes, deps, tot = _flow(tmp, [dict(rc=1, log=log_mw, xml=flaky_w), retry_w])
+        check('flow mobile "failing tests" with no failed mobile class + wear flaky: red, no retry',
+              (rc != 0, len(calls), f'failing tests in {MOB} but no class' in notes), (True, 1, True))
+        log_both = LOG_TESTS.replace(MOB, WEAR).replace(
+            'See the report at: file:///x/index.html',
+            "See the report at: file:///y\n> Process 'Gradle Test Executor 4' finished with non-zero exit value 137")
+        rc, calls, notes, deps, tot = _flow(tmp, [dict(rc=1, log=log_both, xml=flaky_w), retry_w])
+        check('flow one wear block with failing tests and exit 137: red, no retry', (rc != 0, len(calls)), (True, 1))
+        zero = ('<?xml version="1.0"?><testsuite name="mod.W" tests="0" skipped="0" failures="0" errors="0">'
+                '</testsuite>')
+        rc, calls, notes, deps, tot = _flow(tmp, [dict(rc=1, log=LOG_TESTS, xml={**flaky_m, **ok_w,
+                                                                                 f'{WEAR}/TEST-mod.W.xml': zero}),
+                                                  retry_ok])
+        check('flow flaky, retry green, our wear class has tests="0": red',
               (rc != 0, len(calls), f'our tests did not run in {WEAR}' in notes), (True, 2, True))
         saved, ATTEMPT_TIMEOUT = ATTEMPT_TIMEOUT, 2
         try:
