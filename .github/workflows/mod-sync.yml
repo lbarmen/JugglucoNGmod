@@ -20,10 +20,15 @@
 # job keeps what it downloads between runs - Gradle modules, the Gradle wrapper, the android-all images Robolectric
 # fetches into ~/.m2/repository. Safe: that job holds no secret and no signing key; the configuration cache and build
 # outputs are not cached; a PR's cache (a fork's PR too) stays in that PR's own scope, main and other PRs never restore
-# it, while every PR may restore main's (the morning run). The build job and mod-build.yml keep no Gradle cache.
-# Their JVM command runs through mod/jvm-tests.py: a download failure -> the whole command again (3 attempts, 60 and
-# 120 s apart); up to 5 classes of theirs red -> only those once more; our tests (mod.*) are never retried. Each
-# retry is a row of the Tests table in the report.
+# it. A PR restores its own cache (re-runs, next commits) or main's, and main gets one only from a full run on main (a
+# morning run with a new upstream release, or Run workflow): the first run of a new PR usually starts without a cache.
+# GitHub deletes an entry unused for 7 days. Saved key: the Gradle files + the list of android-all images in ~/.m2
+# after the tests, so an image a new test fetched lands under a new key (an entry is about 1.2 GB, the repository
+# limit is 10 GB, GitHub drops the least recently used). The build job and mod-build.yml keep no Gradle cache.
+# Their JVM command runs through mod/jvm-tests.py, its self-test first: a download failure -> the whole command again
+# (3 attempts, 60 and 120 s apart); up to 5 classes of theirs red and nothing else failed -> only those once more,
+# green only if our tests then ran in both sets; our tests (mod.*) are never retried; one Gradle run is killed after
+# 20 min. Each retry is a row of the Tests table in the report; a test set without our tests is red.
 name: MOD sync
 run-name: >-
   ${{ github.event_name == 'pull_request' && format('MOD sync PR #{0}', github.event.pull_request.number) ||
@@ -394,14 +399,15 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      # key: OS + the files that pin dependency versions in the checked tree (their Gradle files, wrapper, Robolectric
-      # version in Common/build.gradle); a run of the same files restores it whole, a run with changed ones restores
-      # the newest copy (Gradle then downloads only what is new)
+      # key prefix: OS + the files that pin dependency versions in the checked tree (their Gradle files, wrapper,
+      # Robolectric version in Common/build.gradle). Entries are saved as <prefix>-m2-<android-all list> (see the
+      # save step); the newest entry of this prefix is restored, else the newest of any prefix (Gradle then downloads
+      # only what is new)
       - id: deps-key
         name: Dependency cache key
         env:
           FILES_HASH: ${{ hashFiles('**/*.gradle', '**/*.gradle.kts', 'gradle.properties', 'gradle/wrapper/gradle-wrapper.properties', 'gradle/*.versions.toml') }}
-        run: echo "key=mod-tests-deps-v1-$RUNNER_OS-$FILES_HASH" | tee -a "$GITHUB_OUTPUT"
+        run: echo "key=mod-tests-deps-v2-$RUNNER_OS-$FILES_HASH" | tee -a "$GITHUB_OUTPUT"
 
       - id: deps
         name: Restore downloaded dependencies (Gradle modules, wrapper, Robolectric android-all)
@@ -410,14 +416,17 @@ jobs:
           path: ${{ env.MOD_DEPS }}
           key: ${{ steps.deps-key.outputs.key }}
           restore-keys: |
-            ${{ steps.deps-key.outputs.key }}-partial-
-            mod-tests-deps-v1-${{ runner.os }}-
+            ${{ steps.deps-key.outputs.key }}-
+            mod-tests-deps-v2-${{ runner.os }}-
 
       # Their ci.yml jobs distribution-contract and ui-guardrails, step by step, without
       # `scripts/update-build-inputs.sh --ci` (it needs their official repository). When their ci.yml changes
       # (sync report, section 10), compare this list with it.
       - id: tests
         name: Their tests
+        env:
+          DEPS_KEY: ${{ steps.deps-key.outputs.key }}
+          DEPS_MATCHED: ${{ steps.deps.outputs.cache-matched-key }}
         run: |
           set -uo pipefail
           mkdir -p out/logs
@@ -433,17 +442,29 @@ jobs:
           }
           echo "| check | result | time |" > out/tests.md
           echo "|---|---|---|" >> out/tests.md
-          # mod/jvm-tests.py retries a download failure (whole command) and up to 5 red classes of theirs (only those),
-          # never ours; `python3 -u`: unbuffered, so the log keeps Gradle's order (and t() does not take it for one
-          # of their scripts that this version may lack)
+          # `python3 -u`: unbuffered, so the log keeps Gradle's order (and t() does not take it for one of their
+          # scripts that this version may lack). Its self-test first: a red self-test turns the step red.
+          t "Retry rules of the JVM run: mod/jvm-tests.py --self-test" python3 -u mod/jvm-tests.py --self-test
+          self_red=$fail; fail=0
+          # mod/jvm-tests.py retries a download failure (whole command) and up to 5 red classes of theirs (only those,
+          # when nothing else failed), never ours
           t "JVM: phone and watch, with our golden runs (testMobileDebugUnitTest, testWearDebugUnitTest)" \
             python3 -u mod/jvm-tests.py --results Common/build/test-results --notes out/jvm-notes.md \
               --deps-state out/deps-state.txt -- \
               ./gradlew :Common:testMobileDebugUnitTest :Common:testWearDebugUnitTest --continue --no-daemon --stacktrace
           jvm_red=$fail
+          [ "$self_red" = 1 ] && fail=1
           # its retries and why it is red: rows right under the JVM row
           [ -s out/jvm-notes.md ] && tee -a out/tests.md < out/jvm-notes.md
-          echo "deps=$(cat out/deps-state.txt 2>/dev/null || echo partial)" >> "$GITHUB_OUTPUT"
+          # cache key to save: complete downloads -> prefix + the list of android-all images now in ~/.m2 (a new image
+          # -> a new key); incomplete -> a partial key, only when nothing was restored (a re-run then starts with it)
+          m2=$( (cd ~/.m2/repository 2>/dev/null && find . -type f -name '*.jar' | sort) | sha256sum | cut -c1-16)
+          if [ -z "${DEPS_KEY:-}" ]; then save_key=""
+          elif [ "$(cat out/deps-state.txt 2>/dev/null)" = complete ]; then save_key="$DEPS_KEY-m2-$m2"
+          elif [ -z "${DEPS_MATCHED:-}" ]; then save_key="$DEPS_KEY-partial-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          else save_key=""; fi
+          echo "dependency cache: restored '${DEPS_MATCHED:-none}', to save '${save_key:-nothing}'"
+          echo "save-key=$save_key" >> "$GITHUB_OUTPUT"
           t "UI guardrails" python3 scripts/ui-guardrails.py
           t "UI guardrails: tests" python3 -m unittest discover -s scripts/tests -v
           # without GITHUB_REPOSITORY, as on a developer's computer: test_readme_downloads expects their name or none
@@ -466,7 +487,7 @@ jobs:
           done
           if [ -f out/junit.txt ]; then
             awk '{n+=$2; f+=$3+$4; s+=$5} END {printf "JVM tests: %d, failed %d, skipped %d\n", n, f, s}' out/junit.txt | tee out/junit-summary.txt
-            grep -E '^mod\.' out/junit.txt | tee out/ours.txt || echo "OUR TESTS DID NOT RUN" | tee out/ours.txt
+            grep -E '^mod\.' out/junit.txt | tee out/ours.txt || true
             # a red JVM command never reads as "failed 0": a test task may have stopped before its tests (download,
             # compile error)
             if [ "$jvm_red" = 1 ] && grep -q ', failed 0,' out/junit-summary.txt; then
@@ -474,19 +495,25 @@ jobs:
             fi
           elif [ "$jvm_red" = 1 ]; then
             echo "JVM tests: no results - the JVM command is red before any test ran (see the rows under the JVM row)" | tee out/junit-summary.txt
-            echo "OUR TESTS DID NOT RUN" | tee out/ours.txt
           fi
+          # our tests in each set, phone and watch: a set without them is red (it never reached them, or lost them)
+          for d in testMobileDebugUnitTest testWearDebugUnitTest; do
+            if ! compgen -G "Common/build/test-results/$d/TEST-mod.*.xml" > /dev/null; then
+              echo "OUR TESTS DID NOT RUN in $d" | tee -a out/ours.txt
+              echo "| Our tests (mod.*) in $d | **red**: none ran | 0 s |" | tee -a out/tests.md
+              fail=1
+            fi
+          done
           exit $fail
 
-      # also after red tests, so a re-run starts with what this one downloaded. Every test task ran with all its
-      # downloads -> the main key; otherwise a "-partial-" key the next attempt restores from (a partial copy under
-      # the main key would never be completed: an exact hit is not saved again)
+      # also after red tests, so a re-run starts with what this one downloaded; only when the content is new (its key
+      # differs from the restored one: other Gradle files, a new android-all image, or the first partial copy)
       - name: Save downloaded dependencies
-        if: ${{ !cancelled() && steps.deps.outputs.cache-hit != 'true' && (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure') }}
+        if: ${{ !cancelled() && steps.tests.outputs.save-key != '' && steps.tests.outputs.save-key != steps.deps.outputs.cache-matched-key }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.MOD_DEPS }}
-          key: ${{ steps.deps-key.outputs.key }}${{ steps.tests.outputs.deps != 'complete' && format('-partial-{0}-{1}', github.run_id, github.run_attempt) || '' }}
+          key: ${{ steps.tests.outputs.save-key }}
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
