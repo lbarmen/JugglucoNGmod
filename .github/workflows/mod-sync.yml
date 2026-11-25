@@ -440,6 +440,7 @@ jobs:
             python3 -u mod/jvm-tests.py --results Common/build/test-results --notes out/jvm-notes.md \
               --deps-state out/deps-state.txt -- \
               ./gradlew :Common:testMobileDebugUnitTest :Common:testWearDebugUnitTest --continue --no-daemon --stacktrace
+          jvm_red=$fail
           # its retries and why it is red: rows right under the JVM row
           [ -s out/jvm-notes.md ] && tee -a out/tests.md < out/jvm-notes.md
           echo "deps=$(cat out/deps-state.txt 2>/dev/null || echo partial)" >> "$GITHUB_OUTPUT"
@@ -466,6 +467,14 @@ jobs:
           if [ -f out/junit.txt ]; then
             awk '{n+=$2; f+=$3+$4; s+=$5} END {printf "JVM tests: %d, failed %d, skipped %d\n", n, f, s}' out/junit.txt | tee out/junit-summary.txt
             grep -E '^mod\.' out/junit.txt | tee out/ours.txt || echo "OUR TESTS DID NOT RUN" | tee out/ours.txt
+            # a red JVM command never reads as "failed 0": a test task may have stopped before its tests (download,
+            # compile error)
+            if [ "$jvm_red" = 1 ] && grep -q ', failed 0,' out/junit-summary.txt; then
+              echo "The JVM command is red although no test in these results failed: a test task did not finish, see the rows under the JVM row." | tee -a out/junit-summary.txt
+            fi
+          elif [ "$jvm_red" = 1 ]; then
+            echo "JVM tests: no results - the JVM command is red before any test ran (see the rows under the JVM row)" | tee out/junit-summary.txt
+            echo "OUR TESTS DID NOT RUN" | tee out/ours.txt
           fi
           exit $fail
 

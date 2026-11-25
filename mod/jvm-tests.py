@@ -7,9 +7,12 @@ A red attempt is sorted out by its log and its JUnit XML:
            command again, at most 3 attempts, 60 s and 120 s apart.
   flaky    at most FLAKY_MAX test classes failed, none of ours (package mod.), no download sign: only those classes
            once more (`--tests` on their task). Green on that retry -> green, with a "passed on retry" row.
-  ours     one of our classes (mod.*) failed for a reason other than a download: red at once, never retried.
+  ours     one of our classes (mod.*) failed for a reason other than Robolectric's download (a socket error inside
+           our test is our red): red at once, nothing retried. Checked first.
+  build    a compile or build error in the log (`e: ` lines, Compilation error, a failed compile task with no
+           download sign in its block), even next to a 429; or a failure with no failed test and no download sign:
+           red, no retry.
   many     more than FLAKY_MAX classes failed: red, no retry.
-  build    the command failed with no failed test and no download sign (a compile error, a crash): red.
 After a class retry the XML of the first run is put back with only the retried classes replaced, so out/junit.txt
 counts every class once, in its final state, our classes included. Rows for out/tests.md go to --notes; --deps-state
 gets `complete` when every test task ran with all its downloads (the job then saves the dependency cache under its
@@ -47,7 +50,10 @@ LOG_NET = re.compile('|'.join([
     r'(?:UnknownHost|SocketTimeout|NoRouteToHost)Exception', r'Remote host terminated the handshake',
 ]), re.I)
 # in a failed test: only Robolectric's own download (a test of network code may fail with "Connection reset" itself)
-XML_NET = re.compile(r'Failed to fetch maven artifact|MavenArtifactFetcher')
+XML_NET = re.compile(r'Failed to fetch maven artifact|MavenArtifactFetcher|android-all|Unable to resolve artifact')
+# a compile or build error: red even when a download sign stands next to it
+BUILD_ERR = re.compile(r'^e: |Compilation error|Compilation failed|Script compilation error', re.M)
+COMPILE_TASK = re.compile(r"Execution failed for task '[^']*:compile[^']*'")
 WRONG = re.compile(r'^\* What went wrong:\n(.*?)(?=^\* Try:|^\* Exception is:|\Z)', re.S | re.M)
 
 
@@ -64,6 +70,12 @@ def log_signs(log):
         if s.lower() not in (x.lower() for x in seen):
             seen.append(s)
     return seen
+
+
+def build_error(log):
+    if BUILD_ERR.search(log):
+        return True
+    return any(COMPILE_TASK.search(b) and not LOG_NET.search(b) for b in WRONG.findall(log))
 
 
 def failed_classes(results):
@@ -93,6 +105,8 @@ def classify(log, results):
         signs.append(f'android-all not fetched in {nnet} classes')
     if ours:
         kind = 'ours'
+    elif build_error(log):
+        kind = 'build'
     elif signs:
         kind = 'network'
     elif not failed:
@@ -205,7 +219,8 @@ def run(cmd, results, notes, deps_state, pauses=PAUSES):
         rows.append(f'| JVM: {len(info["real"])} classes red, too many for a retry (at most {FLAKY_MAX}): '
                     f'{names(info["real"], 5)} | **red** | |')
     elif kind == 'build':
-        rows.append('| JVM: failed with no failed test and no download sign (see the log) | **red** | |')
+        rows.append('| JVM: compile or build error, or failed with no failed test and no download sign (see the log) '
+                    '| **red** | |')
     if notes:
         Path(notes).parent.mkdir(parents=True, exist_ok=True)
         Path(notes).write_text(''.join(r + '\n' for r in rows), encoding='utf-8')
@@ -256,6 +271,9 @@ LOG_PLUGIN = ("FAILURE: Build failed with an exception.\n\n* Where:\nBuild file 
 LOG_COMPILE = ("e: file:///w/Common/src/test/java/tk/X.kt:12:5 Unresolved reference 'bar'.\n\n* What went wrong:\n"
                "Execution failed for task ':Common:compileMobileDebugUnitTestKotlin'.\n> Compilation error. See log "
                "for more details\n\n* Try:\n> Run with --info.\n\nBUILD FAILED in 3m\n")
+LOG_COMPILE_429 = LOG_COMPILE.replace('BUILD FAILED in 3m\n', '') + LOG_429
+LOG_COMPILE_DOWNLOAD = LOG_429.replace(':Common:testWearDebugUnitTest', ':Common:compileWearDebugUnitTestKotlin')
+OUR_SOCKET_FAIL = 'java.net.SocketTimeoutException: Read timed out'
 MOB, WEAR = 'testMobileDebugUnitTest', 'testWearDebugUnitTest'
 
 
@@ -331,6 +349,18 @@ def self_test():
         check('six classes of theirs', k(LOG_TESTS, {
             (MOB, f'tk.glucodata.T{i}'): _suite(f'tk.glucodata.T{i}', [FLAKY_FAIL]) for i in range(6)}), 'many')
         check('compile error', k(LOG_COMPILE, {}), 'build')
+        check('compile error next to a 429', k(LOG_COMPILE_429, {}), 'build')
+        check('429 while resolving a compile classpath, no compile error', k(LOG_COMPILE_DOWNLOAD, {}), 'network')
+        check('our test red with a socket error of its own', k(LOG_TESTS, {
+            (MOB, 'mod.carelink.CareLinkHttpTest'): _suite('mod.carelink.CareLinkHttpTest', [OUR_SOCKET_FAIL])}), 'ours')
+        check('our test red with a socket error, next to a 429 in the log', k(LOG_429, {
+            (MOB, 'mod.carelink.CareLinkHttpTest'): _suite('mod.carelink.CareLinkHttpTest', [SOCKET_FAIL])}), 'ours')
+        check('flaky class of theirs together with our red test', k(LOG_TESTS, {
+            (MOB, 'tk.glucodata.ui.AiDexKeyManagementTests'): _suite('tk.glucodata.ui.AiDexKeyManagementTests', [FLAKY_FAIL]),
+            (MOB, 'mod.watch.SnoozeButtonTest'): _suite('mod.watch.SnoozeButtonTest', [OUR_FAIL])}), 'ours')
+        check('only our classes, all failing on the android-all download', k(LOG_MASS, {
+            (MOB, 'mod.carelink.CareLinkAuthTest'): _suite('mod.carelink.CareLinkAuthTest', [NET_FAIL] * 3),
+            (WEAR, 'mod.watch.SnoozeButtonTest'): _suite('mod.watch.SnoozeButtonTest', [NET_FAIL] * 2)}), 'network')
         check('flaky class while the other task hit 429', k(LOG_429, {
             (MOB, 'tk.glucodata.ui.AiDexKeyManagementTests'): _suite('tk.glucodata.ui.AiDexKeyManagementTests', [FLAKY_FAIL])}), 'network')
 
@@ -365,6 +395,15 @@ def self_test():
         rc, calls, notes, deps, tot = _flow(tmp, [ours])
         check('flow ours red: exit, calls, row', (rc != 0, len(calls), 'our tests red, never retried: mod.Ours' in notes),
               (True, 1, True))
+        both = dict(ours, xml={**ours['xml'], f'{WEAR}/TEST-tk.B.xml': _suite('tk.B', [FLAKY_FAIL], 2)})
+        rc, calls, notes, deps, tot = _flow(tmp, [both])
+        check('flow flaky of theirs + ours red: no retry at all, totals red', (rc != 0, len(calls), tot), (True, 1, [6, 2]))
+        mass = dict(rc=1, log=LOG_MASS, xml={f'{MOB}/TEST-mod.Ours.xml': _suite('mod.Ours', [NET_FAIL] * 4, 4),
+                                            f'{WEAR}/TEST-tk.B.xml': _suite('tk.B', [NET_FAIL] * 2, 2)})
+        rc, calls, notes, deps, tot = _flow(tmp, [mass, green])
+        check('flow mass android-all with ours, then green: whole command again', (rc, len(calls), tot), (0, 2, [9, 0]))
+        rc, calls, notes, deps, tot = _flow(tmp, [dict(rc=1, log=LOG_COMPILE_429, xml={})])
+        check('flow compile error next to a 429: red, no retry', (rc != 0, len(calls), deps), (True, 1, 'partial'))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     for b in bad:
