@@ -15,7 +15,15 @@
 #                       only, build and tests skipped on purpose, report green in about a minute (owner's word 15.11).
 # Jobs: check -> merge (merge in the job, report, hooks/budget/secrets) -> build (one-time key, phone + wear,
 # check-apk --mode test, schema export) + tests (their JVM suites with our golden runs, guardrails, Python tests)
-# -> report (red if anything is red or skipped) -> remind (schedule only). No Gradle cache on purpose.
+# -> report (red if anything is red or skipped) -> remind (schedule only).
+# Cache (owner's decision 25.11.2026, after Maven answered 429 and red tests had to be re-run by hand): only the tests
+# job keeps what it downloads between runs - Gradle modules, the Gradle wrapper, the android-all images Robolectric
+# fetches into ~/.m2/repository. Safe: that job holds no secret and no signing key; the configuration cache and build
+# outputs are not cached; a PR's cache (a fork's PR too) stays in that PR's own scope, main and other PRs never restore
+# it, while every PR may restore main's (the morning run). The build job and mod-build.yml keep no Gradle cache.
+# Their JVM command runs through mod/jvm-tests.py: a download failure -> the whole command again (3 attempts, 60 and
+# 120 s apart); up to 5 classes of theirs red -> only those once more; our tests (mod.*) are never retried. Each
+# retry is a row of the Tests table in the report.
 name: MOD sync
 run-name: >-
   ${{ github.event_name == 'pull_request' && format('MOD sync PR #{0}', github.event.pull_request.number) ||
@@ -347,6 +355,14 @@ jobs:
     if: needs.check.outputs.docs != '1'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    env:
+      # downloaded dependencies only; restore and save must list the same paths (they are part of the cache version)
+      MOD_DEPS: |
+        ~/.gradle/caches/modules-2
+        !~/.gradle/caches/modules-2/*.lock
+        !~/.gradle/caches/modules-2/gc.properties
+        ~/.gradle/wrapper/dists
+        ~/.m2/repository
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -378,10 +394,30 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      # key: OS + the files that pin dependency versions in the checked tree (their Gradle files, wrapper, Robolectric
+      # version in Common/build.gradle); a run of the same files restores it whole, a run with changed ones restores
+      # the newest copy (Gradle then downloads only what is new)
+      - id: deps-key
+        name: Dependency cache key
+        env:
+          FILES_HASH: ${{ hashFiles('**/*.gradle', '**/*.gradle.kts', 'gradle.properties', 'gradle/wrapper/gradle-wrapper.properties', 'gradle/*.versions.toml') }}
+        run: echo "key=mod-tests-deps-v1-$RUNNER_OS-$FILES_HASH" | tee -a "$GITHUB_OUTPUT"
+
+      - id: deps
+        name: Restore downloaded dependencies (Gradle modules, wrapper, Robolectric android-all)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.MOD_DEPS }}
+          key: ${{ steps.deps-key.outputs.key }}
+          restore-keys: |
+            ${{ steps.deps-key.outputs.key }}-partial-
+            mod-tests-deps-v1-${{ runner.os }}-
+
       # Their ci.yml jobs distribution-contract and ui-guardrails, step by step, without
       # `scripts/update-build-inputs.sh --ci` (it needs their official repository). When their ci.yml changes
       # (sync report, section 10), compare this list with it.
-      - name: Their tests
+      - id: tests
+        name: Their tests
         run: |
           set -uo pipefail
           mkdir -p out/logs
@@ -397,8 +433,16 @@ jobs:
           }
           echo "| check | result | time |" > out/tests.md
           echo "|---|---|---|" >> out/tests.md
+          # mod/jvm-tests.py retries a download failure (whole command) and up to 5 red classes of theirs (only those),
+          # never ours; `python3 -u`: unbuffered, so the log keeps Gradle's order (and t() does not take it for one
+          # of their scripts that this version may lack)
           t "JVM: phone and watch, with our golden runs (testMobileDebugUnitTest, testWearDebugUnitTest)" \
-            ./gradlew :Common:testMobileDebugUnitTest :Common:testWearDebugUnitTest --continue --no-daemon --stacktrace
+            python3 -u mod/jvm-tests.py --results Common/build/test-results --notes out/jvm-notes.md \
+              --deps-state out/deps-state.txt -- \
+              ./gradlew :Common:testMobileDebugUnitTest :Common:testWearDebugUnitTest --continue --no-daemon --stacktrace
+          # its retries and why it is red: rows right under the JVM row
+          [ -s out/jvm-notes.md ] && tee -a out/tests.md < out/jvm-notes.md
+          echo "deps=$(cat out/deps-state.txt 2>/dev/null || echo partial)" >> "$GITHUB_OUTPUT"
           t "UI guardrails" python3 scripts/ui-guardrails.py
           t "UI guardrails: tests" python3 -m unittest discover -s scripts/tests -v
           # without GITHUB_REPOSITORY, as on a developer's computer: test_readme_downloads expects their name or none
@@ -424,6 +468,16 @@ jobs:
             grep -E '^mod\.' out/junit.txt | tee out/ours.txt || echo "OUR TESTS DID NOT RUN" | tee out/ours.txt
           fi
           exit $fail
+
+      # also after red tests, so a re-run starts with what this one downloaded. Every test task ran with all its
+      # downloads -> the main key; otherwise a "-partial-" key the next attempt restores from (a partial copy under
+      # the main key would never be completed: an exact hit is not saved again)
+      - name: Save downloaded dependencies
+        if: ${{ !cancelled() && steps.deps.outputs.cache-hit != 'true' && (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure') }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.MOD_DEPS }}
+          key: ${{ steps.deps-key.outputs.key }}${{ steps.tests.outputs.deps != 'complete' && format('-partial-{0}-{1}', github.run_id, github.run_attempt) || '' }}
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
