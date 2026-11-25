@@ -10,7 +10,8 @@
 # Candidate (Run workflow on main with release 1..99 and the block branches to test, space-separated,
 # may be empty): main + those branches merged in this run, signed with our key; the APKs stay on the
 # run page (artifact, 14 days) and are installed by hand. No GitHub release: owner's decision
-# 15.11.2026 - a block goes to main only after it was tested on the phone, each block on its own.
+# 15.11.2026. Owner's decision 25.11.2026: blocks accepted with one candidate go to main with one PR of the
+# joint branch; a block tested alone goes with its own PR.
 #   candidate-precheck  no secrets: inputs, release N above every mod-X.Y.Z-M tag and every earlier
 #                       candidate of this version that built APKs or has not finished, never again in
 #                       a re-run (mod/candidate-number.sh, again first in candidate-build), branches exist,

@@ -9,6 +9,13 @@ Each version has two lists: "For the user" - what is visible in the app, "Build 
 A new line goes into the "After …" section, in the same pull request (PR) as the change itself.
 
 ## After mod-1.3.3-11 (in `main`, no tag yet)
+Build and checks:
+- 2026-11-25 — `mod-sync.yml`, job `tests`: downloaded dependencies are cached between runs (Gradle modules, the
+  wrapper, Robolectric's android-all images; no configuration cache, no build outputs, no secrets in that job), saved
+  after red tests too. Their JVM command runs through `mod/jvm-tests.py`: a download failure (Maven 429, a plugin or
+  an android-all image not fetched) runs it again, up to 3 attempts; up to 5 red classes of theirs, when nothing else
+  failed, are run once more ("passed on retry" row in the report); our tests (`mod.*`) are never retried, and a test
+  set (phone or watch) without our tests is red. Before, 11 of 59 runs were re-run by hand (17–24.11).
 
 ## mod-1.3.3-11 — 2026-11-24 (based on JugglucoNG 1.3.3-Alpha; candidate 11, the first GitHub release; the same
 code as candidate 10, checked on a phone and a watch)
