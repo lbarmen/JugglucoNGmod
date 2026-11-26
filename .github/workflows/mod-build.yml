@@ -9,9 +9,14 @@
 #
 # Candidate (Run workflow on main with release 1..99 and the block branches to test, space-separated,
 # may be empty): main + those branches merged in this run, signed with our key; the APKs stay on the
-# run page (artifact, 14 days) and are installed by hand. No GitHub release: owner's decision
-# 15.11.2026. Owner's decision 25.11.2026: blocks accepted with one candidate go to main with one PR of the
-# joint branch; a block tested alone goes with its own PR.
+# run page (artifact, 14 days; the job log with their sha256 - 90 days), mod/apk-keep.py fetch copies
+# them to the owner's computer, they are installed by hand. Owner's decision 25.11.2026: blocks accepted
+# with one candidate go to main with one PR of the joint branch; a block tested alone goes with its own PR.
+# The run publishes nothing (owner's decision 25.11.2026): a GitHub release for everyone only after the
+# owner's "all ok" on the phone for this candidate - mod/publish-candidate.py mod-X.Y.Z-N --publish uploads
+# the very files of the owner's copy (sha256 = this run's log, no rebuild), only for a candidate of main
+# alone; it sets the tag and makes the release normal and Latest (the in-app updater skips drafts and
+# pre-releases).
 #   candidate-precheck  no secrets: inputs, release N above every mod-X.Y.Z-M tag and every earlier
 #                       candidate of this version that built APKs or has not finished, never again in
 #                       a re-run (mod/candidate-number.sh, again first in candidate-build), branches exist,
@@ -23,11 +28,12 @@
 #   candidate-build     environment mod-signing (manual approval, branch main only): our key from the
 #                       environment secrets, in a temp dir outside the repo, deleted; no Gradle cache,
 #                       no daemon, no configuration cache (as upstream signed-build.yml); checks with
-#                       --mode release (our certificate) and update-manifest.json;
-#   publish             switched off (repository variable MOD_PUBLISH_RELEASES != 'true'): GitHub
-#                       release for a candidate of main alone, normal and latest (the in-app updater
-#                       skips drafts and pre-releases). Kept ready for when releases are wanted.
-# Tags mod-X.Y.Z-N are set by hand on main after the owner's "ok"; they build nothing.
+#                       --mode release (our certificate) and update-manifest.json; candidate.txt with
+#                       the sha256 of the files goes into the log too (mod/publish-candidate.py reads it).
+# The former job publish (published right after the build, switched off by the variable
+# MOD_PUBLISH_RELEASES since 25.11.2026) is gone since 26.11.2026: the variable is read by nothing.
+# Tags mod-X.Y.Z-N: mod/publish-candidate.py sets them with the release; for a candidate with block
+# branches - by hand on main after the owner's "ok". They build nothing.
 name: MOD build
 # Candidate runs carry their number and block branches in the run name: mod-remind.yml reads them.
 # Other runs get GitHub's default name (a run-name of only whitespace falls back to it).
@@ -368,6 +374,7 @@ jobs:
           python3 mod/make-update-manifest.py --phone "$phone" > dist/update-manifest.json
           python3 mod/check-apk.py --phone "$phone" --wear "$wear" --release "$RELEASE" --mode release \
             --manifest dist/update-manifest.json | tee mod-checks.txt
+          # the sha256sum lines go into this job's log: mod/publish-candidate.py checks the owner's copy against them
           {
             echo "candidate $VERSION-$RELEASE"
             echo "main:   $GITHUB_SHA"
@@ -393,36 +400,3 @@ jobs:
             mod-checks.txt
           if-no-files-found: error
           retention-days: 14
-
-  publish:
-    name: publish GitHub release (switched off, no key)
-    needs: [candidate-precheck, candidate-build]
-    if: vars.MOD_PUBLISH_RELEASES == 'true' && needs.candidate-precheck.outputs.blocks == ''
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: mod-candidate-${{ needs.candidate-precheck.outputs.version }}-${{ needs.candidate-precheck.outputs.release }}
-          path: rel
-
-      - name: Create the release (normal, latest) and check it
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          TAG: mod-${{ needs.candidate-precheck.outputs.version }}-${{ needs.candidate-precheck.outputs.release }}
-        run: |
-          set -euo pipefail
-          cd rel
-          ls -l dist
-          gh release create "$TAG" dist/*.apk dist/update-manifest.json --target "$GITHUB_SHA" \
-            --title "JugglucoNGmod ${TAG#mod-}" --notes-file release-notes.md --latest
-          state=$(gh release view "$TAG" --json isDraft,isPrerelease --jq '"\(.isDraft) \(.isPrerelease)"')
-          [ "$state" = "false false" ] || { echo "::error::release $TAG is draft/pre-release: $state"; exit 1; }
-          latest=$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)
-          [ "$latest" = "$TAG" ] || { echo "::error::latest release is $latest, not $TAG"; exit 1; }
-          n=$(gh release view "$TAG" --json assets --jq '.assets | length')
-          [ "$n" = 3 ] || { echo "::error::release has $n assets, expected 3"; exit 1; }
-          echo "Release **$TAG** published: normal, latest, 3 assets." >> "$GITHUB_STEP_SUMMARY"
