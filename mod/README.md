@@ -23,7 +23,8 @@ added there.
   check on a phone or a watch.
 - The version code in the APK is theirs × 100 + our number (1.3.2 → 103201, 103202…), for the watch + 1 000 000.
 - Own signature, the certificate fingerprint is [mod-cert.sha256](mod-cert.sha256). In-app updates look at the
-  releases of this repository; releases are not published yet, the APK stays on the build page.
+  releases of this repository. A candidate becomes a release only after a check on the owner's phone, with the
+  very files of its build run (`mod/publish-candidate.py`, no rebuild).
 
 ## Closed-source libraries
 The phone APK contains 34 closed-source vendor libraries (`.so`, ≈ 44 MB; for example, for FreeStyle Libre 3).
