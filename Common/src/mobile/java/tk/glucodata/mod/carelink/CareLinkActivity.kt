@@ -50,6 +50,8 @@ class CareLinkActivity : ComponentActivity() {
         } catch (_: Throwable) {
         }
         val themeMode = CareLinkTheme.mode(this)
+        // the pump-over-Bluetooth trial row: only when the build declares the trial window
+        val pumpBt = tk.glucodata.mod.pumpbt.PumpBtActivity.intentIfDeclared(this)
         setContent {
             JugglucoTheme(themeMode = themeMode) {
                 CareLinkScreen(
@@ -60,6 +62,7 @@ class CareLinkActivity : ComponentActivity() {
                         onBattery = ::askBatteryExemption,
                         onNotifications = ::askNotifications,
                         onSound = ::openChannelSettings,
+                        onPumpBt = pumpBt?.let { intent -> { openPumpBt(intent) } },
                     ),
                 )
             }
@@ -133,6 +136,11 @@ class CareLinkActivity : ComponentActivity() {
                 startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
             }
         }
+    }
+
+    /** The pump-over-Bluetooth trial window (tk.glucodata.mod.pumpbt). */
+    private fun openPumpBt(intent: Intent) {
+        launch { startActivity(intent) }
     }
 
     /** A system screen the phone may not have: false instead of a crash. */

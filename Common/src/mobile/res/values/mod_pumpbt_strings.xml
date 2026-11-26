@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JugglucoNGmod, pump over Bluetooth (trial): strings of the hidden trial window and its row in our CareLink window
+     (English; Russian in values-ru). Not an overlay of upstream's strings: every name starts with mod_pumpbt_. -->
+<resources>
+    <string name="mod_pumpbt_title">Pump over Bluetooth (trial)</string>
+    <string name="mod_pumpbt_entry_section">Trial</string>
+    <string name="mod_pumpbt_entry_title">Pump over Bluetooth (trial)</string>
+    <string name="mod_pumpbt_entry_hint">Reads the pump directly, without MiniMed Mobile. For the 740G trial only.</string>
+
+    <string name="mod_pumpbt_section_phone">Phone</string>
+    <!-- %1$s - yes / no -->
+    <string name="mod_pumpbt_advertising_supported">Bluetooth advertising supported: %1$s</string>
+    <string name="mod_pumpbt_yes">yes</string>
+    <string name="mod_pumpbt_no">no</string>
+    <string name="mod_pumpbt_no_bluetooth">This phone has no Bluetooth</string>
+    <string name="mod_pumpbt_bluetooth_off">Bluetooth is off — turn it on in the phone settings</string>
+    <string name="mod_pumpbt_no_permissions">Bluetooth permissions not given</string>
+    <string name="mod_pumpbt_allow">Allow</string>
+
+    <string name="mod_pumpbt_section_key">Key</string>
+    <string name="mod_pumpbt_key_not_loaded">Key: not loaded</string>
+    <!-- %1$s - CRC of the key database (8 hex digits) -->
+    <string name="mod_pumpbt_key_loaded">Key: loaded, CRC %1$s, Mobile Application ↔ Insulin Pump</string>
+    <string name="mod_pumpbt_key_loading">Loading the key…</string>
+    <string name="mod_pumpbt_load_key">Load key</string>
+    <string name="mod_pumpbt_load_key_hint">Needs internet, once</string>
+    <string name="mod_pumpbt_load_key_file">Load key from file</string>
+    <string name="mod_pumpbt_key_error_network">No internet or the page did not answer</string>
+    <!-- %1$d - HTTP status code -->
+    <string name="mod_pumpbt_key_error_http">The page answered with error %1$d</string>
+    <string name="mod_pumpbt_key_error_not_found">No suitable key database found</string>
+    <string name="mod_pumpbt_key_error_crc">The key database is damaged (CRC)</string>
+    <string name="mod_pumpbt_key_error_wrong_type">Wrong key database type</string>
+    <string name="mod_pumpbt_key_error_file">File not read</string>
+
+    <string name="mod_pumpbt_section_pump">Pump</string>
+    <!-- %1$s - one of the stages below -->
+    <string name="mod_pumpbt_stage">Stage: %1$s</string>
+    <string name="mod_pumpbt_stage_not_started">not started</string>
+    <string name="mod_pumpbt_stage_advertising">advertising for pairing — pair on the pump now</string>
+    <string name="mod_pumpbt_stage_waiting">waiting for the pump to come back</string>
+    <string name="mod_pumpbt_stage_connected">pump connected</string>
+    <string name="mod_pumpbt_stage_pairing">pairing</string>
+    <string name="mod_pumpbt_stage_handshake">handshake</string>
+    <string name="mod_pumpbt_stage_reading">reading</string>
+    <string name="mod_pumpbt_stage_data_read">connected, data read</string>
+    <!-- %1$s - time -->
+    <string name="mod_pumpbt_stage_lost">connection lost at %1$s</string>
+    <!-- %1$s - technical detail in English -->
+    <string name="mod_pumpbt_stage_error">error: %1$s</string>
+    <string name="mod_pumpbt_stage_stopped">stopped</string>
+    <!-- %1$s - "Mobile NNNNNN" -->
+    <string name="mod_pumpbt_name_on_pump">Name on the pump: %1$s</string>
+    <string name="mod_pumpbt_lost_hint">On the 780G the pump often drops the link for about a minute right after the first pairing and comes back — wait.</string>
+    <!-- %1$s - time and the technical detail in English -->
+    <string name="mod_pumpbt_last_problem">Last problem: %1$s</string>
+    <!-- %1$s - one of the stages above -->
+    <string name="mod_pumpbt_furthest_stage">Furthest stage: %1$s</string>
+    <string name="mod_pumpbt_returns_title">Returns (last 3):</string>
+    <!-- %1$s - time, %2$s - duration -->
+    <string name="mod_pumpbt_returned">Lost at %1$s, back after %2$s</string>
+    <string name="mod_pumpbt_duration">%1$d min %2$d s</string>
+    <string name="mod_pumpbt_variant_a">Name variant: A — manufacturer data</string>
+    <string name="mod_pumpbt_variant_b">B — phone Bluetooth name (changed during the trial)</string>
+    <string name="mod_pumpbt_variant_hint">If the pump does not list Mobile … or pairing fails twice, press Stop and try B.</string>
+    <string name="mod_pumpbt_stop_minimed_hint">Before pairing, stop MiniMed Mobile: Settings → Apps → MiniMed Mobile → Force stop.</string>
+    <string name="mod_pumpbt_start_pairing">Start pairing</string>
+    <string name="mod_pumpbt_start_pairing_hint">Keep this screen open and the phone unlocked. When the phone asks to pair with the pump, confirm at once.</string>
+    <string name="mod_pumpbt_wait">Wait for the pump</string>
+    <string name="mod_pumpbt_wait_hint">Keep this screen open.</string>
+    <string name="mod_pumpbt_stop">Stop</string>
+    <string name="mod_pumpbt_read_again">Read again</string>
+    <string name="mod_pumpbt_need_key">Load the key first</string>
+
+    <!-- %1$s - time of the last reading -->
+    <string name="mod_pumpbt_section_values">Values (read at %1$s)</string>
+    <string name="mod_pumpbt_model">Model</string>
+    <string name="mod_pumpbt_firmware">Firmware</string>
+    <string name="mod_pumpbt_serial">Serial number</string>
+    <string name="mod_pumpbt_iob">Active insulin</string>
+    <string name="mod_pumpbt_reservoir">Reservoir</string>
+    <string name="mod_pumpbt_battery">Battery</string>
+    <string name="mod_pumpbt_basal_now">Basal now</string>
+    <string name="mod_pumpbt_temp_basal">Temp basal</string>
+    <string name="mod_pumpbt_history">Last history records</string>
+    <string name="mod_pumpbt_units">%1$s U</string>
+    <string name="mod_pumpbt_percent">%1$d %%</string>
+    <string name="mod_pumpbt_units_per_hour">%1$s U/h</string>
+    <!-- %1$s - rate with unit, %2$d - minutes -->
+    <string name="mod_pumpbt_temp_basal_value">%1$s, %2$d min left</string>
+    <string name="mod_pumpbt_none">none</string>
+    <string name="mod_pumpbt_not_read">—</string>
+
+    <string name="mod_pumpbt_section_journal">Journal</string>
+    <string name="mod_pumpbt_share_journal">Share journal</string>
+    <string name="mod_pumpbt_clear_journal">Clear journal</string>
+    <string name="mod_pumpbt_journal_empty">Empty</string>
+    <string name="mod_pumpbt_clear_title">Clear the journal?</string>
+    <string name="mod_pumpbt_clear_text">Share it first if you need it — clearing cannot be undone.</string>
+    <string name="mod_pumpbt_clear_confirm">Clear</string>
+    <string name="mod_pumpbt_cancel">Cancel</string>
+</resources>

@@ -52,6 +52,8 @@ class CareLinkScreenActions(
     val onBattery: () -> Unit,
     val onNotifications: () -> Unit,
     val onSound: () -> Unit,
+    /** Opens the pump-over-Bluetooth trial window; null - the build has no such window (row not drawn). */
+    val onPumpBt: (() -> Unit)? = null,
 )
 
 /**
@@ -157,6 +159,17 @@ internal fun CareLinkScreen(model: CareLinkViewModel, actions: CareLinkScreenAct
 
             SectionLabel(stringResource(R.string.mod_carelink_section_phone))
             PhoneRows(state, actions)
+
+            actions.onPumpBt?.let { open ->
+                SectionLabel(stringResource(R.string.mod_pumpbt_entry_section))
+                SettingsItem(
+                    title = stringResource(R.string.mod_pumpbt_entry_title),
+                    subtitle = stringResource(R.string.mod_pumpbt_entry_hint),
+                    iconTint = MaterialTheme.colorScheme.secondary,
+                    position = CardPosition.SINGLE,
+                    onClick = open,
+                )
+            }
         }
     }
 }
