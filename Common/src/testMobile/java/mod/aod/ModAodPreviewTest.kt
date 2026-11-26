@@ -20,6 +20,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import tk.glucodata.GlucoseRangeColors
 import tk.glucodata.R
+import tk.glucodata.mod.aod.ModAodBlock
 import tk.glucodata.mod.aod.ModAodPainter
 import tk.glucodata.mod.aod.ModAodPalette
 import tk.glucodata.mod.aod.ModAodPlot
@@ -127,7 +128,7 @@ class ModAodPreviewTest {
             val before = case.readings.last { it.timeMs <= last.timeMs - 5 * min }
             // upstream's text for a change, as their DisplayDeltaSource gives it to the block
             val delta = tk.glucodata.GlucoseDelta.format(last.value - before.value, case.range.isMmol)
-            delta + " · " + ctx.getString(R.string.minutes_short_format, ((now - last.timeMs) / min).toInt())
+            delta + " · " + ModAodBlock.readingTime(last.timeMs, zone, "HH:mm", ru)
         } else null
         val value = ModAodPainter.Value(valueText(case).takeIf { case.stale == null }, case.rate, sub, case.stale)
         val plot = ModAodPlot.plot(case.readings, now, case.range.low, case.range.high, case.range.isMmol, case.forecast)

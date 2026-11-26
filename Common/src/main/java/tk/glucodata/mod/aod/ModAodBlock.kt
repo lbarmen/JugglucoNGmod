@@ -1,9 +1,14 @@
 package tk.glucodata.mod.aod
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.drawable.BitmapDrawable
 import android.view.View
 import android.widget.ImageView
+import java.lang.ref.WeakReference
+import java.time.Instant
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 import tk.glucodata.CurrentDisplaySource
 import tk.glucodata.DisplayDeltaSource
@@ -18,21 +23,32 @@ import tk.glucodata.NotificationPredictionAccess
 import tk.glucodata.NotificationPredictionSeries
 import tk.glucodata.Notify
 import tk.glucodata.R
+import tk.glucodata.UiRefreshBus
 
 /**
  * JugglucoNGmod, phone always-on display (part 1, the owner's variant B, 26.11): our whole block in upstream's overlay.
  * Upstream's `AODOverlayService.updateOverlayContent` hands over what it has just resolved (one hook, `aod-block`):
  * the readings, the number as their app shows it, the arrow's rate, the "no new value" text. We hide their text row
- * (number, arrow, delta, status) and put our block - number, arrow, change and age, chart - into their chart view.
- * Their service keeps everything else: when to show, the burn-in steps, the light sensor, the refresh, the position.
+ * (number, arrow, delta, status) and put our block - number, arrow, change and the reading's time, chart - into their
+ * chart view. Their service keeps everything else: when to show, the burn-in steps, the light sensor, the refresh,
+ * the position.
  *
  * Their settings that still act: chart on/off and size, text size, arrow on/off, the delta interval, the "Bottom"
  * position, opacity. Font, weight and "show delta" do not (our block has its own look, as on the watch).
+ *
+ * Samsung's always-on display keeps the screen in DOZE_SUSPEND and takes a new frame only when the system wakes it for
+ * a moment (probe on a Galaxy S24 Ultra, One UI 6.1, 26.11: about 2 s every one to a few minutes). So the small line
+ * shows the reading's clock time, not its age - a frozen frame must not claim to be fresh - and a refresh that would
+ * draw the same picture is skipped ([sameDrawing]): most of them never reach the screen anyway.
  */
 object ModAodBlock {
 
     private const val TAG = "ModAod"
     private const val PREFS = "tk.glucodata_preferences"
+
+    /** What the block on screen was drawn from, and that block, while upstream's view still shows it. */
+    private var lastKey: DrawKey? = null
+    private var lastBitmap: WeakReference<Bitmap>? = null
 
     /** Upstream's AOD number: 22 dp at 2x times their text size (`NotificationChartDrawer.drawGlucoseText`). */
     private const val NUMBER_DP = 22f * 2f
@@ -76,16 +92,32 @@ object ModAodBlock {
             val showArrow = prefs.getBoolean("aod_show_arrow", true)
             val range = range(isMmol)
             val fresh = stale == null && shown != null
+            val hour24 = android.text.format.DateFormat.is24HourFormat(context)
+            val locale = Locale.getDefault()
+            val zone = ZoneId.systemDefault()
+            val deltaInterval = prefs.getInt(DisplayDeltaSource.INTERVAL, GlucoseDelta.DEFAULT_INTERVAL_MINUTES)
+            val key = DrawKey(
+                light, dm.widthPixels, dm.density, dm.scaledDensity, textScale, chartScale, showChart, showArrow, isMmol,
+                range, deltaInterval, viewMode, hasCalibration, sensorId, valueText, if (fresh) rate else Float.NaN, stale,
+                shown?.timeMillis ?: 0L, history.size, history.lastOrNull()?.timestamp ?: 0L,
+                history.lastOrNull()?.value ?: Float.NaN, deltaHistory.lastOrNull()?.timestamp ?: 0L,
+                UiRefreshBus.revision.value, nowMs / 60_000L, hour24, locale, zone,
+            )
+            val onScreen = (chartView.drawable as? BitmapDrawable)?.bitmap
+            if (sameDrawing(lastKey, key, onScreen != null && onScreen === lastBitmap?.get())) {
+                chartView.visibility = View.VISIBLE
+                textRow?.visibility = View.GONE
+                return true
+            }
             val points = chartPoints(context, history, sensorId, viewMode, hasCalibration, startMs, shown?.takeIf { fresh })
             val forecast = if (showChart) forecast(context, history, isMmol, viewMode, hasCalibration, sensorId, range) else emptyList()
             val plot = ModAodPlot.plot(points, nowMs, range.low, range.high, isMmol, forecast)
             val sub = if (fresh && shown != null) {
                 val delta = DisplayDeltaSource.format(
-                    true, deltaHistory, sensorId, shown.timeMillis, viewMode, isMmol,
-                    prefs.getInt(DisplayDeltaSource.INTERVAL, GlucoseDelta.DEFAULT_INTERVAL_MINUTES), nowMs, Notify.glucosetimeout,
+                    true, deltaHistory, sensorId, shown.timeMillis, viewMode, isMmol, deltaInterval, nowMs, Notify.glucosetimeout,
                 )
-                val minutes = ((nowMs - shown.timeMillis).coerceAtLeast(0L) / 60_000L).toInt()
-                subLine(delta, context.getString(R.string.minutes_short_format, minutes))
+                val pattern = android.text.format.DateFormat.getBestDateTimePattern(locale, if (hour24) "Hm" else "hm")
+                subLine(delta, readingTime(shown.timeMillis, zone, pattern, locale))
             } else null
             val value = ModAodPainter.Value(
                 text = numberText(valueText),
@@ -104,18 +136,74 @@ object ModAodBlock {
                 dm.widthPixels,
                 NUMBER_DP * dm.density * textScale,
                 if (showChart) (CHART_DP * dm.density * chartScale).toInt() else 0,
-                value, plot, isMmol, palette, zoneColor, ZoneId.systemDefault(),
-                android.text.format.DateFormat.is24HourFormat(context), Locale.getDefault(),
+                value, plot, isMmol, palette, zoneColor, zone, hour24, locale,
             )
             chartView.layoutParams = chartView.layoutParams?.also { it.height = bitmap.height }
             chartView.setImageBitmap(bitmap)
             chartView.visibility = View.VISIBLE
             textRow?.visibility = View.GONE
+            lastKey = key
+            lastBitmap = WeakReference(bitmap)
             true
         } catch (t: Throwable) {
             Log.stack(TAG, "block failed, upstream's look", t)
+            lastKey = null
+            lastBitmap = null
             textRow?.visibility = View.VISIBLE
             false
+        }
+    }
+
+    /**
+     * Everything the drawn block depends on. The minute stands for the clock: the 3-hour window slides by about one
+     * pixel in ten seconds, so a redraw inside the same minute with the same readings would show the same picture.
+     * Upstream's refresh-bus revision ([dataRevision]) catches data changes inside the history (backfill,
+     * calibration) at once; anything else not in here (a journal entry moving the forecast) shows at the next minute.
+     */
+    internal data class DrawKey(
+        val light: Boolean,
+        val widthPx: Int,
+        val density: Float,
+        val scaledDensity: Float,
+        val textScale: Float,
+        val chartScale: Float,
+        val showChart: Boolean,
+        val showArrow: Boolean,
+        val isMmol: Boolean,
+        val range: Range,
+        val deltaInterval: Int,
+        val viewMode: Int,
+        val hasCalibration: Boolean,
+        val sensorId: String?,
+        val valueText: String,
+        val rate: Float,
+        val stale: String?,
+        val shownTime: Long,
+        val historySize: Int,
+        val historyLastTime: Long,
+        val historyLastValue: Float,
+        val deltaLastTime: Long,
+        val dataRevision: Long,
+        val minute: Long,
+        val hour24: Boolean,
+        val locale: Locale,
+        val zone: ZoneId,
+    )
+
+    /** The refresh would draw what upstream's view already shows: the same inputs and that view still holds our block. */
+    internal fun sameDrawing(last: DrawKey?, next: DrawKey, viewHoldsLast: Boolean): Boolean =
+        viewHoldsLast && last == next
+
+    /**
+     * The clock time of the shown reading in the phone's own format ([pattern] from Android, "HH:mm" or "h:mm a");
+     * a pattern letter java.time does not know falls back to the plain 24- or 12-hour form.
+     */
+    internal fun readingTime(timeMs: Long, zone: ZoneId, pattern: String, locale: Locale): String {
+        val at = Instant.ofEpochMilli(timeMs).atZone(zone)
+        return try {
+            DateTimeFormatter.ofPattern(pattern, locale).format(at)
+        } catch (_: RuntimeException) {
+            DateTimeFormatter.ofPattern(if (pattern.contains('H') || pattern.contains('k')) "HH:mm" else "h:mm a", locale).format(at)
         }
     }
 
@@ -123,9 +211,9 @@ object ModAodBlock {
     internal fun numberText(valueText: String): String? =
         valueText.substringBefore(" · ").trim().takeIf { it.isNotEmpty() }
 
-    /** "+0,2 · 2 мин": the change and the age; either may be missing. */
-    internal fun subLine(delta: String, age: String): String? =
-        listOf(delta, age).filter { it.isNotBlank() }.joinToString(" · ").takeIf { it.isNotEmpty() }
+    /** "+0,2 · 17:01": the change and the reading's time; either may be missing. */
+    internal fun subLine(delta: String, time: String): String? =
+        listOf(delta, time).filter { it.isNotBlank() }.joinToString(" · ").takeIf { it.isNotEmpty() }
 
     internal data class Range(val low: Float, val high: Float, val veryLow: Float, val veryHigh: Float)
 

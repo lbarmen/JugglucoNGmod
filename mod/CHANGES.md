@@ -13,14 +13,17 @@ For the user:
 - 2026-11-26 — the phone's always-on display ("Lock screen (AOD)", the author's accessibility overlay) in the look of
   the watch face's dim mode (`Common/src/main/java/tk/glucodata/mod/aod/`): the number centred (with the chart on, the
   author moves it towards the chart's last point, so it sat off to the right), the arrow to its right, the change and
-  "N min" small under it; below, 3 h of 5-minute dots (white in range, the author's zone colour outside it), dashed
-  low and high lines with their values, thin hour lines with labels, the author's forecast as a thin dashed line. No
-  background: no target band, no grid, no grey forecast fill. The number and the arrow are always white (the owner's
-  choice). The author's service keeps when to show, the burn-in steps, the light sensor, the refresh and the
-  position; of the author's AOD settings chart on/off and size, text size, arrow on/off, the delta interval, position
-  and opacity still act, font, weight and "show delta" do not. One hook in the author's files, 2 lines (`aod-block`,
-  see HOOKS.md); if our block fails, the author's own drawing is shown. On the owner's phone since 2026-11-26
-  (computer build 12); the tag comes with the next candidate from `main`.
+  the reading's clock time small under it; below, 3 h of 5-minute dots (white in range, the author's zone colour
+  outside it), dashed low and high lines with their values, thin hour lines with labels, the author's forecast as a
+  thin dashed line. No background: no target band, no grid, no grey forecast fill. The number and the arrow are always
+  white (the owner's choice). The author's service keeps when to show, the burn-in steps, the light sensor, the
+  refresh and the position; of the author's AOD settings chart on/off and size, text size, arrow on/off, the delta
+  interval, position and opacity still act, font, weight and "show delta" do not. One hook in the author's files, 2
+  lines (`aod-block`, see HOOKS.md); if our block fails, the author's own drawing is shown. Samsung's always-on
+  display (One UI 6.1, measured 2026-11-26) keeps the screen suspended and takes a new frame only when the system
+  wakes it for about 2 s, every one to a few minutes - the author's look included; so the block shows the time of the
+  reading, not its age, and a refresh that would draw the same picture is skipped. On the owner's phone since
+  2026-11-26 (computer build 12); the tag comes with the next candidate from `main`.
 
 Build and checks:
 - 2026-11-26 — a candidate reaches everyone only after the owner's "all ok" on the phone, as the very files checked
