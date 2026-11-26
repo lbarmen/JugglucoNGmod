@@ -10,6 +10,16 @@ A new line goes into the "After …" section, in the same pull request (PR) as t
 
 ## After mod-1.3.3-11 (in `main`, no tag yet)
 Build and checks:
+- 2026-11-26 — a candidate reaches everyone only after the owner's "all ok" on the phone, as the very files checked
+  there: `mod/publish-candidate.py mod-X.Y.Z-N --publish --checked "<what was checked>"` takes them from the owner's
+  copy (`mod/apk-keep.py fetch`), checks them against the sha256 the candidate run printed in its log (GitHub keeps
+  job logs 90 days, the artifact 14) and against our signature, uploads them into a draft, compares GitHub's own
+  sha256 of each file, sets the annotated tag (its third line is the `--checked` text) and only then makes the
+  release normal and Latest; afterwards it checks the release as an anonymous visitor. It publishes only the
+  candidate the owner marked as the one on the phone (`mod/apk-keep.py installed`), built from `main` alone, newer
+  than every release. `--probe` does the same into a draft under a probe tag and deletes it; `--verify` compares a
+  published release with the copy. The `publish` job of `mod-build.yml` (it published right after the build;
+  switched off since 2026-11-25) is removed.
 - 2026-11-25 — `mod-sync.yml`, job `tests`: downloaded dependencies are cached between runs (Gradle modules, the
   wrapper, Robolectric's android-all images; no configuration cache, no build outputs, no secrets in that job), saved
   after red tests too. Their JVM command runs through `mod/jvm-tests.py`: a download failure (Maven 429, a plugin or
