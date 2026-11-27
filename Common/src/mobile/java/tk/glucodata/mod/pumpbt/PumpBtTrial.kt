@@ -1,6 +1,5 @@
 package tk.glucodata.mod.pumpbt
 
-import android.Manifest
 import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.pm.PackageManager
@@ -12,19 +11,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import tk.glucodata.mod.pumpbt.ble.PumpBtAdapterName
-import tk.glucodata.mod.pumpbt.ble.PumpLink
-import tk.glucodata.mod.pumpbt.ble.PumpLinkRules
-import tk.glucodata.mod.pumpbt.core.PumpCycle
 import java.io.File
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
 /**
- * JugglucoNGmod, pump over Bluetooth (trial): one per process. Holds the link to the pump and the state the trial
- * window shows; the window only watches [state] and presses buttons. Closing the window or turning the screen off
- * does not end the link (upstream's sensor service keeps the process); Stop or the death of the process do. No own
- * background service; only the link's short wake holds (handshake, read cycle). All calls on the main thread.
+ * JugglucoNGmod, pump over Bluetooth (trial window): a thin layer over [PumpBtSource], which owns the link, the history
+ * memory and its number (series part 2, part B2a). Here only what the window shows besides the source - Bluetooth and
+ * permission checks, the key database loading, the name variant, the journal's copy and clearing; the buttons go to the
+ * source. Closing the window or turning the screen off does not end the link. All calls on the main thread.
  */
 internal object PumpBtTrial {
 
@@ -33,26 +28,23 @@ internal object PumpBtTrial {
     val state: StateFlow<PumpBtUiState> = _state.asStateFlow()
 
     private var app: Context? = null
-    private var store: PumpBtStore? = null
-    private var link: PumpLink? = null
-    private var key: PumpBtKey.Result.Ok? = null
-    private var linkKeyHex: String? = null
-    /** The last history record read without a gap, this process only (as before); null - from the oldest record. */
-    private var historySeq: Long? = null
 
     private val journal: (String) -> Unit = { PumpBtJournal.add(it) }
 
-    /** The trial window opened: nothing is asked or started here. */
+    /** The trial window opened: the source is set up (idempotent; it gives back a changed phone name), nothing started. */
     fun onScreenOpened(context: Context) {
         val c = context.applicationContext
         app = c
-        PumpBtJournal.init(c)
-        val s = store ?: PumpBtStore(c).also { store = it }
+        PumpBtSource.init(c)
+        val s = PumpBtSource.store(c)
         journal("trial screen opened ${PumpBtJournal.fullDate()}, Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), ${Build.MANUFACTURER} ${Build.MODEL}")
-        // the phone's own Bluetooth name stays out of the journal
-        if (link?.isRunning != true) PumpBtAdapterName.restore(c, s) { journal(PumpLinkRules.hideQuoted(it)) }
-        if (key == null) key = PumpBtKey.load(c)
-        _state.update { it.copy(variant = s.variant, advertisedName = s.advertisedName, keyCrc = key?.crc) }
+        PumpBtSource.onLinkState = { ls -> _state.update { it.copy(link = ls) } }
+        _state.update {
+            it.copy(
+                link = PumpBtSource.state.value.link, variant = s.variant, advertisedName = s.advertisedName,
+                keyCrc = PumpBtSource.key(c)?.crc,
+            )
+        }
         refreshChecks(c)
     }
 
@@ -79,12 +71,9 @@ internal object PumpBtTrial {
     }
 
     /** Android 12+: BLUETOOTH_ADVERTISE and BLUETOOTH_CONNECT (in upstream's manifest); before - install-time ones. */
-    fun permissions(): Array<String> =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) arrayOf(Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_CONNECT)
-        else emptyArray()
+    fun permissions(): Array<String> = PumpBtSource.permissions()
 
-    fun hasPermissions(context: Context): Boolean =
-        permissions().all { context.checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
+    fun hasPermissions(context: Context): Boolean = PumpBtSource.hasPermissions(context)
 
     fun startPairing() = start(pair = true)
 
@@ -92,53 +81,24 @@ internal object PumpBtTrial {
 
     private fun start(pair: Boolean) {
         val c = app ?: return
-        val s = store ?: return
         refreshChecks(c)
-        val k = key
         val blockers = _state.value.blockers
-        if (k == null || blockers.isNotEmpty()) {
+        if (PumpBtSource.key(c) == null || blockers.isNotEmpty()) {
             journal("start refused: ${blockers.joinToString { it.name.lowercase() }}")
             return
         }
-        // a key loaded since the link was made reaches a new link (a running link keeps its key until Stop)
-        if (link?.isRunning != true && linkKeyHex != k.hex) link = null
-        val l = link ?: PumpLink(
-            c, k.db, s,
-            journal = journal,
-            logcat = { PumpBtLog.i(it) },
-            publish = { ls -> _state.update { it.copy(link = ls) } },
-            historyFrom = { historySeq?.plus(1) },
-            onCycle = ::cycleRead,
-        ).also {
-            link = it
-            linkKeyHex = k.hex
-        }
-        PumpBtLog.i("trial start (" + (if (pair) "pairing" else "waiting") + ")")
-        l.start(pair)
+        PumpBtSource.startLink(c, pair)
     }
 
-    fun stop() {
-        link?.stop()
-    }
+    /** Stops the link; with the source on its watchdog starts it again, waiting for the pump. */
+    fun stop() = PumpBtSource.stopLink()
 
-    fun readAgain() {
-        link?.readNow()
-    }
-
-    /**
-     * The trial's history number (until the history memory of the source takes over): only in process memory, moved
-     * to what came without a gap; a pump whose newest record is below it (another pump) starts from its oldest again.
-     */
-    private fun cycleRead(cycle: PumpCycle) {
-        val h = cycle.history
-        val seq = historySeq
-        if (seq != null && h.newestOnPump != null && h.newestOnPump < seq) historySeq = null
-        h.contiguousTo?.let { to -> historySeq = maxOf(historySeq ?: Long.MIN_VALUE, to) }
-    }
+    fun readAgain() = PumpBtSource.readNow()
 
     fun setVariant(v: PumpBtNameVariant) {
-        val s = store ?: return
-        if (link?.isRunning == true) return
+        val c = app ?: return
+        val s = PumpBtSource.store(c)
+        if (PumpBtSource.linkRunning) return
         s.variant = v
         journal("name variant set to $v")
         _state.update { it.copy(variant = v) }
@@ -193,7 +153,7 @@ internal object PumpBtTrial {
                     return
                 }
                 // a new key reaches the link at its next start
-                key = result
+                PumpBtSource.keyLoaded(result)
                 journal("key database loaded from $source: CRC ${result.crc}, Mobile Application ↔ Insulin Pump")
                 _state.update { it.copy(keyLoading = false, keyCrc = result.crc, keyFailure = null) }
             }
