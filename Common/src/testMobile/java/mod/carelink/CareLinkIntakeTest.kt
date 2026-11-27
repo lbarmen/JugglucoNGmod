@@ -30,7 +30,11 @@ import mod.carelink.CareLinkTestData.ok
 import mod.carelink.CareLinkTestData.status
 import tk.glucodata.drivers.api.ApiIobSnapshot
 import tk.glucodata.mod.carelink.AesGcmSessionCipher
+import tk.glucodata.mod.carelink.BasalOpen
 import tk.glucodata.mod.carelink.CareLinkAuth
+import tk.glucodata.mod.carelink.CareLinkBasalWriter
+import tk.glucodata.mod.carelink.CareLinkSeenStore
+import tk.glucodata.mod.carelink.SeenData
 import tk.glucodata.mod.carelink.CareLinkClock
 import tk.glucodata.mod.carelink.CareLinkErrorKind
 import tk.glucodata.mod.carelink.CareLinkIntake
@@ -80,6 +84,7 @@ class CareLinkIntakeTest {
     private val basal = Collections.synchronizedList(mutableListOf<PumpNow?>())
     private val iob = Collections.synchronizedList(mutableListOf<PumpNow?>())
     private var closed = 0
+    private val stops = Collections.synchronizedList(mutableListOf<PumpNow>())
 
     private val store get() = CareLinkStateStore(app)
     private val nm get() = app.getSystemService(NotificationManager::class.java)
@@ -140,6 +145,7 @@ class CareLinkIntakeTest {
         CareLinkIntake.writeBasal = { _, p, _ -> basal += p }
         CareLinkIntake.publishIob = { p -> iob += p }
         CareLinkIntake.closeBasal = { closed++ }
+        CareLinkIntake.endStop = { _, p, _ -> stops += p }
         CareLinkVault.cipher = AesGcmSessionCipher(keyProvider = { key })
         CareLinkVault.clear(app)
         PumpSourceSwitch.set(app, false, now)
@@ -566,6 +572,83 @@ class CareLinkIntakeTest {
         feed(cycle(now))
         assertEquals(listOf(now - 15 * 60_000L, now), basal.map { it!!.dataAtMs })
         assertEquals(now, store.read().lastDataAtMs)
+    }
+
+    @Test
+    fun aBluetoothCycleOfBrokenValuesOnlyIsNoFreshData() {
+        // critic of the joints 1 fixes, P-N2: negative active insulin, a battery past 100, an unknown delivery state
+        bluetooth(true, now - 60 * 60_000L)
+        seed(now - 10 * 60_000L)
+        val broken = PumpCycle(readAtMs = now, serialHash = "pump-a", therapyState = 0x0F, iobUnits = -1.0,
+            reservoirUnits = -5.0, batteryPercent = 255)
+        assertNull(PumpBtBridge.toPumpNow(broken))
+        runBlocking { CareLinkIntake.accept(app, IntakeSource.BLUETOOTH, emptyList(), PumpBtBridge.toPumpNow(broken), now) }
+        assertEquals("the data time does not move", now - 10 * 60_000L, store.read().lastDataAtMs)
+        assertEquals(0.9, store.read().pumpNow!!.iobUnits!!, 1e-9)
+        assertTrue(basal.isEmpty())
+        assertTrue(stops.isEmpty())
+    }
+
+    @Test
+    fun runningAgainWithoutTheBasalAnswerOnlyEndsAStop() {
+        // critic of the joints 1 fixes, P-N1: the pump runs again, the cycle broke off before the basal answer
+        bluetooth(true)
+        seed(now - 10 * 60_000L)
+        val running = PumpNow(now - 60_000L, iobUnits = 1.0, iobAtMs = now - 60_000L, suspended = false, basalKnown = false)
+        accept(pump = running)
+        assertTrue("not the basal writer", basal.isEmpty())
+        assertEquals(listOf(now - 60_000L), stops.map { it.dataAtMs })
+        // delivery state not known, stopped, with the basal answer, no snapshot: not this way
+        now += 60_000L
+        accept(pump = running.copy(dataAtMs = now - 30_000L, suspended = null))
+        now += 60_000L
+        accept(pump = running.copy(dataAtMs = now - 30_000L, suspended = true))
+        now += 60_000L
+        accept(pump = pump(now - 30_000L).copy(suspended = false))
+        now += 60_000L
+        accept(pump = null)
+        assertEquals(1, stops.size)
+        assertEquals(2, basal.size)
+    }
+
+    @Test
+    fun runningAgainWithoutTheBasalAnswerAndNoStopLeavesTheSegment() {
+        // the real writer: no stop note open - the open segment and the writer's memory stay as they are (no journal)
+        bluetooth(true)
+        seed(now - 10 * 60_000L)
+        val open = BasalOpen(CareLinkBasalWriter.basalKey(now - 20 * 60_000L), now - 20 * 60_000L, 0.7, now + 20 * 60_000L,
+            now - 10 * 60_000L)
+        CareLinkSeenStore.save(app, SeenData(basalOpen = open), now)
+        CareLinkIntake.resetForTest()
+        CareLinkIntake.writeJournal = { _, e, _ -> journal += e }
+        CareLinkIntake.publishIob = { p -> iob += p }
+        val r = accept(pump = PumpNow(now - 60_000L, iobUnits = 1.0, iobAtMs = now - 60_000L, suspended = false, basalKnown = false))
+        assertNull(r.error)
+        assertEquals(open, CareLinkSeenStore.load(app, now).basalOpen)
+        assertNull(CareLinkSeenStore.load(app, now).stopOpen)
+    }
+
+    @Test
+    fun anOlderBluetoothSnapshotLeavesTheOpenBasalSegmentAlone() {
+        // critic of the joints 1 fixes, P-N7 (c): the real basal writer; an older snapshot (with the basal answer, or
+        // running without it) must not touch the open segment
+        bluetooth(true)
+        seed(now - 60_000L)
+        val open = BasalOpen(CareLinkBasalWriter.basalKey(now - 20 * 60_000L), now - 20 * 60_000L, 0.7, now + 29 * 60_000L,
+            now - 60_000L)
+        CareLinkSeenStore.save(app, SeenData(basalOpen = open), now)
+        CareLinkIntake.resetForTest()
+        CareLinkIntake.writeJournal = { _, e, _ -> journal += e }
+        CareLinkIntake.publishIob = { p -> iob += p }
+        val r = accept(pump = pump(now - 5 * 60_000L, iobUnits = 3.0).copy(basalRate = 1.4))
+        assertNull(r.error)
+        assertEquals(1, journal.size)
+        assertEquals(open, CareLinkSeenStore.load(app, now).basalOpen)
+        val r2 = accept(pump = PumpNow(now - 4 * 60_000L, iobUnits = 3.0, iobAtMs = now - 4 * 60_000L, suspended = false,
+            basalKnown = false))
+        assertNull(r2.error)
+        assertEquals(open, CareLinkSeenStore.load(app, now).basalOpen)
+        assertEquals("the data time stays", now - 60_000L, store.read().lastDataAtMs)
     }
 
     @Test

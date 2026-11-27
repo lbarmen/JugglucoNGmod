@@ -115,7 +115,8 @@ data class IntakeResult(
  * - Bluetooth only (critic of the joints 1, C-1, N-3): no snapshot, or one older than the stored one - the events are
  *   written without it, the basal writer is not called and the data time does not move (a long break the basal writer
  *   closes itself by its gap rule on the next snapshot); a snapshot without the basal answer and not stopped - applied
- *   (active insulin, reservoir, data time), the basal writer not called (one failed request is not a basal gap);
+ *   (active insulin, reservoir, data time), the basal writer not called (one failed request is not a basal gap) - but
+ *   when it says the pump runs, an open stop note ends ([CareLinkBasalWriter.endStop]; critic of the fixes, P-N1);
  * - the source went off while the cycle ran (signed out of CareLink / the Bluetooth source turned off) - nothing at all
  *   (critic 4c, N2);
  * - the writers each on their own and without cancellation: basal, journal, IoB plate (critic of the joints, C1, C3);
@@ -145,6 +146,9 @@ object CareLinkIntake {
 
     @Volatile
     internal var closeBasal: suspend (Context) -> Unit = { c -> CareLinkBasalWriter.close(c) }
+
+    @Volatile
+    internal var endStop: suspend (Context, PumpNow, Long) -> Unit = { c, p, at -> CareLinkBasalWriter.endStop(c, p, at) }
 
     /**
      * One cycle of pump data: [events] (the last 24 h and what is to be caught up), [pump] - the snapshot (null - none
@@ -255,7 +259,12 @@ object CareLinkIntake {
         var error: CareLinkError? = null
         var journalFailed = false
         try {
-            if (basalCalled(source, pump)) writeBasal(app, pump, now)
+            if (basalCalled(source, pump)) {
+                writeBasal(app, pump, now)
+            } else if (source == IntakeSource.BLUETOOTH && pump != null && pump.suspended == false) {
+                // running again without the basal answer: only an open stop ends (critic of the joints 1 fixes, P-N1)
+                endStop(app, pump, now)
+            }
         } catch (t: Throwable) {
             CareLinkLog.w("$tag: basal not written (${t.javaClass.simpleName})")
             error = CareLinkError(CareLinkErrorKind.WRITE, 0, t.javaClass.simpleName)
@@ -290,5 +299,6 @@ object CareLinkIntake {
         writeBasal = { c, p, at -> CareLinkBasalWriter.apply(c, p, at) }
         publishIob = { p -> CareLinkIob.publish(p) }
         closeBasal = { c -> CareLinkBasalWriter.close(c) }
+        endStop = { c, p, at -> CareLinkBasalWriter.endStop(c, p, at) }
     }
 }

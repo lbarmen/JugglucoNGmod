@@ -38,6 +38,7 @@ import tk.glucodata.mod.pumpbt.PumpBtBridge
 import tk.glucodata.mod.pumpbt.PumpHistoryMemory
 import tk.glucodata.mod.pumpbt.PumpHistoryRules
 import tk.glucodata.mod.pumpbt.PumpWarning
+import tk.glucodata.mod.pumpbt.core.ActiveBasalRate
 import tk.glucodata.mod.pumpbt.core.BasalChangeEvent
 import tk.glucodata.mod.pumpbt.core.BolusEvent
 import tk.glucodata.mod.pumpbt.core.MealEvent
@@ -234,6 +235,58 @@ class PumpBtBridgeTest {
         assertEquals(100.0, PumpBtBridge.toPumpNow(empty.copy(reservoirUnits = 100.0))!!.reservoirUnits!!, 0.0)
         assertTrue(PumpBtBridge.toPumpNow(empty.copy(basalRead = true))!!.basalKnown)
         assertEquals(50, PumpBtBridge.toPumpNow(empty.copy(batteryPercent = 50))!!.batteryPercent)
+    }
+
+    @Test
+    fun brokenValuesOnlyAreNoSnapshot() {
+        // critic of the joints 1 fixes, P-N2: emptiness by the values that pass, not by the raw fields
+        val empty = PumpCycle(readAtMs = 5_000L, serialHash = HASH)
+        assertNull(PumpBtBridge.toPumpNow(empty.copy(iobUnits = -0.5)))
+        assertNull(PumpBtBridge.toPumpNow(empty.copy(reservoirUnits = -1.0)))
+        assertNull(PumpBtBridge.toPumpNow(empty.copy(batteryPercent = 101)))
+        assertNull(PumpBtBridge.toPumpNow(empty.copy(batteryPercent = -1)))
+        assertNull(PumpBtBridge.toPumpNow(empty.copy(therapyState = 0x0F)))
+        assertNull(PumpBtBridge.toPumpNow(
+            empty.copy(therapyState = 0x00, iobUnits = Double.NaN, reservoirUnits = Double.NaN, batteryPercent = 200),
+        ))
+        // one good value among broken ones is a snapshot; the broken ones stay out of it
+        val one = PumpBtBridge.toPumpNow(empty.copy(iobUnits = -0.5, batteryPercent = 150, reservoirUnits = 80.0))!!
+        assertNull(one.iobUnits)
+        assertNull(one.batteryPercent)
+        assertNull(one.suspended)
+        assertEquals(80.0, one.reservoirUnits!!, 0.0)
+        assertFalse(one.basalKnown)
+        // by design (C-1): the battery alone, or active insulin alone, is a snapshot (fresh data)
+        assertNotNull(PumpBtBridge.toPumpNow(empty.copy(batteryPercent = 0)))
+        assertNotNull(PumpBtBridge.toPumpNow(empty.copy(iobUnits = 0.0)))
+    }
+
+    @Test
+    fun aTemporaryBasalWithItsTypeButASpecialValueIsABasalGap() {
+        // critic of the joints 1 fixes, P-C1 and P-N7 (a): the real way - the "active basal" answer parsed, the cycle
+        // filled as the link fills it, then the snapshot. Made-up answers: profile 1, 0.8 U/h, a temporary basal running
+        // (flag 0x01) of type 0x33 or 0x3C with a special value (NaN 0x007FFFFF, NRes 0x00800000), 120 min, 45 left.
+        fun cycleOf(v: ActiveBasalRate) = PumpCycle(
+            readAtMs = 5_000L, serialHash = HASH, therapyState = 0x55, basalRate = v.unitsPerHour, basalRead = true,
+            tempBasalRate = v.tempBasalValue, tempBasalType = v.tempBasalType, tempBasalMinutesLeft = v.tempBasalRemainingMinutes,
+        )
+        for ((type, value) in listOf("33" to "ffff7f00", "3c" to "00008000", "3c" to "ffff7f00")) {
+            val v = ActiveBasalRate.parse(hex("6a0301" + "01" + "080000ff" + type + value + "7800" + "2d00"))
+            assertNull(v.tempBasalValue)
+            assertEquals(0.8, v.unitsPerHour!!, 1e-9)
+            val p = PumpBtBridge.toPumpNow(cycleOf(v))!!
+            assertFalse("type $type", p.basalKnown)
+            assertNull("type $type", p.tempBasal)
+            assertNull("type $type: a gap, not the profile rate", CareLinkBasalWriter.rateOf(p, 0.8))
+            assertEquals(false, p.suspended)
+        }
+        // no temporary basal in the answer: the profile rate, as before
+        val normal = PumpBtBridge.toPumpNow(cycleOf(ActiveBasalRate.parse(hex("6a0300" + "01" + "080000ff"))))!!
+        assertTrue(normal.basalKnown)
+        assertEquals(0.8, CareLinkBasalWriter.rateOf(normal, null)!!, 1e-9)
+        // a temporary basal with its value: its rate
+        val abs = PumpBtBridge.toPumpNow(cycleOf(ActiveBasalRate.parse(hex("6a0301" + "01" + "080000ff" + "33" + "0c0000ff" + "7800" + "2d00"))))!!
+        assertEquals(1.2, CareLinkBasalWriter.rateOf(abs, null)!!, 1e-9)
     }
 
     // --- what is fed --------------------------------------------------------------------------------------------------

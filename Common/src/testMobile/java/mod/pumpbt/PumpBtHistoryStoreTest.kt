@@ -17,6 +17,7 @@ import tk.glucodata.mod.pumpbt.PumpHistoryCounters
 import tk.glucodata.mod.pumpbt.PumpHistoryMemory
 import tk.glucodata.mod.pumpbt.PumpHistoryRules
 import tk.glucodata.mod.pumpbt.core.BolusEvent
+import tk.glucodata.mod.pumpbt.core.HistoryDating
 import tk.glucodata.mod.pumpbt.core.HistoryRead
 import tk.glucodata.mod.pumpbt.core.HistoryReadStatus
 import tk.glucodata.mod.pumpbt.core.HistoryReferenceLocal
@@ -434,6 +435,49 @@ class PumpBtHistoryStoreTest {
         assertEquals(listOf(104L, 106L, 107L), seqs(pruned(m)))
         val m2 = memory(103, recs)
         assertEquals(listOf(102L, 103L, 104L, 106L, 107L), seqs(pruned(m2)))
+    }
+
+    /** Reference time (0xF00E) of the reason "time set" (0x33) on 2026-10-[day] at [hour]:[minute]:00. */
+    private fun timeSet(seq: Long, offset: Int, hour: Int, minute: Int = 0, day: Int = 15): RawHistoryRecord =
+        B2Fixtures.raw(0xF00E, seq, offset, "33" + "ea070a%02x".format(day) + "%02x%02x00".format(hour, minute))
+
+    @Test
+    fun aRecordWaitingUndatedIsNotPruned() {
+        // critic of the joints 1 fixes, P-N7 (b): 101 is missing, bolus 102 (10:10 by the old clock) waits undated before
+        // a "time set" reference; the old records below the number go, the waiting one stays and keeps waiting
+        val recs = listOf(
+            B2Fixtures.ref(96, 3600, 8), B2Fixtures.sensor(97, 60), B2Fixtures.ref(98, 3600, 9), B2Fixtures.sensor(99, 60),
+            B2Fixtures.ref(100, 3600, 10), B2Fixtures.programmed(102, 600, 4, 30), B2Fixtures.programmedDetails(103, 600),
+            timeSet(104, 900, 11, 20),
+        )
+        val m = memory(100, recs)
+        assertEquals(listOf(102L), B2Fixtures.build(m).undated)
+        val p = pruned(m)
+        assertEquals(listOf(100L, 102L, 103L, 104L), seqs(p))
+        assertEquals(listOf(102L), B2Fixtures.build(p).undated)
+        // 101 comes: the bolus gets the same time whether the memory was pruned or not
+        val r101 = B2Fixtures.sensor(101, 300)
+        fun bolusAt(x: PumpHistoryMemory) =
+            B2Fixtures.build(x.copy(records = (x.records + r101).sortedBy { it.sequence }, contiguousTo = 104))
+                .events.filterIsInstance<BolusEvent>().single().at
+        assertEquals(B2Fixtures.at(10, 10), bolusAt(m))
+        assertEquals(B2Fixtures.at(10, 10), bolusAt(p))
+    }
+
+    @Test
+    fun pruneDatesAsBuildWithTheSameNumber() {
+        // critic of the joints 1 fixes, P-N7 (b): 200 lies before a "time set" reference (2026-10-18 12:00) and is dated
+        // back from it only because the number covers it (build: 11:59 of the 18th, young - it stays). Dated without the
+        // number, it would wait undated and count as old behind the old reference 202 (clock set back), and go.
+        val recs = listOf(
+            B2Fixtures.sensor(200, 60), timeSet(201, 120, 12, 0, day = 18), B2Fixtures.ref(202, 60, 10, day = 15),
+            B2Fixtures.sensor(203, 1),
+        )
+        val m = memory(203, recs)
+        val parsed = recs.map { it.parse() }
+        assertEquals(B2Fixtures.at(11, 59, day = 18), HistoryDating.times(parsed, null, contiguousTo = 203)[200L])
+        assertNull(HistoryDating.times(parsed, null)[200L])
+        assertEquals(listOf(200L, 201L, 202L, 203L), seqs(pruned(m)))
     }
 
     @Test

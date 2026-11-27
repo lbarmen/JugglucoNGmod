@@ -78,6 +78,19 @@ object CareLinkBasalWriter {
     }
 
     /**
+     * Bluetooth only (critic of the joints 1 fixes, P-N1): the pump runs again ([PumpNow.suspended] false) but the cycle
+     * brought no basal answer, so [apply] is not called (one failed request is not a basal gap). With a stop note open,
+     * the snapshot still goes the usual way: the note ends now, and the rate not being known closes the 0 U/h segment at
+     * its last data; the next segment starts with the next basal answer - no rate is guessed. No stop note open - nothing
+     * at all (the running segment stays as it is).
+     */
+    suspend fun endStop(context: Context, pumpNow: PumpNow, atMs: Long) {
+        if (pumpNow.suspended != false || pumpNow.basalKnown) return
+        val open = withContext(Dispatchers.IO) { CareLinkSeenStore.load(context.applicationContext, atMs).stopOpen }
+        if (open != null) apply(context, pumpNow, atMs)
+    }
+
+    /**
      * The data broke off for good (sign-out, "sign in again"; critic of the joints, C2 and critic 4d, N5): the running
      * segment ends at its last data, the stop note at the last snapshot that saw the pump stopped, and the last normal
      * rate is forgotten (hours later or for another account it says nothing). The record of rows stays: the same account

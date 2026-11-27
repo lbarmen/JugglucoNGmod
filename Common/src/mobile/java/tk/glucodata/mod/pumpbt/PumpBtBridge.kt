@@ -236,22 +236,29 @@ internal object PumpBtBridge {
 
     /**
      * The snapshot of [cycle]: data and active insulin at the read time; no reservoir percent; stopped or paused
-     * delivery - suspended; basal known - its answer came. Null - no pump hash, or not one snapshot value in the cycle
-     * (no therapy state, active insulin, reservoir, basal answer or battery: a cycle cut short says nothing of the pump
-     * and must neither break the basal nor count as fresh data; critic of the joints 1, C-1).
+     * delivery - suspended; basal known - its answer came. Null - no pump hash, or not one usable snapshot value in the
+     * cycle (no known therapy state, active insulin of 0 or more, reservoir of 0 or more, battery of 0..100 or basal
+     * answer: a cycle cut short, or of broken values only, says nothing of the pump and must neither break the basal nor
+     * count as fresh data; critic of the joints 1, C-1, and of its fixes, P-N2).
      * The temporary basal by its IDD type (critic of the joints 1, B-1): 0x33 - its rate, U/h; 0x3C - a percentage of
      * the normal rate, as the cloud's percentage one (the basal writer takes the last normal rate times it); another
-     * type or none with a value - not known: no temporary basal and the basal not known (a gap is better than a wrong
-     * rate).
+     * type or none with a value, or a type without a value (a special value: no value) - not known: no temporary basal
+     * and the basal not known (a gap is better than a wrong rate; critic of the fixes, P-C1).
      */
     fun toPumpNow(cycle: PumpCycle): PumpNow? {
         if (cycle.serialHash == null) return null
-        if (cycle.therapyState == null && cycle.iobUnits == null && cycle.reservoirUnits == null && !cycle.basalRead &&
-            cycle.batteryPercent == null
-        ) return null
         val iob = cycle.iobUnits?.takeIf { it >= 0.0 }?.let(CareLinkMarkers::round3)
+        val reservoir = cycle.reservoirUnits?.takeIf { it >= 0.0 }?.let(CareLinkMarkers::round3)
+        val battery = cycle.batteryPercent?.takeIf { it in 0..100 }
+        val suspended = when (cycle.therapyState) {
+            THERAPY_STOP, THERAPY_PAUSE -> true
+            THERAPY_RUN -> false
+            else -> null
+        }
+        if (suspended == null && iob == null && reservoir == null && battery == null && !cycle.basalRead) return null
         val left = cycle.tempBasalMinutesLeft?.takeIf { m -> m >= 0 }
-        var basalKnown = cycle.basalRead
+        // the temporary basal runs (its type came) but its value is a special one: not a normal basal (P-C1)
+        var basalKnown = cycle.basalRead && !(cycle.tempBasalType != null && cycle.tempBasalRate == null)
         val temp = cycle.tempBasalRate?.let { v ->
             when {
                 !v.isFinite() || v < 0.0 -> null
@@ -266,16 +273,12 @@ internal object PumpBtBridge {
             dataAtMs = cycle.readAtMs,
             iobUnits = iob,
             iobAtMs = if (iob != null) cycle.readAtMs else null,
-            reservoirUnits = cycle.reservoirUnits?.takeIf { it >= 0.0 }?.let(CareLinkMarkers::round3),
+            reservoirUnits = reservoir,
             reservoirPercent = null,
-            batteryPercent = cycle.batteryPercent?.takeIf { it in 0..100 },
+            batteryPercent = battery,
             basalRate = cycle.basalRate?.takeIf { it >= 0.0 }?.let(CareLinkMarkers::round3),
             tempBasal = temp,
-            suspended = when (cycle.therapyState) {
-                THERAPY_STOP, THERAPY_PAUSE -> true
-                THERAPY_RUN -> false
-                else -> null
-            },
+            suspended = suspended,
             basalKnown = basalKnown,
         )
     }
