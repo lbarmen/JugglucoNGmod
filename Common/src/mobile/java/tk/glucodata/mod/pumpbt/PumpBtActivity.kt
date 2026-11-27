@@ -13,6 +13,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
 import tk.glucodata.mod.carelink.CareLinkTheme
 import tk.glucodata.ui.JugglucoTheme
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 /**
  * JugglucoNGmod, pump over Bluetooth (trial): the hidden trial window "Pump over Bluetooth (trial)" - reads a Medtronic
@@ -51,6 +53,15 @@ class PumpBtActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // a turned screen during the permission request keeps what waits for its answer (critic B2b, N5)
+        if (savedInstanceState != null) {
+            enableAfterPermission = savedInstanceState.getBoolean(KEY_ENABLE_AFTER, false)
+            startAfterPermission = when (savedInstanceState.getInt(KEY_START_AFTER, START_NONE)) {
+                START_PAIR -> true
+                START_WAIT -> false
+                else -> null
+            }
+        }
         if (restricted()) {
             finish()
             return
@@ -83,11 +94,24 @@ class PumpBtActivity : ComponentActivity() {
                         onPermanent = ::setPermanent,
                         onWriteBackfill = { keys -> PumpBtSource.confirmBackfill(this, keys) },
                         onDeclineBackfill = { PumpBtSource.declineBackfill(this) },
-                        onVerbose = { on -> PumpBtSource.setVerbose(this, on) },
+                        onVerbose = ::setVerbose,
                     ),
                 )
             }
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(KEY_ENABLE_AFTER, enableAfterPermission)
+        outState.putInt(
+            KEY_START_AFTER,
+            when (startAfterPermission) {
+                true -> START_PAIR
+                false -> START_WAIT
+                null -> START_NONE
+            },
+        )
     }
 
     override fun onResume() {
@@ -150,6 +174,18 @@ class PumpBtActivity : ComponentActivity() {
         PumpBtSource.enable(this)
     }
 
+    /** The detailed journal switch: the setting is saved to its file off the main thread, in the order pressed (critic B2b, N6). */
+    private fun setVerbose(on: Boolean) {
+        val app = applicationContext
+        background.execute {
+            try {
+                PumpBtSource.setVerbose(app, on)
+            } catch (t: Throwable) {
+                PumpBtLog.w("detailed journal not switched (${t.javaClass.simpleName})")
+            }
+        }
+    }
+
     private fun pickFile() {
         try {
             pickKeyFile.launch(arrayOf("text/*", "*/*"))
@@ -181,6 +217,17 @@ class PumpBtActivity : ComponentActivity() {
     }
 
     companion object {
+        private const val KEY_ENABLE_AFTER = "mod_pumpbt_enable_after_permission"
+        private const val KEY_START_AFTER = "mod_pumpbt_start_after_permission"
+        private const val START_NONE = 0
+        private const val START_PAIR = 1
+        private const val START_WAIT = 2
+
+        /** One thread for the window's small file writes: kept in the order pressed, not tied to one window. */
+        private val background: ExecutorService by lazy {
+            Executors.newSingleThreadExecutor { r -> Thread(r, "ModPumpBtWindow").apply { isDaemon = true } }
+        }
+
         /** The intent of this window when the build declares it (the phone `mod` build), else null. */
         fun intentIfDeclared(context: Context): Intent? {
             val component = ComponentName(context, PumpBtActivity::class.java)

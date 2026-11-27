@@ -29,6 +29,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -102,11 +103,11 @@ internal fun PumpBtScreen(
             PhoneSection(state, actions)
             KeySection(state, actions)
             PermanentSection(state, source, controls, actions)
-            source.card?.let { BackfillSection(it, actions) }
+            PumpBtWindow.card(source)?.let { BackfillSection(it, actions) }
             PumpSection(state, source, controls, actions)
             if (PumpBtWindow.dataShown(source)) DataSection(source)
             ValuesSection(source.link.values)
-            JournalSection(journal, source.verbose, actions)
+            JournalSection(journal, source, actions)
         }
     }
 }
@@ -173,7 +174,7 @@ private fun PermanentSection(state: PumpBtUiState, source: PumpBtSourceState, co
         onCheckedChange = { want -> if (want) askOn = true else actions.onPermanent(false) },
         enabled = source.enabled || controls.canTurnOn,
     )
-    if (!source.enabled && !controls.canTurnOn) Hint(stringResource(R.string.mod_pumpbt_permanent_needs))
+    PumpBtWindow.turnOnHint(state, source)?.let { Hint(turnOnHintText(it)) }
     if (!source.sensorBluetooth) Warning(stringResource(R.string.mod_pumpbt_sensor_bluetooth_off))
     if (source.memoryLoadFailed) Warning(stringResource(R.string.mod_pumpbt_memory_load_failed))
     if (PumpBtWindow.bondAdvice(source)) BondLostCard(state, controls, actions)
@@ -195,7 +196,16 @@ private fun PermanentSection(state: PumpBtUiState, source: PumpBtSourceState, co
     }
 }
 
-/** "The phone forgot the pump" (BOND_LOST, journal 14): what to do and the pairing button. */
+@Composable
+private fun turnOnHintText(hint: PumpBtTurnOnHint): String = when (hint) {
+    PumpBtTurnOnHint.NO_BLUETOOTH -> stringResource(R.string.mod_pumpbt_permanent_needs_bluetooth)
+    PumpBtTurnOnHint.BLUETOOTH_OFF -> stringResource(R.string.mod_pumpbt_permanent_needs_bluetooth_on)
+    PumpBtTurnOnHint.NO_ADVERTISING -> stringResource(R.string.mod_pumpbt_permanent_needs_advertising)
+    PumpBtTurnOnHint.NO_KEY -> stringResource(R.string.mod_pumpbt_permanent_needs_key)
+    PumpBtTurnOnHint.PAIRING -> stringResource(R.string.mod_pumpbt_permanent_wait_pairing)
+}
+
+/** "The phone forgot the pump" (BOND_LOST, journal 14): what to do and the pairing button (not pressable during a pairing). */
 @Composable
 private fun BondLostCard(state: PumpBtUiState, controls: PumpBtControls, actions: PumpBtScreenActions) {
     Spacer(Modifier.padding(top = 8.dp))
@@ -209,31 +219,58 @@ private fun BondLostCard(state: PumpBtUiState, controls: PumpBtControls, actions
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(R.string.mod_pumpbt_bond_lost_title), style = MaterialTheme.typography.titleMedium)
             Text(stringResource(R.string.mod_pumpbt_bond_lost_text, state.advertisedName), style = MaterialTheme.typography.bodyMedium)
-            if (controls.pairOffered) {
-                Button(onClick = actions.onStartPairing, enabled = controls.canPair) {
-                    Text(stringResource(R.string.mod_pumpbt_pair_again))
-                }
+            Button(onClick = actions.onStartPairing, enabled = controls.canPair) {
+                Text(stringResource(R.string.mod_pumpbt_pair_again))
             }
         }
     }
 }
 
-/** The first catch-up card (decision 5): "Write" passes the keys of exactly the list shown. */
+/** The shown list of the card in the window's saved state (a turned screen keeps what the person was reading). */
+private val shownSaver = listSaver<List<BackfillItem>, Any>(
+    save = { PumpBtWindow.packItems(it) },
+    restore = { PumpBtWindow.unpackItems(it) },
+)
+
+/**
+ * The first catch-up card (decision 5): "Write" passes the keys of exactly the list shown. The shown list stays while
+ * the person reads it; a new list from the source is shown only after "Show the new list" (critic B2b, C3). An answer
+ * the source did not take is said, not left silent.
+ */
 @Composable
 private fun BackfillSection(card: BackfillCard, actions: PumpBtScreenActions) {
     SectionLabel(stringResource(R.string.mod_pumpbt_section_backfill))
-    val items = remember(card) { PumpBtWindow.cardItems(card) }
-    var answered by remember(card) { mutableStateOf(false) }
-    var askDecline by remember(card) { mutableStateOf(false) }
+    val current = remember(card) { PumpBtWindow.cardItems(card) }
+    var shown by rememberSaveable(stateSaver = shownSaver) { mutableStateOf(current) }
+    // the press waiting for the source: when (wall clock), and the keys "Write" passed (null - "Do not write old ones")
+    var pendingAt by rememberSaveable { mutableStateOf<Long?>(null) }
+    var pendingWrite by rememberSaveable { mutableStateOf<ArrayList<String>?>(null) }
+    var note by rememberSaveable { mutableStateOf<PumpBtAnswer?>(null) }
+    var askDecline by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(pendingAt, current) {
+        while (true) {
+            val at = pendingAt ?: break
+            val answer = PumpBtWindow.answer(at, pendingWrite, current, System.currentTimeMillis())
+            if (answer == PumpBtAnswer.WAITING) {
+                delay((at + PumpBtWindow.ANSWER_WAIT_MS - System.currentTimeMillis()).coerceAtLeast(100L))
+                continue
+            }
+            note = answer
+            pendingAt = null
+            pendingWrite = null
+        }
+    }
+    val answer = if (pendingAt != null) PumpBtAnswer.WAITING else PumpBtAnswer.NONE
+    val changed = PumpBtWindow.listChanged(shown, current)
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Body(stringResource(R.string.mod_pumpbt_backfill_found, card.bolusesBefore, card.mealsBefore))
         Body(stringResource(R.string.mod_pumpbt_backfill_in_journal, card.alreadyInJournal))
-        if (items.isEmpty()) {
+        if (shown.isEmpty()) {
             Body(stringResource(R.string.mod_pumpbt_backfill_nothing))
         } else {
-            Body(stringResource(R.string.mod_pumpbt_backfill_to_write, items.size))
+            Body(stringResource(R.string.mod_pumpbt_backfill_to_write, shown.size))
             Column(Modifier.padding(start = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                for (item in items) {
+                for (item in shown) {
                     val amounts = listOfNotNull(
                         item.units?.let { stringResource(R.string.mod_pumpbt_units, units(it)) },
                         item.grams?.let { stringResource(R.string.mod_pumpbt_grams, units(it)) },
@@ -250,16 +287,29 @@ private fun BackfillSection(card: BackfillCard, actions: PumpBtScreenActions) {
         if (card.mealsNotWritten > 0) Body(stringResource(R.string.mod_pumpbt_backfill_meals_not_written, card.mealsNotWritten))
         Hint(stringResource(R.string.mod_pumpbt_backfill_hint))
     }
+    if (note == PumpBtAnswer.REJECTED) Warning(stringResource(R.string.mod_pumpbt_backfill_rejected))
+    if (note == PumpBtAnswer.NOT_TAKEN) Warning(stringResource(R.string.mod_pumpbt_backfill_not_taken))
+    if (changed) {
+        Warning(stringResource(R.string.mod_pumpbt_backfill_changed))
+        Spacer(Modifier.padding(top = 4.dp))
+        OutlinedButton(onClick = {
+            shown = current
+            note = null
+        }) { Text(stringResource(R.string.mod_pumpbt_backfill_show_new)) }
+    }
     Spacer(Modifier.padding(top = 8.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(
             onClick = {
-                answered = true
-                actions.onWriteBackfill(PumpBtWindow.shownKeys(items))
+                val keys = PumpBtWindow.shownKeys(shown)
+                note = null
+                pendingWrite = ArrayList(keys)
+                pendingAt = System.currentTimeMillis()
+                actions.onWriteBackfill(keys)
             },
-            enabled = !answered,
+            enabled = PumpBtWindow.canWrite(shown, current, answer),
         ) { Text(stringResource(R.string.mod_pumpbt_backfill_write)) }
-        OutlinedButton(onClick = { askDecline = true }, enabled = !answered) {
+        OutlinedButton(onClick = { askDecline = true }, enabled = answer != PumpBtAnswer.WAITING) {
             Text(stringResource(R.string.mod_pumpbt_backfill_decline))
         }
     }
@@ -271,7 +321,9 @@ private fun BackfillSection(card: BackfillCard, actions: PumpBtScreenActions) {
             confirmButton = {
                 TextButton(onClick = {
                     askDecline = false
-                    answered = true
+                    note = null
+                    pendingWrite = null
+                    pendingAt = System.currentTimeMillis()
                     actions.onDeclineBackfill()
                 }) { Text(stringResource(R.string.mod_pumpbt_backfill_decline)) }
             },
@@ -298,11 +350,11 @@ private fun PumpSection(state: PumpBtUiState, source: PumpBtSourceState, control
         Spacer(Modifier.padding(top = 4.dp))
         Hint(stringResource(R.string.mod_pumpbt_lost_hint))
     }
-    if (link.running && link.pairMode && (link.stage == PumpBtStage.ADVERTISING_PAIR || link.stage == PumpBtStage.WAITING)) {
+    if (PumpBtWindow.pairWaitShown(link)) {
         Spacer(Modifier.padding(top = 4.dp))
-        PairWait()
+        PairWait(state.pairingStartedAtMs)
     }
-    if (PumpBtWindow.pairingAdvice(link)) {
+    if (PumpBtWindow.pairingAdvice(link, state.pairingStartedAtMs)) {
         Warning(stringResource(R.string.mod_pumpbt_pairing_failed, state.advertisedName))
     }
     if (link.returns.isNotEmpty()) {
@@ -359,11 +411,16 @@ private fun PumpSection(state: PumpBtUiState, source: PumpBtSourceState, control
     }
 }
 
-/** Decision 12: how long the phone has waited for the pump to pair ("usually up to a minute"); it does not stop by itself. */
+/**
+ * Decision 12: how long the phone has waited for the pump to pair ("usually up to a minute"); it does not stop by
+ * itself. Counted from [startedAtMs] (when the window started the pairing), else from when this window first showed
+ * the wait - kept over a turned screen (critic B2b, N4).
+ */
 @Composable
-private fun PairWait() {
-    val since = remember { System.currentTimeMillis() }
-    var now by remember { mutableLongStateOf(since) }
+private fun PairWait(startedAtMs: Long?) {
+    val firstShown = rememberSaveable { System.currentTimeMillis() }
+    val since = startedAtMs ?: firstShown
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
         while (true) {
             delay(1000)
@@ -513,13 +570,13 @@ private fun ValuesSection(v: PumpBtValues) {
 }
 
 @Composable
-private fun JournalSection(lines: List<String>, verbose: Boolean, actions: PumpBtScreenActions) {
+private fun JournalSection(lines: List<String>, source: PumpBtSourceState, actions: PumpBtScreenActions) {
     SectionLabel(stringResource(R.string.mod_pumpbt_section_journal))
-    // decision 13: the detailed journal, off by default, a warning when shared
+    // decision 13: the detailed journal, off by default; a warning when shared while the file holds detailed lines
     SettingsSwitchItem(
         title = stringResource(R.string.mod_pumpbt_verbose),
         subtitle = stringResource(R.string.mod_pumpbt_verbose_hint),
-        checked = verbose,
+        checked = source.verbose,
         onCheckedChange = actions.onVerbose,
     )
     Spacer(Modifier.padding(top = 8.dp))
@@ -536,7 +593,9 @@ private fun JournalSection(lines: List<String>, verbose: Boolean, actions: PumpB
     var askClear by rememberSaveable { mutableStateOf(false) }
     var askShare by rememberSaveable { mutableStateOf(false) }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(onClick = { if (verbose) askShare = true else actions.onShareJournal() }) { Text(stringResource(R.string.mod_pumpbt_share_journal)) }
+        Button(onClick = { if (PumpBtWindow.shareWarning(source)) askShare = true else actions.onShareJournal() }) {
+            Text(stringResource(R.string.mod_pumpbt_share_journal))
+        }
         OutlinedButton(onClick = { askClear = true }) { Text(stringResource(R.string.mod_pumpbt_clear_journal)) }
     }
     if (askShare) {

@@ -88,6 +88,8 @@ internal object PumpBtTrial {
             journal("start refused: ${blockers.joinToString { it.name.lowercase() }}")
             return
         }
+        // a pairing's wait time and its failures count from here (a running link keeps an older failure mark)
+        _state.update { it.copy(pairingStartedAtMs = if (pair) System.currentTimeMillis() else null) }
         PumpBtSource.startLink(c, pair)
     }
 
