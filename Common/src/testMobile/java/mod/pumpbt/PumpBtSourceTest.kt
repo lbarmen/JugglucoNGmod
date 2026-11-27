@@ -150,6 +150,9 @@ class PumpBtSourceTest {
     /** ref 100 at 11:00, a finished 2.5 U bolus programmed at 11:20 (101-104), read through. */
     private fun oldBolusCycle(readAt: Long) = cycle(listOf(ref(100, 3600, 11)) + bolus(101, 1200, id = 1, tenths = 25), readAtMs = readAt, oldest = 100)
 
+    /** The cycle with the active basal answer: only then the intake calls the basal writer for Bluetooth (joints fix 4f1d4f8f6). */
+    private fun PumpCycle.withBasal() = copy(basalRead = true, basalRate = 0.8)
+
     // --- one cycle ----------------------------------------------------------------------------------------------------
 
     @Test
@@ -212,12 +215,12 @@ class PumpBtSourceTest {
     fun onlyWrittenLetsTheRecordsGo() {
         enable(ms(11, 0))
         journalFails = true
-        accept(oldBolusCycle(ms(12, 5)))
+        accept(oldBolusCycle(ms(12, 5)).withBasal())
         val key = "INSULIN|2026-10-15T11:20:00|0"
         assertTrue(onDisk().acceptedAt.isEmpty())
         assertEquals(104L, onDisk().contiguousTo) // the records are kept, the number moved
         journalFails = false
-        accept(cycle(emptyList(), readAtMs = ms(12, 10), from = 105, to = 104, newest = 104, contiguousTo = null))
+        accept(cycle(emptyList(), readAtMs = ms(12, 10), from = 105, to = 104, newest = 104, contiguousTo = null).withBasal())
         assertEquals(listOf(key), bolusKeys())
         assertEquals(ms(12, 10), onDisk().acceptedAt[key])
         // the snapshot goes every cycle, also with the failed journal
@@ -235,9 +238,9 @@ class PumpBtSourceTest {
             delay(100)
             inside.decrementAndGet()
         }
-        val first = cycle(listOf(ref(100, 3600, 11), sensor(101, 60)), readAtMs = ms(12, 0), oldest = 100)
+        val first = cycle(listOf(ref(100, 3600, 11), sensor(101, 60)), readAtMs = ms(12, 0), oldest = 100).withBasal()
         // asked from 100 too: whichever comes first, the number ends at 103 with every record
-        val second = cycle(listOf(sensor(102, 120), sensor(103, 180)), readAtMs = ms(12, 1), from = 100, newest = 103)
+        val second = cycle(listOf(sensor(102, 120), sensor(103, 180)), readAtMs = ms(12, 1), from = 100, newest = 103).withBasal()
         runBlocking {
             listOf(first, second).map { c -> async(Dispatchers.Default) { PumpBtSource.acceptCycle(app, c) } }.awaitAll()
         }
@@ -397,7 +400,7 @@ class PumpBtSourceTest {
     fun anEmptyMemoryDoesNotTakeAReadAskedFromAnOlderNumber() {
         // critic of the joints 1, N-10: the link was given an old number (here 500), the memory is empty now
         enable(ms(11, 0))
-        accept(cycle(listOf(sensor(500, 60), sensor(501, 61)), readAtMs = ms(12, 5), from = 500, oldest = 10, newest = 501))
+        accept(cycle(listOf(sensor(500, 60), sensor(501, 61)), readAtMs = ms(12, 5), from = 500, oldest = 10, newest = 501).withBasal())
         assertNull(onDisk().contiguousTo)
         assertTrue(onDisk().records.isEmpty())
         assertEquals(1, snapshots.size) // the snapshot still goes
