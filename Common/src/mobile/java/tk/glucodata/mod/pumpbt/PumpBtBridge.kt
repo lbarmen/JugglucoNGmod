@@ -116,6 +116,21 @@ internal object PumpBtBridge {
         }
     }
 
+    /**
+     * Times of the journal rows of any type whose sourceRecordId starts with `carelink:` (bolus, carbs, basal, stop
+     * note) between two moments - for [boundary]; tests put their own.
+     */
+    @Volatile
+    internal var loadCloudRowTimes: suspend (Context, Long, Long) -> List<Long> = { c, from, to -> cloudRowTimes(c, from, to) }
+
+    private suspend fun cloudRowTimes(c: Context, from: Long, to: Long): List<Long> = withContext(Dispatchers.IO) {
+        cloudTimes(dao(c).getEntriesBetween(from, to))
+    }
+
+    /** Times of the rows with a `carelink:` key, whatever their type. */
+    internal fun cloudTimes(rows: List<JournalEntryEntity>): List<Long> =
+        rows.filter { it.sourceRecordId?.startsWith(CARELINK) == true }.map { it.timestamp }
+
     private fun dao(c: Context) = HistoryDatabase.getInstance(c.applicationContext).journalDao()
 
     private fun row(e: JournalEntryEntity): JournalRow? {
@@ -130,6 +145,7 @@ internal object PumpBtBridge {
     /** Back to the Room loaders (tests). */
     internal fun resetForTest() {
         loadRows = { c, from, to -> withContext(Dispatchers.IO) { dao(c).getEntriesBetween(from, to).mapNotNull(::row) } }
+        loadCloudRowTimes = { c, from, to -> cloudRowTimes(c, from, to) }
         loadByKeys = { c, keys ->
             withContext(Dispatchers.IO) {
                 val dao = dao(c)
@@ -235,16 +251,17 @@ internal object PumpBtBridge {
     const val THERAPY_RUN = 0x55
 
     /**
-     * The boundary of the old (decision 5): the latest journal row with a `carelink:` key within 10 days before
+     * The boundary of the old (decision 5: up to where the cloud delivered data): the latest journal row of any type
+     * with a `carelink:` key (bolus, carbs, basal, stop note) within 10 days before
      * [enabledAtMs], or the cloud's last data time (`lastDataAtMs`), whichever is later, minus 10 min; neither -
      * [enabledAtMs] minus 24 h. Never later than [enabledAtMs]. A failed read counts as no rows.
      */
     suspend fun boundary(context: Context, enabledAtMs: Long): Long {
         val app = context.applicationContext
         val lastRow = try {
-            loadRows(app, enabledAtMs - BOUNDARY_LOOKBACK_MS, enabledAtMs)
-                .filter { it.sourceRecordId?.startsWith(CARELINK) == true }
-                .maxOfOrNull { it.atMs }
+            loadCloudRowTimes(app, enabledAtMs - BOUNDARY_LOOKBACK_MS, enabledAtMs)
+                .filter { it <= enabledAtMs }
+                .maxOrNull()
         } catch (t: Throwable) {
             PumpBtLog.w("boundary: journal not read (${t.javaClass.simpleName})")
             null

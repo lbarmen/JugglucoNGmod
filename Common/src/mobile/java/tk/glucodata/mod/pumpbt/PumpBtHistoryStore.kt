@@ -58,6 +58,11 @@ internal data class PumpHistoryMemory(
     val contiguousTo: Long? = null,
     /** Cycles in a row that brought records past contiguousTo + 1, but not that record. */
     val stuckCount: Int = 0,
+    /**
+     * Cycles in a row with the same pump hash whose newest record on the pump was below contiguousTo (a late answer
+     * of the pump can give a false low newest number): the third one makes it another pump.
+     */
+    val newestBackCount: Int = 0,
     /** When the source was turned on (decision 5); new only on a new enable and on an empty memory. */
     val enabledAtMs: Long? = null,
     /** The boundary of the old (decision 5): a new row only for an old event later than it. */
@@ -126,6 +131,7 @@ internal class PumpBtHistoryStore(private val file: File) {
             m.reference?.let { put("ref", JSONObject().put("seq", it.sequence).put("time", it.time.toString())) }
             putOpt("contiguousTo", m.contiguousTo)
             put("stuck", m.stuckCount)
+            put("newestBack", m.newestBackCount)
             putOpt("enabledAt", m.enabledAtMs)
             putOpt("boundary", m.boundaryMs)
             put("backfill", m.backfill.name)
@@ -167,6 +173,7 @@ internal class PumpBtHistoryStore(private val file: File) {
                 reference = ref,
                 contiguousTo = longOrNull(o, "contiguousTo"),
                 stuckCount = o.getInt("stuck"),
+                newestBackCount = o.optInt("newestBack", 0),
                 enabledAtMs = longOrNull(o, "enabledAt"),
                 boundaryMs = longOrNull(o, "boundary"),
                 backfill = BackfillState.valueOf(o.getString("backfill")),
@@ -220,6 +227,9 @@ internal object PumpHistoryRules {
     /** Failed cycles in a row on one hole before it is marked lost. */
     const val STUCK_CYCLES = 3
 
+    /** Cycles in a row with the newest record below the number (same hash) before it counts as another pump. */
+    const val NEWEST_BACK_CYCLES = 3
+
     /** Fallback boundary when an empty memory gets its enable moment here (decision 5: enable minus 24 h). */
     const val FALLBACK_BOUNDARY_MS = 24 * 3_600_000L
 
@@ -229,9 +239,13 @@ internal object PumpHistoryRules {
     /**
      * The records of [cycle] into the memory:
      * - no pump hash - nothing changes ([CycleApplied.ignored]);
-     * - another hash (both known) or the pump's newest record below the number - another pump: the memory starts
-     *   again with the enable moment and the boundary at [nowMs] (this cycle's records are dropped: they were asked
-     *   from the old number); the first hash of an empty memory is simply taken;
+     * - another hash (both known) - another pump: the memory starts again with the enable moment and the boundary at
+     *   [nowMs] (this cycle's records are dropped: they were asked from the old number); the first hash of an empty
+     *   memory is simply taken;
+     * - the same hash, but the pump's newest record below the number: a late answer of the pump can give a false low
+     *   newest number, so the history of this cycle is ignored (number and records unchanged) and
+     *   [PumpHistoryMemory.newestBackCount] goes up; the [NEWEST_BACK_CYCLES]-th such cycle in a row makes it another
+     *   pump; any other cycle with a hash sets the count back to 0;
      * - the pump's oldest record past the number + 1 - the number jumps to just before it, the missing records are a
      *   gap (counted);
      * - records above the number are added (a record at or below it - pruned or lost - is never taken again; a repeat
@@ -247,11 +261,18 @@ internal object PumpHistoryRules {
         val h = cycle.history
         val otherHash = m.pumpHash != null && m.pumpHash != hash
         val numberBack = h.newestOnPump != null && m.contiguousTo != null && h.newestOnPump < m.contiguousTo
-        if (otherHash || numberBack) {
+        val backCount = if (numberBack && !otherHash) m.newestBackCount + 1 else 0
+        if (otherHash || backCount >= NEWEST_BACK_CYCLES) {
             val fresh = PumpHistoryMemory(pumpHash = hash, enabledAtMs = nowMs, boundaryMs = nowMs, seenUnknownTypes = m.seenUnknownTypes)
             return CycleApplied(fresh, ignored = false, newPump = true, gapRecords = 0, skippedStuck = null, firstReadComplete = false)
         }
+        if (backCount > 0) {
+            // suspected: this cycle's history is not believed, nothing of it is taken
+            val held = m.copy(pumpHash = m.pumpHash ?: hash, newestBackCount = backCount)
+            return CycleApplied(held, ignored = false, newPump = false, gapRecords = 0, skippedStuck = null, firstReadComplete = false)
+        }
         var mem = if (m.pumpHash == null) m.copy(pumpHash = hash) else m
+        if (mem.newestBackCount != 0) mem = mem.copy(newestBackCount = 0)
         if (mem.enabledAtMs == null) {
             mem = mem.copy(enabledAtMs = nowMs, boundaryMs = mem.boundaryMs ?: (nowMs - FALLBACK_BOUNDARY_MS))
         }

@@ -23,6 +23,7 @@ import mod.pumpbt.B2Fixtures.ms
 import mod.pumpbt.B2Fixtures.programmed
 import mod.pumpbt.B2Fixtures.programmedDetails
 import mod.pumpbt.B2Fixtures.ref
+import tk.glucodata.data.journal.JournalEntryEntity
 import tk.glucodata.mod.carelink.CareLinkState
 import tk.glucodata.mod.carelink.CareLinkStateStore
 import tk.glucodata.mod.carelink.ClEvent
@@ -485,28 +486,41 @@ class PumpBtBridgeJournalTest {
     @After
     fun tearDown() = PumpBtBridge.resetForTest()
 
-    private fun rows(vararg r: JournalRow) {
-        PumpBtBridge.loadRows = { _, from, to -> r.filter { it.atMs in from..to } }
+    private fun entity(id: Long, atMs: Long, type: String, key: String?) = JournalEntryEntity(
+        id = id, timestamp = atMs, sensorSerial = null, entryType = type, title = "t", note = null, amount = 1f,
+        glucoseValueMgDl = null, durationMinutes = null, intensity = null, insulinPresetId = null, source = "api",
+        sourceRecordId = key, createdAt = atMs, updatedAt = atMs,
+    )
+
+    /** The journal holds [r]: the boundary reads the times of its cloud rows in the asked span. */
+    private fun rows(vararg r: JournalEntryEntity) {
+        PumpBtBridge.loadCloudRowTimes = { _, from, to -> PumpBtBridge.cloudTimes(r.filter { it.timestamp in from..to }) }
     }
 
     @Test
     fun theBoundaryIsTheLatestCloudRowOrDataTimeMinusTenMinutes() = runBlocking {
-        rows(
-            JournalRow(1, ClKind.BOLUS, enabled - 2 * 3_600_000L, 2.0, "carelink:INSULIN:2026-10-15T10:00:00:0:insulin"),
-            JournalRow(2, ClKind.BOLUS, enabled - 3_600_000L, 1.0, null), // the person's
-            JournalRow(3, ClKind.MEAL, enabled - 11 * 24 * 3_600_000L, 20.0, "carelink:MEAL:2026-10-04T12:00:00:0:carbs"), // older than 10 days
-        )
+        val bolusRow = entity(1, enabled - 3 * 3_600_000L, "insulin", "carelink:INSULIN:2026-10-15T09:00:00:0:insulin")
+        val person = entity(2, enabled - 3_600_000L, "insulin", null)
+        val tooOld = entity(3, enabled - 11 * 24 * 3_600_000L, "carbs", "carelink:MEAL:2026-10-04T12:00:00:0:carbs")
+        val basal = entity(4, enabled - 2 * 3_600_000L, "temp_basal", "carelink:basal:1:0:basal")
+        val stop = entity(5, enabled - 90 * 60_000L, "note", "carelink:stop:2:0:note")
+        rows(bolusRow, person, tooOld)
+        assertEquals(enabled - 3 * 3_600_000L - 600_000L, PumpBtBridge.boundary(app, enabled))
+        // basal and stop rows of the cloud count too: the cloud delivered data up to them
+        rows(bolusRow, person, tooOld, basal)
         assertEquals(enabled - 2 * 3_600_000L - 600_000L, PumpBtBridge.boundary(app, enabled))
+        rows(bolusRow, person, tooOld, basal, stop)
+        assertEquals(enabled - 100 * 60_000L, PumpBtBridge.boundary(app, enabled))
         CareLinkStateStore(app).write(CareLinkState(lastDataAtMs = enabled - 30 * 60_000L))
         assertEquals(enabled - 40 * 60_000L, PumpBtBridge.boundary(app, enabled))
     }
 
     @Test
     fun noCloudTraceGivesTheEnableMinus24Hours() = runBlocking {
-        rows(JournalRow(2, ClKind.BOLUS, enabled - 3_600_000L, 1.0, "manual"))
+        rows(entity(2, enabled - 3_600_000L, "insulin", "manual"))
         assertEquals(enabled - 24 * 3_600_000L, PumpBtBridge.boundary(app, enabled))
         // a failing journal read counts as no rows
-        PumpBtBridge.loadRows = { _, _, _ -> throw IllegalStateException("db") }
+        PumpBtBridge.loadCloudRowTimes = { _, _, _ -> throw IllegalStateException("db") }
         assertEquals(enabled - 24 * 3_600_000L, PumpBtBridge.boundary(app, enabled))
         CareLinkStateStore(app).write(CareLinkState(lastDataAtMs = enabled - 5 * 60_000L))
         assertEquals(enabled - 15 * 60_000L, PumpBtBridge.boundary(app, enabled))

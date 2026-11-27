@@ -231,13 +231,48 @@ class PumpBtHistoryStoreTest {
         assertEquals(PumpHistoryMemory(pumpHash = "pump-b", enabledAtMs = now, boundaryMs = now, seenUnknownTypes = setOf(0x1234)), other.memory)
         assertNull(PumpHistoryRules.nextFrom(other.memory))
 
-        // the same hash, but the pump's newest record is below the number
-        val back = PumpHistoryRules.applyCycle(m, B2Fixtures.cycle(emptyList(), from = 101, to = 20, contiguousTo = null, newest = 20), now)
-        assertTrue(back.newPump)
-        assertTrue(back.memory.records.isEmpty())
-        assertNull(back.memory.contiguousTo)
-        assertEquals(now, back.memory.enabledAtMs)
-        assertEquals(now, back.memory.boundaryMs)
+    }
+
+    /** The same hash, the pump's newest record (20) below the number (100) - maybe a late, false answer. */
+    private fun backCycle() = B2Fixtures.cycle(sensors(18L..20L), from = 18, to = 20, contiguousTo = 20, newest = 20)
+
+    @Test
+    fun aNewestNumberBelowTheMemoryIsBelievedOnlyOnTheThirdCycleInARow() {
+        val m = memory(100, sensors(99L..100L))
+        val first = PumpHistoryRules.applyCycle(m, backCycle(), now)
+        assertFalse(first.newPump)
+        assertFalse(first.firstReadComplete)
+        assertEquals(m.copy(newestBackCount = 1), first.memory) // number and records unchanged, the cycle's history ignored
+        val second = PumpHistoryRules.applyCycle(first.memory, backCycle(), now)
+        assertFalse(second.newPump)
+        assertEquals(2, second.memory.newestBackCount)
+        assertEquals(100L, second.memory.contiguousTo)
+        val third = PumpHistoryRules.applyCycle(second.memory, backCycle(), now)
+        assertTrue(third.newPump)
+        assertTrue(third.memory.records.isEmpty())
+        assertNull(third.memory.contiguousTo)
+        assertEquals(0, third.memory.newestBackCount)
+        assertEquals(now, third.memory.enabledAtMs)
+        assertEquals(now, third.memory.boundaryMs)
+    }
+
+    @Test
+    fun aNormalCycleClearsTheSuspicion() {
+        val m = memory(100, sensors(99L..100L))
+        val two = PumpHistoryRules.applyCycle(PumpHistoryRules.applyCycle(m, backCycle(), now).memory, backCycle(), now).memory
+        assertEquals(2, two.newestBackCount)
+        // a normal read: taken as usual, the count back to 0
+        val normal = PumpHistoryRules.applyCycle(two, B2Fixtures.cycle(sensors(101L..102L)), now)
+        assertEquals(0, normal.memory.newestBackCount)
+        assertEquals(102L, normal.memory.contiguousTo)
+        // so the next low answer is again only the first one
+        val again = PumpHistoryRules.applyCycle(normal.memory, backCycle(), now)
+        assertFalse(again.newPump)
+        assertEquals(1, again.memory.newestBackCount)
+        // a cycle without a hash changes nothing, the count included
+        assertEquals(again.memory, PumpHistoryRules.applyCycle(again.memory, backCycle().copy(serialHash = null), now).memory)
+        // another hash is another pump at once
+        assertTrue(PumpHistoryRules.applyCycle(m, B2Fixtures.cycle(sensors(101L..102L), hash = "pump-b"), now).newPump)
     }
 
     // --- enable, accepted --------------------------------------------------------------------------------------------
@@ -399,7 +434,7 @@ class PumpBtHistoryStoreTest {
         val store = PumpBtHistoryStore(f)
         val m = PumpHistoryMemory(
             pumpHash = "abc", records = dayRecords(), reference = HistoryReferenceLocal(108, B2Fixtures.at(12, 0)),
-            contiguousTo = 109, stuckCount = 2, enabledAtMs = 11L, boundaryMs = 7L, backfill = BackfillState.WAITING,
+            contiguousTo = 109, stuckCount = 2, newestBackCount = 1, enabledAtMs = 11L, boundaryMs = 7L, backfill = BackfillState.WAITING,
             backfillShown = listOf("INSULIN|2026-10-15T10:01:00|0"), backfillWritten = listOf("carelink:MEAL:2026-10-15T10:00:58:0:carbs"),
             aliases = mapOf("INSULIN|2026-10-15T10:01:00|0" to "INSULIN|2026-10-15T10:01:30|0"),
             acceptedAt = mapOf("MEAL|2026-10-15T10:00:58|0" to 99L),
