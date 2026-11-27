@@ -30,6 +30,7 @@ import tk.glucodata.mod.carelink.PumpSourceSwitch
 import tk.glucodata.mod.pumpbt.ModPumpStarter
 import tk.glucodata.mod.pumpbt.PumpBtAlert
 import tk.glucodata.mod.pumpbt.PumpBtAlertKind
+import tk.glucodata.mod.pumpbt.PumpBtBridge
 import tk.glucodata.mod.pumpbt.PumpBtJournal
 import tk.glucodata.mod.pumpbt.PumpBtKey
 import tk.glucodata.mod.pumpbt.PumpBtNotifier
@@ -283,6 +284,12 @@ class PumpBtWatchdogTest {
         pumpDir.deleteRecursively()
         PumpBtSource.resetForTest()
         PumpBtSource.sensorBluetooth = { true } // the native library is not there
+        // no journal database: the source's real start with an empty memory asks it for the boundary, and Room's
+        // instance would outlive this test (a later test of the journal then met a closed connection)
+        PumpBtBridge.resetForTest()
+        PumpBtBridge.loadRows = { _, _, _ -> emptyList() }
+        PumpBtBridge.loadByKeys = { _, _ -> emptyList() }
+        PumpBtBridge.loadCloudRowTimes = { _, _, _ -> emptyList() }
         PumpBtWatchdog.resetForTest()
         PumpBtWatchdog.elapsed = { elapsed }
         PumpBtWatchdog.actions = fake
@@ -303,6 +310,7 @@ class PumpBtWatchdogTest {
         CareLinkClock.now = { System.currentTimeMillis() }
         ModPumpStarter.steps = RealStarterSteps
         PumpBtSource.resetForTest()
+        PumpBtBridge.resetForTest()
         idleMain()
         ShadowAlarmManager.setCanScheduleExactAlarms(true)
         shadowOf(nm).setNotificationsEnabled(true)
