@@ -40,6 +40,58 @@ class ModAodBlockTest {
         assertEquals("+0,2 · 17:01", ModAodBlock.subLine("+0,2", "17:01"))
         assertEquals("17:01", ModAodBlock.subLine("", "17:01"))
         assertNull(ModAodBlock.subLine("", ""))
+        assertEquals("+0,9 · 17:01 · АИ 2,4", ModAodBlock.subLine("+0,9", "17:01", "АИ 2,4"))
+        assertEquals("+0,9 · 17:01", ModAodBlock.subLine("+0,9", "17:01", null))
+    }
+
+    private val moscow = ZoneId.of("Europe/Moscow")
+    private val reading = ZonedDateTime.of(2026, 11, 27, 16, 40, 0, 0, moscow).toInstant().toEpochMilli()
+    private val ru = Locale.forLanguageTag("ru-RU")
+
+    private fun iob(units: Float?, ageMs: Long, locale: Locale = ru, label: String = "АИ", at: Long? = reading) =
+        ModAodBlock.iobPart(units, at, reading + ageMs, moscow, "HH:mm", locale, label)
+
+    @Test
+    fun thePumpsActiveInsulinZeroOneDecimalAndTheReadingTimeOnceOlderThanTenMinutes() {
+        assertEquals("АИ 0", iob(0f, 60_000L))
+        assertEquals("АИ 0", iob(0.04f, 60_000L))
+        assertEquals("АИ 0,1", iob(0.06f, 60_000L))
+        assertEquals("АИ 2,4", iob(2.4f, 60_000L))
+        assertEquals("АИ 2,0", iob(2f, 60_000L))
+        // the watch face's tenths: rounded half up
+        assertEquals("АИ 2,4", iob(2.35f, 60_000L))
+        assertEquals("АИ 1,1", iob(1.05f, 60_000L))
+        assertEquals("АИ 0,1", iob(0.05f, 60_000L))
+        assertEquals("АИ 12,5", iob(12.5f, 60_000L))
+        // exactly ten minutes is still new; a time ahead of the clock is new
+        assertEquals("АИ 2,4", iob(2.4f, 10 * 60_000L))
+        assertEquals("АИ 2,4", iob(2.4f, -60_000L))
+        assertEquals("АИ 2,4", iob(2.4f, -5 * 60_000L))
+        assertEquals("АИ 2,4 (16:40)", iob(2.4f, 10 * 60_000L + 1L))
+        assertEquals("АИ 2,4 (16:40)", iob(2.4f, 30 * 60_000L))
+        assertEquals(
+            "IOB 2.4 (4:40 PM)",
+            ModAodBlock.iobPart(2.4f, reading, reading + 20 * 60_000L, moscow, "h:mm a", Locale.US, "IOB"),
+        )
+    }
+
+    @Test
+    fun noActiveInsulinPastTheSlotsThirtyMinutesOrWithoutANumber() {
+        assertNull(iob(2.4f, 30 * 60_000L + 1L))
+        assertNull(iob(null, 60_000L))
+        assertNull(iob(2.4f, 60_000L, at = null))
+        assertNull(iob(2.4f, 60_000L, at = 0L))
+        assertNull(iob(Float.NaN, 60_000L))
+        assertNull(iob(-0.1f, 60_000L))
+        // a pump time more than 5 minutes ahead of the phone's clock is not believed
+        assertNull(iob(2.4f, -5 * 60_000L - 1L))
+    }
+
+    @Test
+    fun theActiveInsulinsDecimalSignFollowsThePhonesLocale() {
+        assertEquals("АИ 2,4", iob(2.4f, 0L, ru))
+        assertEquals("IOB 2.4", iob(2.4f, 0L, Locale.US, "IOB"))
+        assertEquals("IOB 2,4", iob(2.4f, 0L, Locale.GERMANY, "IOB"))
     }
 
     @Test
@@ -64,7 +116,7 @@ class ModAodBlockTest {
         deltaInterval = 5, viewMode = 0, hasCalibration = false, sensorId = "S", valueText = "6,0", rate = Float.NaN,
         stale = null, shownTime = shownTime, historySize = 36, historyLastTime = shownTime, historyLastValue = 6f,
         deltaLastTime = shownTime, dataRevision = 7L, minute = minute, hour24 = true, locale = Locale.US,
-        zone = ZoneId.of("UTC"),
+        zone = ZoneId.of("UTC"), iob = "IOB 2.4",
     )
 
     @Test
@@ -81,7 +133,8 @@ class ModAodBlockTest {
             base.copy(historyLastTime = base.historyLastTime + 60_000L), base.copy(historyLastValue = 6.1f),
             base.copy(deltaLastTime = base.deltaLastTime + 60_000L), base.copy(dataRevision = 8L),
             base.copy(minute = base.minute + 1), base.copy(hour24 = false), base.copy(locale = Locale.GERMANY),
-            base.copy(zone = ZoneId.of("Europe/Moscow")),
+            base.copy(zone = ZoneId.of("Europe/Moscow")), base.copy(iob = "IOB 2.5"),
+            base.copy(iob = "IOB 2.4 (16:40)"), base.copy(iob = null),
         )
         for (next in changed) assertFalse(next.toString(), ModAodBlock.sameDrawing(base, next, true))
     }

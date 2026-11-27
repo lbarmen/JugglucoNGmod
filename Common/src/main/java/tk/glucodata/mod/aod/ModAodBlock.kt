@@ -6,10 +6,12 @@ import android.graphics.drawable.BitmapDrawable
 import android.view.View
 import android.widget.ImageView
 import java.lang.ref.WeakReference
+import java.text.DecimalFormatSymbols
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.math.roundToInt
 import tk.glucodata.CurrentDisplaySource
 import tk.glucodata.DisplayDeltaSource
 import tk.glucodata.GlucoseDelta
@@ -24,13 +26,16 @@ import tk.glucodata.NotificationPredictionSeries
 import tk.glucodata.Notify
 import tk.glucodata.R
 import tk.glucodata.UiRefreshBus
+import tk.glucodata.drivers.api.ApiGlucoseSourceRegistry
+import tk.glucodata.drivers.api.ApiIobSnapshot
+import tk.glucodata.mod.watch.ModWatchMessages
 
 /**
  * JugglucoNGmod, phone always-on display (part 1, the owner's variant B, 26.11): our whole block in upstream's overlay.
  * Upstream's `AODOverlayService.updateOverlayContent` hands over what it has just resolved (one hook, `aod-block`):
  * the readings, the number as their app shows it, the arrow's rate, the "no new value" text. We hide their text row
- * (number, arrow, delta, status) and put our block - number, arrow, change and the reading's time, chart - into their
- * chart view. Their service keeps everything else: when to show, the burn-in steps, the light sensor, the refresh,
+ * (number, arrow, delta, status) and put our block - number, arrow, change, the reading's time and the pump's active
+ * insulin, chart - into their chart view. Their service keeps everything else: when to show, the burn-in steps, the light sensor, the refresh,
  * the position.
  *
  * Their settings that still act: chart on/off and size, text size, arrow on/off, the delta interval, the "Bottom"
@@ -97,12 +102,19 @@ object ModAodBlock {
             val locale = Locale.getDefault()
             val zone = ZoneId.systemDefault()
             val deltaInterval = prefs.getInt(DisplayDeltaSource.INTERVAL, GlucoseDelta.DEFAULT_INTERVAL_MINUTES)
+            val pattern = android.text.format.DateFormat.getBestDateTimePattern(locale, if (hour24) "Hm" else "hm")
+            val iob = if (fresh) {
+                pumpIob(context, nowMs)?.let {
+                    val label = context.getString(R.string.mod_aod_iob)
+                    iobPart(it.iobUnits, it.timestampMillis, nowMs, zone, pattern, locale, label)
+                }
+            } else null
             val key = DrawKey(
                 light, dm.widthPixels, dm.density, dm.scaledDensity, textScale, chartScale, showChart, showArrow, isMmol,
                 range, deltaInterval, viewMode, hasCalibration, sensorId, valueText, if (fresh) rate else Float.NaN, stale,
                 shown?.timeMillis ?: 0L, history.size, history.lastOrNull()?.timestamp ?: 0L,
                 history.lastOrNull()?.value ?: Float.NaN, deltaHistory.lastOrNull()?.timestamp ?: 0L,
-                UiRefreshBus.revision.value, nowMs / 60_000L, hour24, locale, zone,
+                UiRefreshBus.revision.value, nowMs / 60_000L, hour24, locale, zone, iob,
             )
             val onScreen = (chartView.drawable as? BitmapDrawable)?.bitmap
             if (sameDrawing(lastKey, key, onScreen != null && onScreen === lastBitmap?.get())) {
@@ -117,8 +129,7 @@ object ModAodBlock {
                 val delta = DisplayDeltaSource.format(
                     true, deltaHistory, sensorId, shown.timeMillis, viewMode, isMmol, deltaInterval, nowMs, Notify.glucosetimeout,
                 )
-                val pattern = android.text.format.DateFormat.getBestDateTimePattern(locale, if (hour24) "Hm" else "hm")
-                subLine(delta, readingTime(shown.timeMillis, zone, pattern, locale))
+                subLine(delta, readingTime(shown.timeMillis, zone, pattern, locale), iob)
             } else null
             val value = ModAodPainter.Value(
                 text = numberText(valueText),
@@ -161,6 +172,8 @@ object ModAodBlock {
      * pixel in ten seconds, so a redraw inside the same minute with the same readings would show the same picture.
      * Upstream's refresh-bus revision ([dataRevision]) catches data changes inside the history (backfill,
      * calibration) at once; anything else not in here (a journal entry moving the forecast) shows at the next minute.
+     * [iob] is the pump's part of the small line as drawn: a new number, the 10-minute step and the 30-minute end
+     * each change it.
      */
     internal data class DrawKey(
         val light: Boolean,
@@ -190,6 +203,7 @@ object ModAodBlock {
         val hour24: Boolean,
         val locale: Locale,
         val zone: ZoneId,
+        val iob: String?,
     )
 
     /** The refresh would draw what upstream's view already shows: the same inputs and that view still holds our block. */
@@ -213,9 +227,59 @@ object ModAodBlock {
     internal fun numberText(valueText: String): String? =
         valueText.substringBefore(" · ").trim().takeIf { it.isNotEmpty() }
 
-    /** "+0,2 · 17:01": the change and the reading's time; either may be missing. */
-    internal fun subLine(delta: String, time: String): String? =
-        listOf(delta, time).filter { it.isNotBlank() }.joinToString(" · ").takeIf { it.isNotEmpty() }
+    /** "+0,2 · 17:01 · IOB 2,4": the change, the reading's time and the pump's active insulin; any may be missing. */
+    internal fun subLine(delta: String, time: String, iob: String? = null): String? =
+        listOf(delta, time, iob.orEmpty()).filter { it.isNotBlank() }.joinToString(" · ").takeIf { it.isNotEmpty() }
+
+    /** Pump data older than this shows its own reading time: "IOB 2,4 (16:40)". */
+    internal const val IOB_OLD_MS = 10L * 60_000L
+
+    /** A pump time further ahead of the phone's clock is not believed (as our CareLink code, `CareLinkPumpNow`). */
+    internal const val IOB_FUTURE_MS = 5L * 60_000L
+
+    /**
+     * The pump's active insulin for the small line: "IOB 2,4" ([label] is "IOB" or the phone's language), "IOB 0" for
+     * zero tenths, "IOB 2,4 (16:40)" when the pump's reading [atMs] is more than [IOB_OLD_MS] before [nowMs] (time as
+     * [readingTime]); null - no number, a broken one, one past the slot's own 30 minutes
+     * ([ApiIobSnapshot.FRESHNESS_WINDOW_MS]) or more than [IOB_FUTURE_MS] ahead of the clock (a time ahead by less
+     * counts as new). The tenths are the watch face's (`PumpIobPhone.pumpOnly`, `FaceText.iob`): rounded half up, the
+     * same upper limit, the locale's decimal separator.
+     */
+    internal fun iobPart(
+        units: Float?,
+        atMs: Long?,
+        nowMs: Long,
+        zone: ZoneId,
+        pattern: String,
+        locale: Locale,
+        label: String,
+    ): String? {
+        if (units == null || !units.isFinite() || units < 0f || atMs == null || atMs <= 0L) return null
+        val age = nowMs - atMs
+        if (age > ApiIobSnapshot.FRESHNESS_WINDOW_MS || -age > IOB_FUTURE_MS) return null
+        val tenths = (units * 10f).roundToInt().coerceAtMost(ModWatchMessages.IOB_MAX_TENTHS)
+        val separator = DecimalFormatSymbols.getInstance(locale).decimalSeparator
+        val number = if (tenths == 0) "0" else "${tenths / 10}$separator${tenths % 10}"
+        val old = if (age > IOB_OLD_MS) " (${readingTime(atMs, zone, pattern, locale)})" else ""
+        return "$label $number$old"
+    }
+
+    /**
+     * The pump's number in upstream's remote snapshot ([ApiIobSnapshot], filled by our CareLink code and later the
+     * pump's Bluetooth; its time is the pump's, fresh for 30 min) - read as the watch face reads it
+     * (`mod/watch/PumpIobPhone.slot`, phone-only code this file cannot call): nothing while upstream's HTTP API
+     * follower is on, since the slot then holds another phone's journal numbers. Never throws.
+     */
+    private fun pumpIob(context: Context, nowMs: Long): ApiIobSnapshot.RemoteIob? = try {
+        val followerOn = try {
+            ApiGlucoseSourceRegistry.loadConfig(context).enabled
+        } catch (_: Throwable) {
+            true // unknown: the number may not be the pump's
+        }
+        if (followerOn) null else ApiIobSnapshot.fresh(nowMs)
+    } catch (_: Throwable) {
+        null
+    }
 
     internal data class Range(val low: Float, val high: Float, val veryLow: Float, val veryHigh: Float)
 

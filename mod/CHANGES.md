@@ -25,8 +25,10 @@ For the user:
   anew it shows (xDrip+'s always-on display replaces its window every minute and kept changing on the owner's phone,
   2026-11-27). So while a Samsung phone's screen dozes the block takes the author's overlay window down and adds it
   again about once a minute (`mod/aod/ModAodWindow`), shows the time of the reading rather than its age, and skips a refresh that
-  would draw the same picture. On the owner's phone since 2026-11-26 (computer build 12); the tag comes with the next
-  candidate from `main`.
+  would draw the same picture. The pump's active insulin follows on the same line ("+0,9 · 17:01 · IOB 2,4"), from
+  the author's remote snapshot slot (`ApiIobSnapshot`, the same number as on the watch face): "IOB 0" when there is
+  none, nothing without a pump connection, the pump's reading time in brackets past 10 minutes, nothing past 30. On
+  the owner's phone since 2026-11-26 (computer build 12); the tag comes with the next candidate from `main`.
 
 Build and checks:
 - 2026-11-26 — a candidate reaches everyone only after the owner's "all ok" on the phone, as the very files checked

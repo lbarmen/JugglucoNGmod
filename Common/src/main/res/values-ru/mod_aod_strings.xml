@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JugglucoNGmod phone always-on display (tk.glucodata.mod.aod): Russian strings. -->
+<resources>
+    <string name="mod_aod_iob">АИ</string>
+</resources>
