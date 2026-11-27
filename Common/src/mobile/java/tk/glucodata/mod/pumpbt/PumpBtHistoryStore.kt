@@ -77,6 +77,11 @@ internal data class PumpHistoryMemory(
     val aliases: Map<String, String> = emptyMap(),
     /** Key (after [aliases]) -> when the intake answered WRITTEN for it (a bolus only once finished). */
     val acceptedAt: Map<String, Long> = emptyMap(),
+    /**
+     * Keys (after [aliases]) of the boluses fed to the writer at least once with WRITTEN, running or finished: one
+     * older than 47 h whose row is gone was removed by the person - it is never made again (critic B2, N-a, N-b).
+     */
+    val fedBoluses: Set<String> = emptySet(),
     val counters: PumpHistoryCounters = PumpHistoryCounters(),
     /** Unknown record types already notified (one notification per type). */
     val seenUnknownTypes: Set<Int> = emptySet(),
@@ -149,6 +154,7 @@ internal class PumpBtHistoryStore(private val file: File) {
             put("written", JSONArray(m.backfillWritten))
             put("aliases", JSONObject().apply { m.aliases.forEach { (k, v) -> put(k, v) } })
             put("accepted", JSONObject().apply { m.acceptedAt.forEach { (k, v) -> put(k, v) } })
+            put("fed", JSONArray(m.fedBoluses.sorted()))
             put("counters", JSONObject().apply {
                 val c = m.counters
                 put("unparsed", c.unparsed)
@@ -191,6 +197,7 @@ internal class PumpBtHistoryStore(private val file: File) {
                 backfillWritten = strings(o.getJSONArray("written")),
                 aliases = o.getJSONObject("aliases").let { a -> a.keys().asSequence().associateWith { a.getString(it) } },
                 acceptedAt = o.getJSONObject("accepted").let { a -> a.keys().asSequence().associateWith { a.getLong(it) } },
+                fedBoluses = o.optJSONArray("fed")?.let { strings(it).toSet() } ?: emptySet(),
                 counters = PumpHistoryCounters(
                     unparsed = c.getInt("unparsed"),
                     gaps = c.getLong("gaps"),
@@ -362,6 +369,7 @@ internal object PumpHistoryRules {
         val accepted = LinkedHashMap(m.acceptedAt)
         val written = LinkedHashSet(m.backfillWritten)
         val boluses = events.filter { it.kind == ClKind.BOLUS }
+        val fed = LinkedHashSet(m.fedBoluses).apply { boluses.forEach { add(it.key) } }
         for (e in events) {
             val ok = when (e.kind) {
                 ClKind.BOLUS -> e.completed == true
@@ -376,7 +384,7 @@ internal object PumpHistoryRules {
                 PumpBtBridge.journalKey(e.kind, e.key)?.let { written += it }
             }
         }
-        return m.copy(acceptedAt = accepted, backfillWritten = written.toList())
+        return m.copy(acceptedAt = accepted, backfillWritten = written.toList(), fedBoluses = fed)
     }
 
     /**
@@ -473,17 +481,20 @@ internal object PumpHistoryRules {
         // the events whose records all went: their aliases and acceptance are no longer needed
         val aliases = LinkedHashMap(m.aliases)
         val accepted = LinkedHashMap(m.acceptedAt)
+        val fed = LinkedHashSet(m.fedBoluses)
         for ((e, key) in keys) {
             if (unitMax[find(e.sequence)]?.let { it < cutSeq } != true) continue
             val ek = m.aliases[key] ?: key
             aliases.remove(key)
             accepted.remove(ek)
+            fed.remove(ek)
         }
         return m.copy(
             records = raw.filter { it.sequence >= cutSeq },
             reference = reference,
             aliases = aliases,
             acceptedAt = accepted,
+            fedBoluses = fed,
         )
     }
 

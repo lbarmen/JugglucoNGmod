@@ -36,6 +36,8 @@ internal data class BackfillItem(val key: String, val atMs: Long, val units: Dou
 internal data class BackfillCard(
     val bolusesBefore: Int, val mealsBefore: Int, val alreadyInJournal: Int,
     val toWrite: List<BackfillItem>, val oldNotFound: Int,
+    /** Meals before the enable moment the writer will not write: carbs switch off, or their bolus is not fed. */
+    val mealsNotWritten: Int = 0,
 )
 
 internal enum class PumpWarning { FUTURE_EVENT, CLOCK_DRIFT, NO_RESULT_BOLUS, UNPAIRED_MEAL, HELD_BOLUS }
@@ -339,7 +341,7 @@ internal object PumpBtBridge {
     private class Item(
         val event: PumpEvent, val key: String, val kind: ClKind, val atMs: Long, val endMs: Long,
         val programmed: Double?, val delivered: Double?, val grams: Double?, val completed: Boolean,
-        val durationMinutes: Int?, val fromMs: Long = atMs - MATCH_WINDOW_MS,
+        val durationMinutes: Int?, val fromMs: Long = atMs - MATCH_WINDOW_MS, val anchorMs: Long = atMs,
     ) {
         val dose: Double? get() = if (!completed) programmed ?: delivered else delivered ?: programmed
     }
@@ -352,9 +354,12 @@ internal object PumpBtBridge {
                     val at = ms(e.at)
                     // timed by "delivered" (its "programmed" is lost): the cloud row stands at the request time, up to the
                     // duration and the delivery itself earlier (critic B2, C4)
-                    val from = if (e.timeFromDelivery) at - (e.durationMinutes ?: 0) * 60_000L - DELIVERY_WINDOW_MS else at - MATCH_WINDOW_MS
+                    val run = (e.durationMinutes ?: 0) * 60_000L
+                    val from = if (e.timeFromDelivery) at - run - DELIVERY_WINDOW_MS else at - MATCH_WINDOW_MS
+                    // the nearest row to the request: for a bolus timed by delivery - delivery minus its duration (critic B2, N-d)
+                    val anchor = if (e.timeFromDelivery) at - run else at
                     Item(e, key, ClKind.BOLUS, at, maxOf(at, e.deliveredAt?.let(::ms) ?: at),
-                        e.programmedUnits, if (e.completed) e.deliveredUnits else null, null, e.completed, e.durationMinutes, from)
+                        e.programmedUnits, if (e.completed) e.deliveredUnits else null, null, e.completed, e.durationMinutes, from, anchor)
                 }
                 is MealEvent -> {
                     val at = ms(e.at)
@@ -367,7 +372,7 @@ internal object PumpBtBridge {
 
     private class Matched(
         val aliases: Map<String, String>, val byKey: Int, val byTime: Int, val toWrite: List<Item>,
-        val oldNotFound: Int, val boluses: Int, val meals: Int,
+        val oldNotFound: Int, val boluses: Int, val meals: Int, val mealsNotWritten: Int,
     )
 
     /**
@@ -376,16 +381,21 @@ internal object PumpBtBridge {
      * same dose or grams; a row is taken once. Cloud row - an alias; another row - not written. The rest: later than
      * [boundary] - to write, else old not found.
      */
-    private fun match(m: PumpHistoryMemory, items: List<Item>, rows: List<JournalRow>, enabledAt: Long, boundary: Long): Matched {
+    private fun match(
+        m: PumpHistoryMemory, items: List<Item>, rows: List<JournalRow>, enabledAt: Long, boundary: Long, nowMs: Long,
+        writeCarbs: Boolean,
+    ): Matched {
         val old = items.filter { it.atMs < enabledAt && (m.aliases[it.key] ?: it.key) !in m.acceptedAt }
         val oldKeys = old.mapTo(HashSet()) { it.key }
         val byJournalKey = HashMap<String, JournalRow>()
         for (r in rows) r.sourceRecordId?.let { byJournalKey.putIfAbsent(it, r) }
         val taken = HashSet<Long>()
         val byKey = HashSet<String>()
+        val matchedRow = HashMap<String, JournalRow>()
         for (it in items) {
             val row = journalKey(it.kind, m.aliases[it.key] ?: it.key)?.let(byJournalKey::get) ?: continue
             if (!taken.add(row.id)) continue
+            matchedRow[it.key] = row
             if (it.key in oldKeys) byKey += it.key
         }
         val aliases = LinkedHashMap<String, String>()
@@ -397,9 +407,10 @@ internal object PumpBtBridge {
             if (it.key in byKey) continue
             val row = rows.asSequence()
                 .filter { r -> r.id !in taken && r.kind == it.kind && r.atMs >= it.fromMs && r.atMs <= it.endMs + MATCH_WINDOW_MS && sameAmount(r, it) }
-                .minWithOrNull(compareBy<JournalRow>({ r -> abs(r.atMs - it.atMs) }, { r -> r.id }))
+                .minWithOrNull(compareBy<JournalRow>({ r -> abs(r.atMs - it.anchorMs) }, { r -> r.id }))
             if (row != null) {
                 taken += row.id
+                matchedRow[it.key] = row
                 byTime++
                 cloudKey(row.sourceRecordId, it.kind)?.let { ck -> aliases[it.key] = ck }
                 continue
@@ -412,14 +423,24 @@ internal object PumpBtBridge {
         // the writer writes carbs only with their bolus: a listed meal needs a bolus that will be fed - listed too, or
         // found under its own or a cloud key (fed for its result), or a new one; a meal whose bolus matched a row of the
         // person is "in the journal"; with no bolus, or one before the boundary, it is not written either (critic B2, C1)
+        // A bolus found by key or a cloud row is fed for its result only if the 47 h rule lets it (critic B2, N-g); with
+        // the carbs switch off the writer writes no new carbs at all.
         val listed = toWrite.mapTo(HashSet()) { it.key }
         var mealsInJournal = 0
+        var mealsNotWritten = 0
         toWrite.removeAll { meal ->
             if (meal.kind != ClKind.MEAL) return@removeAll false
             val b = pairedBolus(meal, items)
-            val fed = b != null && (b.key in listed || b.key in byKey || b.key in aliases || b.atMs >= enabledAt)
+            val row = b?.let { matchedRow[it.key] }
+            val ownRow = b != null && row != null && (b.key in byKey || b.key in aliases)
+            val ownRowFed = ownRow && (nowMs - b!!.atMs <= OLD_ROW_MS || resultForOurRow(b, row!!))
+            val fed = b != null && (b.key in listed || ownRowFed || b.atMs >= enabledAt)
             when {
-                fed -> false
+                fed && writeCarbs -> false
+                fed || ownRow -> {
+                    mealsNotWritten++
+                    true
+                }
                 b != null && b.key in oldKeys && b.key !in notFound -> {
                     mealsInJournal++
                     true
@@ -433,7 +454,18 @@ internal object PumpBtBridge {
         return Matched(
             aliases, byKey.size + mealsInJournal, byTime, toWrite, oldNotFound,
             boluses = old.count { it.kind == ClKind.BOLUS }, meals = old.count { it.kind == ClKind.MEAL },
+            mealsNotWritten = mealsNotWritten,
         )
+    }
+
+    /**
+     * An event older than [OLD_ROW_MS] whose row is [row] is fed only when it is a finished bolus and the row still holds
+     * its programmed dose (our "running" row, not changed by the person): the writer writes the result.
+     */
+    private fun resultForOurRow(it: Item, row: JournalRow): Boolean {
+        val ra = row.amount
+        return it.kind == ClKind.BOLUS && it.completed && it.programmed != null && ra != null &&
+            abs(ra - it.programmed) <= CareLinkMarkers.EPS
     }
 
     /** The bolus a meal belongs to, as the writer pairs them: the first bolus at most 10 s after the meal. */
@@ -453,17 +485,19 @@ internal object PumpBtBridge {
         alreadyInJournal = m.byKey + m.byTime,
         toWrite = toWrite.map { BackfillItem(it.key, it.atMs, if (it.kind == ClKind.BOLUS) it.dose else null, it.grams) },
         oldNotFound = m.oldNotFound,
+        mealsNotWritten = m.mealsNotWritten,
     )
 
     /**
      * One cycle (decisions 5, 6, 9): the first catch-up (once [firstReadComplete] - the history read through - the card
      * is made and frozen; nothing old to decide - confirmed at once), what to feed (see the class notes), the warnings
      * and counters. [events] - built from the whole memory [m]; [rows] - from [journalRows]; [nowMs] - the cycle's read
-     * time.
+     * time; [writeCarbs] - the switch "record calculator carbs" (CareLinkSettings.writeCarbs): with it off the card
+     * lists no meals (an addition to the contract, true by default).
      */
     fun planCycle(
         m: PumpHistoryMemory, events: PumpEventsResult, rows: List<JournalRow>, nowMs: Long,
-        zone: ZoneId, firstReadComplete: Boolean,
+        zone: ZoneId, firstReadComplete: Boolean, writeCarbs: Boolean = true,
     ): CyclePlan {
         var mem = m.copy(reference = events.lastReference ?: m.reference)
         val items = items(mem, events, zone)
@@ -475,7 +509,7 @@ internal object PumpBtBridge {
         if (enabledAt != null) {
             val boundary = mem.boundaryMs ?: (enabledAt - DAY_MS)
             if (mem.backfill == BackfillState.NOT_READY && firstReadComplete) {
-                val r = match(mem, items, rows, enabledAt, boundary)
+                val r = match(mem, items, rows, enabledAt, boundary, nowMs, writeCarbs)
                 val anyOld = r.boluses + r.meals > 0
                 mem = mem.copy(
                     aliases = mem.aliases + r.aliases,
@@ -488,7 +522,7 @@ internal object PumpBtBridge {
                 if (anyOld) card = card(r, r.toWrite)
             } else if (mem.backfill == BackfillState.WAITING) {
                 val byKey = items.associateBy { it.key }
-                val r = match(mem, items, rows, enabledAt, boundary)
+                val r = match(mem, items, rows, enabledAt, boundary, nowMs, writeCarbs)
                 if (mem.backfillShown.all { it in byKey }) {
                     // the list stays as shown; the counts are read again
                     card = card(r, mem.backfillShown.mapNotNull { byKey[it] })
@@ -514,6 +548,17 @@ internal object PumpBtBridge {
         val accepted = LinkedHashMap(mem.acceptedAt)
         val toWriter = ArrayList<ClEvent>()
         val shown = mem.backfillShown.toHashSet()
+        // cancelled boluses older than 47 h fed for their result into our untouched row: their meal goes with them when
+        // its carbs row is untouched too, so the writer removes it as well (critic B2, N-c)
+        val cancelledFed = HashSet<String>()
+        if (firstReadComplete) {
+            for (b in items) {
+                if (b.kind != ClKind.BOLUS || !b.completed || (b.delivered ?: 0.0) > CareLinkMarkers.EPS) continue
+                val bk = mem.aliases[b.key] ?: b.key
+                val row = journalKey(b.kind, bk)?.let(byJournalKey::get) ?: continue
+                if (bk !in accepted && nowMs - b.atMs > OLD_ROW_MS && resultForOurRow(b, row)) cancelledFed += b.key
+            }
+        }
         var future = 0
         for (it in items) {
             val ek = mem.aliases[it.key] ?: it.key
@@ -526,27 +571,35 @@ internal object PumpBtBridge {
             val age = nowMs - ce.atMs
             val row = journalKey(it.kind, ek)?.let(byJournalKey::get)
             val hasRow = row != null
+            var mealWithBolus = false
             if (!isAccepted && age > OLD_ROW_MS && row != null) {
                 // decided only on a history read through: a "delivered" may still be on its way (critic B2, B1)
                 if (!firstReadComplete) continue
                 // the row still holds the programmed dose of our running bolus (the person did not change it) and the
-                // result is here: fed, the writer writes the result (0 - removes the row; critic B2, C2); otherwise the
-                // writer would adopt the row and write over the person's edit - accepted, not fed
+                // result is here: fed, the writer writes the result (0 - removes the row; critic B2, C2); the meal of
+                // such a cancelled bolus with its carbs row untouched goes with it; otherwise the writer would adopt the
+                // row and write over the person's edit - accepted, not fed
                 val ra = row.amount
-                val ourRunning = it.kind == ClKind.BOLUS && it.completed && it.programmed != null && ra != null &&
-                    abs(ra - it.programmed) <= CareLinkMarkers.EPS
-                if (!ourRunning) {
+                mealWithBolus = it.kind == ClKind.MEAL && it.grams != null && ra != null &&
+                    abs(ra - it.grams) <= CareLinkMarkers.EPS && pairedBolus(it, items)?.key in cancelledFed
+                if (!resultForOurRow(it, row) && !mealWithBolus) {
                     accepted[ek] = nowMs
                     continue
                 }
+            }
+            if (!isAccepted && age > OLD_ROW_MS && row == null && it.kind == ClKind.BOLUS && ek in mem.fedBoluses) {
+                // fed before and its row is gone now (deleted by the person, or its key taken off by the editor): the
+                // writer may have forgotten that already - accepted, never made again (critic B2, N-a, N-b)
+                accepted[ek] = nowMs
+                continue
             }
             if (enabledAt == null) continue
             val feed = if (ce.atMs >= enabledAt) {
                 age <= DAY_MS || !isAccepted
             } else {
                 !isAccepted && when (mem.backfill) {
-                    BackfillState.CONFIRMED -> it.key in shown || (it.kind == ClKind.BOLUS && hasRow)
-                    BackfillState.DECLINED -> it.kind == ClKind.BOLUS && hasRow
+                    BackfillState.CONFIRMED -> it.key in shown || (it.kind == ClKind.BOLUS && hasRow) || mealWithBolus
+                    BackfillState.DECLINED -> (it.kind == ClKind.BOLUS && hasRow) || mealWithBolus
                     else -> false
                 }
             }

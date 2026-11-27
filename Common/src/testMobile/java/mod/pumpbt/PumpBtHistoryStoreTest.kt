@@ -347,12 +347,14 @@ class PumpBtHistoryStoreTest {
         // the bolus is not accepted: nothing from it on may go
         assertEquals(seqs(m), seqs(pruned(m)))
         // after WRITTEN everything below the newest reference goes; the reference stays the oldest record
+        assertEquals(setOf("INSULIN|2026-10-15T10:01:00|0"), accepted(m).fedBoluses)
         val p = pruned(accepted(m))
         assertEquals(listOf(108L, 109L), seqs(p))
         assertEquals(HistoryReferenceLocal(108, B2Fixtures.at(12, 0)), p.reference)
         assertEquals(109L, p.contiguousTo)
         // the bolus left the memory: its acceptance is no longer kept
         assertTrue(p.acceptedAt.isEmpty())
+        assertTrue(p.fedBoluses.isEmpty())
     }
 
     @Test
@@ -453,7 +455,7 @@ class PumpBtHistoryStoreTest {
             contiguousTo = 109, stuckCount = 2, newestBackCount = 1, enabledAtMs = 11L, boundaryMs = 7L, backfill = BackfillState.WAITING,
             backfillShown = listOf("INSULIN|2026-10-15T10:01:00|0"), backfillWritten = listOf("carelink:MEAL:2026-10-15T10:00:58:0:carbs"),
             aliases = mapOf("INSULIN|2026-10-15T10:01:00|0" to "INSULIN|2026-10-15T10:01:30|0"),
-            acceptedAt = mapOf("MEAL|2026-10-15T10:00:58|0" to 99L),
+            acceptedAt = mapOf("MEAL|2026-10-15T10:00:58|0" to 99L), fedBoluses = setOf("INSULIN|2026-10-15T10:01:30|0"),
             counters = PumpHistoryCounters(1, 2, 3, 4, 5, 6, 7), seenUnknownTypes = setOf(0x1234, 0x0042),
         )
         store.save(m)
