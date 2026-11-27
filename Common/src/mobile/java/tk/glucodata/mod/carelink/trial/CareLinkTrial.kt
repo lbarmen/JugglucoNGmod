@@ -5,6 +5,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import tk.glucodata.mod.carelink.CareLinkAuth
+import tk.glucodata.mod.carelink.CareLinkClock
 import tk.glucodata.mod.carelink.CareLinkPoller
 import tk.glucodata.mod.carelink.CareLinkSession
 import tk.glucodata.mod.carelink.CareLinkState
@@ -62,7 +63,7 @@ object CareLinkTrial {
     @Volatile
     internal var zone: () -> ZoneId = { ZoneId.systemDefault() }
 
-    fun now(): Long = CareLinkAuth.clock()
+    fun now(): Long = CareLinkClock.now()
 
     /** Installs the fake network (no disk, no Keystore: safe in a provider's onCreate). */
     fun installHttp() {
@@ -173,7 +174,7 @@ object CareLinkTrial {
         is TrialCommand.Clock -> {
             val offset = c.minutes * 60_000L
             clockOffsetMs = offset
-            CareLinkAuth.clock = if (offset == 0L) {
+            CareLinkClock.now = if (offset == 0L) {
                 { System.currentTimeMillis() }
             } else {
                 { System.currentTimeMillis() + offset }

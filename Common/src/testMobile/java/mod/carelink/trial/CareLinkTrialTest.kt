@@ -19,6 +19,7 @@ import org.robolectric.annotation.ConscryptMode
 import mod.carelink.FakeCareLinkWork
 import tk.glucodata.mod.carelink.AesGcmSessionCipher
 import tk.glucodata.mod.carelink.CareLinkAuth
+import tk.glucodata.mod.carelink.CareLinkClock
 import tk.glucodata.mod.carelink.CareLinkConfig
 import tk.glucodata.mod.carelink.CareLinkErrorKind
 import tk.glucodata.mod.carelink.CareLinkPoller
@@ -70,7 +71,7 @@ class CareLinkTrialTest {
         CareLinkVault.cipher = AesGcmSessionCipher(keyProvider = { key })
         CareLinkVault.clear(app)
         CareLinkStateStore(app).clear()
-        CareLinkAuth.clock = { now }
+        CareLinkClock.now = { now }
         CareLinkPoller.zone = { ZoneOffset.ofHours(5) }
         CareLinkTrial.zone = { ZoneOffset.ofHours(5) }
         CareLinkPoller.writeJournal = { _, e, _ -> journal += e }
@@ -116,10 +117,10 @@ class CareLinkTrialTest {
     @Test
     fun clockShiftsTheAuthClockAndComesBack() {
         run("clock", "+40")
-        val shifted = CareLinkAuth.clock() - System.currentTimeMillis()
+        val shifted = CareLinkClock.now() - System.currentTimeMillis()
         assertTrue("about +40 min: $shifted", shifted in 39 * 60_000L..41 * 60_000L)
         run("clock", "0")
-        assertTrue(kotlin.math.abs(CareLinkAuth.clock() - System.currentTimeMillis()) < 60_000L)
+        assertTrue(kotlin.math.abs(CareLinkClock.now() - System.currentTimeMillis()) < 60_000L)
     }
 
     @Test

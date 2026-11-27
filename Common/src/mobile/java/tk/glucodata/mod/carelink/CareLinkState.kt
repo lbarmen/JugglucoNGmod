@@ -229,7 +229,7 @@ class CareLinkSettings(context: Context) {
                 if (v) {
                     f.parentFile?.mkdirs()
                     if (!f.exists() && !f.createNewFile() && !f.exists()) CareLinkLog.w("polling flag not written")
-                    f.setLastModified(CareLinkAuth.clock())
+                    f.setLastModified(CareLinkClock.now())
                 } else if (f.exists() && !f.delete()) {
                     CareLinkLog.w("polling flag not removed")
                 }

@@ -74,9 +74,6 @@ object CareLinkAuth {
     @Volatile
     internal var http: CareLinkHttp = CareLinkHttp.system
 
-    @Volatile
-    internal var clock: () -> Long = { System.currentTimeMillis() }
-
     /** Outlives the sign-in window: the code exchange is not cut when the window goes away. */
     internal val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -134,7 +131,7 @@ object CareLinkAuth {
     /** Step 1: region, sign-in settings, the Medtronic page address with our `state` (kept in pending.json). */
     suspend fun beginLogin(context: Context): LoginStart = withContext(Dispatchers.IO) {
         val app = context.applicationContext
-        val now = clock()
+        val now = CareLinkClock.now()
         val d = discovery(now)
         if (d.first == null) return@withContext LoginStart.Failed(failOf(d.second), d.second.code).also {
             logFail("begin", "discovery", d.second)
@@ -199,7 +196,7 @@ object CareLinkAuth {
     }
 
     private fun finishLoginLocked(app: Context, code: String, state: String?): LoginFail? {
-        val now = clock()
+        val now = CareLinkClock.now()
         val generation = CareLinkVault.generation
         val pending = try {
             Pending.read(app)
@@ -298,7 +295,7 @@ object CareLinkAuth {
             is SessionRead.Broken -> return FreshResult.Failed(0, r.errorClass)
         }
         val stored = read.session
-        val s = if (!force && stored.expiresAtMs - clock() > REFRESH_MARGIN_MS) {
+        val s = if (!force && stored.expiresAtMs - CareLinkClock.now() > REFRESH_MARGIN_MS) {
             stored
         } else {
             when (val r = refresh(app, stored, read.generation, force)) {
@@ -322,7 +319,7 @@ object CareLinkAuth {
             val result = http.postForm(s.tokenUrl, CareLinkConfig.refreshForm(s.clientId, s.refreshToken))
             val tokens = if (result.ok) CareLinkConfig.parse(result.body)?.let(CareLinkConfig::tokens) else null
             val next = tokens?.let { t ->
-                val now = clock()
+                val now = CareLinkClock.now()
                 s.copy(
                     accessToken = t.access, refreshToken = t.refresh ?: s.refreshToken,
                     expiresAtMs = expOf(CareLinkConfig.claims(t.access), t, now), refreshedAtMs = now,
@@ -336,7 +333,7 @@ object CareLinkAuth {
                 CareLinkLog.i("key renewed after a sign-out: dropped")
                 return FreshResult.NeedLogin
             }
-            CareLinkLog.i("key renewed: force=$force inMin=${(next.expiresAtMs - clock()) / 60_000} rotated=${next.refreshToken != s.refreshToken}")
+            CareLinkLog.i("key renewed: force=$force inMin=${(next.expiresAtMs - CareLinkClock.now()) / 60_000} rotated=${next.refreshToken != s.refreshToken}")
             return FreshResult.Ok(next)
         }
         if (result.ok) {
@@ -360,7 +357,7 @@ object CareLinkAuth {
         CareLinkLog.w("key renewal failed: code=${result.code} error=${result.errorClass}")
         // No network or a server failure: the old key still lives - use it, renew next time. A forced renewal (the cloud
         // already refused this key) is not answered with the old key.
-        if (!force && s.expiresAtMs - clock() > MIN_LEFT_MS) return FreshResult.Ok(s)
+        if (!force && s.expiresAtMs - CareLinkClock.now() > MIN_LEFT_MS) return FreshResult.Ok(s)
         return FreshResult.Failed(result.code, result.errorClass ?: "http_${result.code}")
     }
 
@@ -490,7 +487,7 @@ object CareLinkAuth {
         onLoginSuccess = null
         onSignOut = null
         http = CareLinkHttp.system
-        clock = { System.currentTimeMillis() }
+        CareLinkClock.now = { System.currentTimeMillis() } // the shared clock (part B1); tests set it after this
     }
 
     /**

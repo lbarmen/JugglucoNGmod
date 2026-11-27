@@ -84,7 +84,7 @@ object CareLinkBasalWriter {
      * later must not get back the rows the person deleted. A failure throws; the callers log it - the next sign-in's
      * first snapshot then closes both by the gap rule.
      */
-    suspend fun close(context: Context, atMs: Long = CareLinkAuth.clock()) {
+    suspend fun close(context: Context, atMs: Long = CareLinkClock.now()) {
         withContext(Dispatchers.IO) {
             val app = context.applicationContext
             val seen = CareLinkSeenStore.load(app, atMs)
