@@ -13,6 +13,7 @@ import tk.glucodata.mod.carelink.ClEvent
 import tk.glucodata.mod.carelink.ClKind
 import tk.glucodata.mod.carelink.PumpNow
 import tk.glucodata.mod.carelink.TempBasal
+import tk.glucodata.mod.pumpbt.core.ActiveBasalRate
 import tk.glucodata.mod.pumpbt.core.BolusEvent
 import tk.glucodata.mod.pumpbt.core.MealEvent
 import tk.glucodata.mod.pumpbt.core.PumpCycle
@@ -234,14 +235,32 @@ internal object PumpBtBridge {
     }
 
     /**
-     * The snapshot of [cycle] (null - no pump hash): data and active insulin at the read time; no reservoir percent;
-     * a temporary basal is absolute (U/h); stopped or paused delivery - suspended; basal known - its answer came.
+     * The snapshot of [cycle]: data and active insulin at the read time; no reservoir percent; stopped or paused
+     * delivery - suspended; basal known - its answer came. Null - no pump hash, or not one snapshot value in the cycle
+     * (no therapy state, active insulin, reservoir, basal answer or battery: a cycle cut short says nothing of the pump
+     * and must neither break the basal nor count as fresh data; critic of the joints 1, C-1).
+     * The temporary basal by its IDD type (critic of the joints 1, B-1): 0x33 - its rate, U/h; 0x3C - a percentage of
+     * the normal rate, as the cloud's percentage one (the basal writer takes the last normal rate times it); another
+     * type or none with a value - not known: no temporary basal and the basal not known (a gap is better than a wrong
+     * rate).
      */
     fun toPumpNow(cycle: PumpCycle): PumpNow? {
         if (cycle.serialHash == null) return null
+        if (cycle.therapyState == null && cycle.iobUnits == null && cycle.reservoirUnits == null && !cycle.basalRead &&
+            cycle.batteryPercent == null
+        ) return null
         val iob = cycle.iobUnits?.takeIf { it >= 0.0 }?.let(CareLinkMarkers::round3)
-        val temp = cycle.tempBasalRate?.takeIf { it >= 0.0 }?.let {
-            TempBasal(CareLinkMarkers.round3(it), percent = null, minutesLeft = cycle.tempBasalMinutesLeft?.takeIf { m -> m >= 0 }, absolute = true)
+        val left = cycle.tempBasalMinutesLeft?.takeIf { m -> m >= 0 }
+        var basalKnown = cycle.basalRead
+        val temp = cycle.tempBasalRate?.let { v ->
+            when {
+                !v.isFinite() || v < 0.0 -> null
+                cycle.tempBasalType == ActiveBasalRate.TBR_ABSOLUTE ->
+                    TempBasal(CareLinkMarkers.round3(v), percent = null, minutesLeft = left, absolute = true)
+                cycle.tempBasalType == ActiveBasalRate.TBR_RELATIVE ->
+                    TempBasal(rate = null, percent = Math.round(v).toInt(), minutesLeft = left, absolute = false)
+                else -> null
+            }.also { if (it == null) basalKnown = false }
         }
         return PumpNow(
             dataAtMs = cycle.readAtMs,
@@ -257,7 +276,7 @@ internal object PumpBtBridge {
                 THERAPY_RUN -> false
                 else -> null
             },
-            basalKnown = cycle.basalRead,
+            basalKnown = basalKnown,
         )
     }
 
@@ -301,7 +320,8 @@ internal object PumpBtBridge {
         val items = items(m, events, zone)
         if (items.isEmpty()) return emptyList()
         val app = context.applicationContext
-        val inSpan = loadRows(app, items.minOf { it.atMs } - MATCH_WINDOW_MS, items.maxOf { it.endMs } + MATCH_WINDOW_MS)
+        // from the earliest matching window: a bolus timed by delivery looks back to its request (critic of the joints 1, N-1)
+        val inSpan = loadRows(app, items.minOf { it.fromMs }, items.maxOf { it.endMs } + MATCH_WINDOW_MS)
         val keys = items.mapNotNull { journalKey(it.kind, m.aliases[it.key] ?: it.key) }.distinct()
         val byKey = if (keys.isEmpty()) emptyList() else loadByKeys(app, keys)
         return (inSpan + byKey).distinctBy { it.id }

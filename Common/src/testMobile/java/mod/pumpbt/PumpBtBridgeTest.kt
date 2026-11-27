@@ -24,6 +24,9 @@ import mod.pumpbt.B2Fixtures.programmed
 import mod.pumpbt.B2Fixtures.programmedDetails
 import mod.pumpbt.B2Fixtures.ref
 import tk.glucodata.data.journal.JournalEntryEntity
+import org.json.JSONObject
+import tk.glucodata.mod.carelink.CareLinkBasalWriter
+import tk.glucodata.mod.carelink.CareLinkPumpNow
 import tk.glucodata.mod.carelink.CareLinkState
 import tk.glucodata.mod.carelink.CareLinkStateStore
 import tk.glucodata.mod.carelink.ClEvent
@@ -149,7 +152,8 @@ class PumpBtBridgeTest {
     fun theCycleBecomesTheWritersSnapshot() {
         val c = PumpCycle(
             readAtMs = 5_000L, serialHash = HASH, therapyState = 0x3C, reservoirUnits = 120.04, iobUnits = 1.25,
-            basalRate = 0.8, basalRead = true, tempBasalRate = 1.2, tempBasalMinutesLeft = 20, batteryPercent = 70,
+            basalRate = 0.8, basalRead = true, tempBasalRate = 1.2, tempBasalType = 0x33, tempBasalMinutesLeft = 20,
+            batteryPercent = 70,
         )
         val p = PumpBtBridge.toPumpNow(c)!!
         assertEquals(5_000L, p.dataAtMs)
@@ -174,6 +178,62 @@ class PumpBtBridgeTest {
         assertNull(nothing.iobAtMs)
         assertNull(nothing.tempBasal)
         assertNull(PumpBtBridge.toPumpNow(c.copy(serialHash = null)))
+    }
+
+    @Test
+    fun aPercentageTemporaryBasalIsAPercentageNotUnitsPerHour() {
+        // critic of the joints 1, B-1: 150 % must not become 150 U/h
+        val normal = PumpCycle(readAtMs = 5_000L, serialHash = HASH, therapyState = 0x55, basalRate = 0.8, basalRead = true)
+        val pct = normal.copy(readAtMs = 65_000L, tempBasalRate = 150.0, tempBasalType = 0x3C, tempBasalMinutesLeft = 90)
+        val p = PumpBtBridge.toPumpNow(pct)!!
+        assertNull(p.tempBasal!!.rate)
+        assertEquals(150, p.tempBasal!!.percent)
+        assertFalse(p.tempBasal!!.absolute)
+        assertEquals(90, p.tempBasal!!.minutesLeft)
+        assertTrue(p.basalKnown)
+        // the basal writer makes of it what it makes of the cloud's percentage temporary basal: 0.8 U/h x 150 % = 1.2 U/h
+        val lastNormal = CareLinkBasalWriter.rateOf(PumpBtBridge.toPumpNow(normal)!!, null)
+        assertEquals(0.8, lastNormal!!, 1e-9)
+        assertEquals(1.2, CareLinkBasalWriter.rateOf(p, lastNormal)!!, 1e-9)
+        // 70 % of 0.8 - 0.56 U/h, not 70 U/h
+        val low = PumpBtBridge.toPumpNow(pct.copy(tempBasalRate = 70.0))!!
+        assertEquals(0.56, CareLinkBasalWriter.rateOf(low, lastNormal)!!, 1e-9)
+    }
+
+    @Test
+    fun aTemporaryBasalOfAnUnknownTypeIsABasalGap() {
+        val c = PumpCycle(readAtMs = 5_000L, serialHash = HASH, therapyState = 0x55, iobUnits = 1.0, basalRate = 0.8,
+            basalRead = true, tempBasalRate = 1.2, tempBasalMinutesLeft = 20)
+        for (type in listOf(null, 0x0F, 0x55)) {
+            val p = PumpBtBridge.toPumpNow(c.copy(tempBasalType = type))!!
+            assertNull("type $type", p.tempBasal)
+            assertFalse("type $type", p.basalKnown)
+            assertNull("type $type: a gap, not a rate", CareLinkBasalWriter.rateOf(p, 0.8))
+            assertEquals(1.0, p.iobUnits!!, 0.0) // the rest of the snapshot stands
+        }
+        // a broken value of a known type: no temporary basal and the basal not known either
+        val nan = PumpBtBridge.toPumpNow(c.copy(tempBasalType = 0x3C, tempBasalRate = Double.NaN))!!
+        assertNull(nan.tempBasal)
+        assertFalse(nan.basalKnown)
+        // no temporary basal at all: the normal rate
+        val none = PumpBtBridge.toPumpNow(c.copy(tempBasalRate = null, tempBasalMinutesLeft = null))!!
+        assertNull(none.tempBasal)
+        assertTrue(none.basalKnown)
+        assertEquals(0.8, CareLinkBasalWriter.rateOf(none, null)!!, 1e-9)
+    }
+
+    @Test
+    fun aCycleWithoutOneSnapshotValueGivesNoSnapshot() {
+        // critic of the joints 1, C-1: a cycle cut short neither breaks the basal nor counts as fresh data
+        val empty = PumpCycle(readAtMs = 5_000L, serialHash = HASH)
+        assertNull(PumpBtBridge.toPumpNow(empty))
+        assertNull(PumpBtBridge.toPumpNow(empty.copy(records = oneOldBolus())))
+        // any one value is a snapshot
+        assertEquals(true, PumpBtBridge.toPumpNow(empty.copy(therapyState = 0x33))!!.suspended)
+        assertEquals(1.0, PumpBtBridge.toPumpNow(empty.copy(iobUnits = 1.0))!!.iobUnits!!, 0.0)
+        assertEquals(100.0, PumpBtBridge.toPumpNow(empty.copy(reservoirUnits = 100.0))!!.reservoirUnits!!, 0.0)
+        assertTrue(PumpBtBridge.toPumpNow(empty.copy(basalRead = true))!!.basalKnown)
+        assertEquals(50, PumpBtBridge.toPumpNow(empty.copy(batteryPercent = 50))!!.batteryPercent)
     }
 
     // --- what is fed --------------------------------------------------------------------------------------------------
@@ -721,5 +781,40 @@ class PumpBtBridgeJournalTest {
         assertEquals(listOf("carelink:INSULIN:2026-10-15T10:01:40:0:insulin"), keys)
         assertEquals(listOf(1L, 2L), got.map { it.id })
         assertNotNull(got)
+    }
+
+    @Test
+    fun aPercentageTemporaryBasalIsWhatTheCloudsPercentageOneIs() {
+        // critic of the joints 1, B-1: normal 0.8 U/h, temporary 150 % - the basal writer takes the same rate from the
+        // Bluetooth snapshot as from the cloud's answer with such a temporary basal (1.2 U/h)
+        val normal = PumpCycle(readAtMs = 5_000L, serialHash = HASH, therapyState = 0x55, basalRate = 0.8, basalRead = true)
+        val bt = PumpBtBridge.toPumpNow(normal.copy(readAtMs = 65_000L, tempBasalRate = 150.0, tempBasalType = 0x3C))!!
+        val cloud = CareLinkPumpNow.parse(
+            JSONObject(
+                """{"patientData": {"lastMedicalDeviceDataUpdateServerTime": 60000, "basal": {"basalRate": 0.8,
+                   "tempBasalType": "PERCENTAGE", "tempBasalPercentage": 150, "tempBasalRate": 0}}}""",
+            ),
+            nowMs = 65_000L, phoneZone = ZONE,
+        )!!
+        assertEquals(150, cloud.tempBasal!!.percent)
+        assertEquals(cloud.tempBasal!!.percent, bt.tempBasal!!.percent)
+        val lastNormal = CareLinkBasalWriter.rateOf(PumpBtBridge.toPumpNow(normal)!!, null)
+        assertEquals(1.2, CareLinkBasalWriter.rateOf(cloud, lastNormal)!!, 1e-9)
+        assertEquals(CareLinkBasalWriter.rateOf(cloud, lastNormal)!!, CareLinkBasalWriter.rateOf(bt, lastNormal)!!, 1e-9)
+    }
+
+    @Test
+    fun journalRowsReachesBackToTheRequestOfABolusTimedByDelivery() = runBlocking {
+        // critic of the joints 1, N-1: the earliest event is a bolus timed by "delivered" (10:10, its "programmed" gone);
+        // its cloud row may stand up to 10 min earlier - the rows are loaded from there, not from 10:10 - 90 s
+        val recs = listOf(ref(100, 3600, 10), B2Fixtures.delivered(101, 600, id = 1, tenths = 25), B2Fixtures.deliveredDetails(102, 600))
+        val m = PumpHistoryMemory(pumpHash = HASH, records = recs, contiguousTo = 102)
+        val events = B2Fixtures.build(m)
+        assertTrue((events.events.single() as BolusEvent).timeFromDelivery)
+        var span: Pair<Long, Long>? = null
+        PumpBtBridge.loadRows = { _, from, to -> span = from to to; emptyList() }
+        PumpBtBridge.loadByKeys = { _, _ -> emptyList() }
+        PumpBtBridge.journalRows(app, m, events, ZONE)
+        assertEquals(ms(10, 0) to ms(10, 10) + 90_000L, span)
     }
 }

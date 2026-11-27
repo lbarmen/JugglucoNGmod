@@ -112,6 +112,10 @@ data class IntakeResult(
  * [CareLinkPoller] (what it did after parsing the answer), unchanged for the cloud:
  * - an answer older than the snapshot already taken writes nothing (critic 4c, C3; 4d, B1, C1) - SKIPPED, but the
  *   state still records the attempt and keeps a standing write failure (4d, N1; 4e, N5);
+ * - Bluetooth only (critic of the joints 1, C-1, N-3): no snapshot, or one older than the stored one - the events are
+ *   written without it, the basal writer is not called and the data time does not move (a long break the basal writer
+ *   closes itself by its gap rule on the next snapshot); a snapshot without the basal answer and not stopped - applied
+ *   (active insulin, reservoir, data time), the basal writer not called (one failed request is not a basal gap);
  * - the source went off while the cycle ran (signed out of CareLink / the Bluetooth source turned off) - nothing at all
  *   (critic 4c, N2);
  * - the writers each on their own and without cancellation: basal, journal, IoB plate (critic of the joints, C1, C3);
@@ -144,7 +148,8 @@ object CareLinkIntake {
 
     /**
      * One cycle of pump data: [events] (the last 24 h and what is to be caught up), [pump] - the snapshot (null - none
-     * this time: the basal writer sees a gap), [nowMs] - when it was read. Off the main thread, under [lock].
+     * this time: for the cloud the basal writer sees a gap, for Bluetooth it is not called), [nowMs] - when it was read.
+     * Off the main thread, under [lock].
      *
      * An exception instead of a result - the outcome is unknown, do not let the records go (critic B1, N2): a caller
      * cancelled while the writers ran gets a [kotlinx.coroutines.CancellationException] although the writers, the state
@@ -170,11 +175,16 @@ object CareLinkIntake {
         logDetail: String = "",
     ): IntakeResult {
         val store = CareLinkStateStore(app)
-        val stale = pump != null && CareLinkPumpNow.older(store.read().pumpNow, pump)
+        val older = pump != null && CareLinkPumpNow.older(store.read().pumpNow, pump)
+        // Bluetooth: an older snapshot drops only itself, its events are written (critic of the joints 1, N-3)
+        val bluetoothOlder = older && source == IntakeSource.BLUETOOTH
+        val stale = older && !bluetoothOlder
+        val snapshot = if (bluetoothOlder) null else pump
+        val dataAt = if (bluetoothOlder) null else dataAtMs
 
         // the source went off while this cycle ran: nothing more is written (critic 4c, N2)
         if (!active(app, source)) return IntakeResult(IntakeOutcome.SKIPPED, false, null, store.read())
-        val writes = if (stale) null else write(app, source, events, pump, nowMs, firstPoll)
+        val writes = if (stale) null else write(app, source, events, snapshot, nowMs, firstPoll)
         val writeError = writes?.error
         val outcome = when {
             writes == null -> IntakeOutcome.SKIPPED
@@ -183,7 +193,7 @@ object CareLinkIntake {
         }
         // an empty answer (no pump data, no boluses) gives the journal nothing to write: a clean run proves nothing
         // about it either (critic 4e, N5)
-        val nothingToWrite = stale || (pump == null && events.none { it.kind == ClKind.BOLUS && it.dose != null })
+        val nothingToWrite = stale || (snapshot == null && events.none { it.kind == ClKind.BOLUS && it.dose != null })
 
         // checked under the lock of the sign-out's clear(): its result must not bring the state back
         val after = store.updateIf({ active(app, source) }) { cur ->
@@ -197,16 +207,16 @@ object CareLinkIntake {
             cur.copy(
                 status = if (error == null) CareLinkStatus.OK else CareLinkStatus.ERROR,
                 lastPollAtMs = nowMs,
-                lastDataAtMs = listOfNotNull(cur.lastDataAtMs, dataAtMs).maxOrNull(),
+                lastDataAtMs = listOfNotNull(cur.lastDataAtMs, dataAt).maxOrNull(),
                 lastError = error,
-                pumpNow = CareLinkPumpNow.merge(cur.pumpNow, pump),
+                pumpNow = CareLinkPumpNow.merge(cur.pumpNow, snapshot),
             )
         } ?: return IntakeResult(outcome, outcome == IntakeOutcome.WRITTEN, writeError, store.read())
         if (source == IntakeSource.CLOUD && writeError == null && !stale) store.firstPollPending = false
         val what = if (source == IntakeSource.CLOUD) "poll" else "pump cycle"
         val detail = if (logDetail.isEmpty()) "" else " $logDetail"
         if (writeError == null) {
-            CareLinkLog.i("$what ok: first=$firstPoll events=${events.size} empty=${pump == null} stale=$stale$detail")
+            CareLinkLog.i("$what ok: first=$firstPoll events=${events.size} empty=${snapshot == null} stale=$older$detail")
         } else {
             CareLinkLog.w("$what written with an error: events=${events.size} error=${writeError.errorClass}$detail")
         }
@@ -245,7 +255,7 @@ object CareLinkIntake {
         var error: CareLinkError? = null
         var journalFailed = false
         try {
-            writeBasal(app, pump, now)
+            if (basalCalled(source, pump)) writeBasal(app, pump, now)
         } catch (t: Throwable) {
             CareLinkLog.w("$tag: basal not written (${t.javaClass.simpleName})")
             error = CareLinkError(CareLinkErrorKind.WRITE, 0, t.javaClass.simpleName)
@@ -266,6 +276,13 @@ object CareLinkIntake {
         }
         Writes(error, journalFailed)
     }
+
+    /**
+     * The basal writer gets this cycle: the cloud always (its empty answer is a gap); Bluetooth only a snapshot with the
+     * basal answer or a stop (critic of the joints 1, C-1).
+     */
+    private fun basalCalled(source: IntakeSource, pump: PumpNow?): Boolean =
+        source == IntakeSource.CLOUD || (pump != null && (pump.basalKnown || pump.suspended == true))
 
     /** Back to defaults (tests). */
     internal fun resetForTest() {

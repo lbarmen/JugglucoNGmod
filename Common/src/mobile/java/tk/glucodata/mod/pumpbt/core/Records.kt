@@ -256,12 +256,17 @@ data class TherapyAlgorithmStates(
     }
 }
 
-/** Active basal rate and a running temporary basal, if any. Rates: null - special value (no value). */
+/**
+ * Active basal rate and a running temporary basal, if any. Rates: null - special value (no value). [tempBasalValue] -
+ * the temporary basal's adjustment, in the unit of [tempBasalType] (IDD TBR type): [TBR_ABSOLUTE] - U/h,
+ * [TBR_RELATIVE] - percent of the normal rate; another type - not known (critic of the joints 1, B-1).
+ */
 data class ActiveBasalRate(
     val profileNumber: Int,
     val unitsPerHour: Double?,
-    val tempBasalUnitsPerHour: Double?,
+    val tempBasalValue: Double?,
     val tempBasalRemainingMinutes: Int?,
+    val tempBasalType: Int? = null,
 ) {
     companion object {
         fun parse(data: ByteArray): ActiveBasalRate {
@@ -273,8 +278,9 @@ data class ActiveBasalRate(
             val rate = r.float32OrNull()
             var temp: Double? = null
             var remaining: Int? = null
+            var type: Int? = null
             if (flags and 0x01 != 0) {
-                r.u8() // TBR type
+                type = r.u8()
                 temp = r.float32OrNull()
                 r.u16() // programmed duration
                 remaining = r.u16()
@@ -282,8 +288,14 @@ data class ActiveBasalRate(
             if (flags and 0x02 != 0) r.u8()
             if (flags and 0x04 != 0) r.u8()
             r.expectEnd()
-            return ActiveBasalRate(profile, rate, temp, remaining)
+            return ActiveBasalRate(profile, rate, temp, remaining, type)
         }
+
+        /** IDD TBR type: the adjustment is an absolute rate, U/h. */
+        const val TBR_ABSOLUTE = 0x33
+
+        /** IDD TBR type: the adjustment is a percentage of the normal rate. */
+        const val TBR_RELATIVE = 0x3C
     }
 }
 

@@ -52,6 +52,8 @@ import tk.glucodata.mod.carelink.ModCareLinkStarter
 import tk.glucodata.mod.carelink.PollReason
 import tk.glucodata.mod.carelink.PumpNow
 import tk.glucodata.mod.carelink.PumpSourceSwitch
+import tk.glucodata.mod.pumpbt.PumpBtBridge
+import tk.glucodata.mod.pumpbt.core.PumpCycle
 import java.util.Collections
 import javax.crypto.KeyGenerator
 
@@ -490,14 +492,80 @@ class CareLinkIntakeTest {
     }
 
     @Test
-    fun anOlderSnapshotIsSkipped() {
+    fun anOlderBluetoothSnapshotDropsOnlyItself() {
+        // critic of the joints 1, N-3: the stored snapshot may be the cloud's (server time) or one from before the phone's
+        // clock went back - the doses of Bluetooth are written all the same, without the old snapshot
         bluetooth(true)
         seed(now - 60_000L)
-        val r = accept(pump = pump(now - 5 * 60_000L))
-        assertEquals(IntakeOutcome.SKIPPED, r.outcome)
-        assertFalse(r.journalAccepted)
-        assertTrue(journal.isEmpty() && basal.isEmpty())
+        val r = accept(pump = pump(now - 5 * 60_000L, iobUnits = 3.0))
+        assertEquals(IntakeOutcome.WRITTEN, r.outcome)
+        assertTrue(r.journalAccepted)
+        assertEquals(1, journal.size)
+        assertTrue("no basal writer", basal.isEmpty())
+        assertTrue("no IoB of the old snapshot", iob.all { it == null })
         assertEquals(now - 60_000L, store.read().pumpNow!!.dataAtMs)
+        assertEquals(0.9, store.read().pumpNow!!.iobUnits!!, 1e-9)
+        assertEquals("the data time stays", now - 60_000L, store.read().lastDataAtMs)
+    }
+
+    @Test
+    fun noBluetoothSnapshotWritesTheEventsWithoutTheBasalWriter() {
+        // critic of the joints 1, C-1: a cycle that read nothing of the pump's state
+        bluetooth(true)
+        seed(now - 10 * 60_000L)
+        val r = accept(pump = null)
+        assertEquals(IntakeOutcome.WRITTEN, r.outcome)
+        assertTrue(r.journalAccepted)
+        assertEquals(1, journal.size)
+        assertTrue("the basal writer is not called: one empty cycle is not a basal gap", basal.isEmpty())
+        assertEquals("the data time does not move", now - 10 * 60_000L, store.read().lastDataAtMs)
+        assertEquals(now - 10 * 60_000L, store.read().pumpNow!!.dataAtMs)
+    }
+
+    @Test
+    fun aBluetoothSnapshotWithoutTheBasalAnswerIsAppliedWithoutTheBasalWriter() {
+        bluetooth(true)
+        seed(now - 10 * 60_000L)
+        val partial = PumpNow(now - 60_000L, iobUnits = 2.2, iobAtMs = now - 60_000L, reservoirUnits = 99.0, suspended = false,
+            basalKnown = false)
+        val r = accept(pump = partial)
+        assertEquals(IntakeOutcome.WRITTEN, r.outcome)
+        assertTrue(basal.isEmpty())
+        assertEquals(now - 60_000L, store.read().lastDataAtMs)
+        assertEquals(2.2, store.read().pumpNow!!.iobUnits!!, 1e-9)
+        assertEquals(99.0, store.read().pumpNow!!.reservoirUnits!!, 1e-9)
+        assertEquals(2.2, iob.last()!!.iobUnits!!, 1e-9)
+        // unknown delivery state: the same
+        now += 60_000L
+        accept(pump = partial.copy(dataAtMs = now - 30_000L, suspended = null))
+        assertTrue(basal.isEmpty())
+        // stopped: the writer gets it (a stop is known without the basal answer)
+        now += 60_000L
+        accept(pump = partial.copy(dataAtMs = now - 30_000L, suspended = true))
+        assertEquals(true, basal.single()!!.suspended)
+        // with the basal answer: as before
+        now += 60_000L
+        accept(pump = pump(now))
+        assertEquals(2, basal.size)
+    }
+
+    @Test
+    fun cyclesOfTheLinkThroughTheBridgeCallTheBasalWriterOnlyWithTheBasal() {
+        // critic of the joints 1, C-1: good, cut before the basal answer, empty, good - the writer sees two snapshots
+        bluetooth(true, now - 60 * 60_000L)
+        fun cycle(atMs: Long) = PumpCycle(readAtMs = atMs, serialHash = "pump-a", therapyState = 0x55, iobUnits = 1.0,
+            basalRate = 0.8, basalRead = true)
+        fun feed(c: PumpCycle) = runBlocking {
+            CareLinkIntake.accept(app, IntakeSource.BLUETOOTH, emptyList(), PumpBtBridge.toPumpNow(c), c.readAtMs)
+        }
+        feed(cycle(now - 15 * 60_000L))
+        feed(cycle(now - 10 * 60_000L).copy(basalRead = false, basalRate = null))
+        assertEquals(now - 10 * 60_000L, store.read().lastDataAtMs)
+        feed(PumpCycle(readAtMs = now - 5 * 60_000L, serialHash = "pump-a"))
+        assertEquals("an empty cycle is no fresh data", now - 10 * 60_000L, store.read().lastDataAtMs)
+        feed(cycle(now))
+        assertEquals(listOf(now - 15 * 60_000L, now), basal.map { it!!.dataAtMs })
+        assertEquals(now, store.read().lastDataAtMs)
     }
 
     @Test

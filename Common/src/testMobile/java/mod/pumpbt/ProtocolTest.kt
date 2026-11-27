@@ -126,12 +126,30 @@ class ProtocolTest {
         val b = ActiveBasalRate.parse(hex("6a03000200000000"))
         assertEquals(2, b.profileNumber)
         assertEquals(0.0, b.unitsPerHour!!, 0.0)
-        assertNull(b.tempBasalUnitsPerHour)
+        assertNull(b.tempBasalValue)
+        assertNull(b.tempBasalType)
 
         // rate NRes, temp basal (flag 0x01): type, rate NaN, programmed 60 min, 30 min left
         val special = ActiveBasalRate.parse(hex("6a0301" + "02" + "00008000" + "33" + "ffff7f00" + "3c00" + "1e00"))
         assertNull(special.unitsPerHour)
-        assertNull(special.tempBasalUnitsPerHour)
+        assertNull(special.tempBasalValue)
+        assertEquals(ActiveBasalRate.TBR_ABSOLUTE, special.tempBasalType)
         assertEquals(30, special.tempBasalRemainingMinutes)
+    }
+
+    @Test
+    fun activeBasalKeepsTheTypeOfTheTemporaryBasal() {
+        // critic of the joints 1, B-1: the value is U/h (0x33) or percent (0x3C) - the type goes along (made-up bytes)
+        // normal 0.8 U/h (8e-1), absolute temporary 1.2 U/h (12e-1), 120 min programmed, 45 min left
+        val absolute = ActiveBasalRate.parse(hex("6a0301" + "01" + "080000ff" + "33" + "0c0000ff" + "7800" + "2d00"))
+        assertEquals(0.8, absolute.unitsPerHour!!, 1e-9)
+        assertEquals(ActiveBasalRate.TBR_ABSOLUTE, absolute.tempBasalType)
+        assertEquals(1.2, absolute.tempBasalValue!!, 1e-9)
+        assertEquals(45, absolute.tempBasalRemainingMinutes)
+        // percentage temporary 150 % (150e0)
+        val relative = ActiveBasalRate.parse(hex("6a0301" + "01" + "080000ff" + "3c" + "96000000" + "7800" + "2d00"))
+        assertEquals(ActiveBasalRate.TBR_RELATIVE, relative.tempBasalType)
+        assertEquals(150.0, relative.tempBasalValue!!, 1e-9)
+        assertEquals(0.8, relative.unitsPerHour!!, 1e-9)
     }
 }

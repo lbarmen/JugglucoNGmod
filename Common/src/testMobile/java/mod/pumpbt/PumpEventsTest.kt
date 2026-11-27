@@ -140,6 +140,34 @@ class PumpEventsTest {
     }
 
     @Test
+    fun aBolusDatedOnceKeepsItsTimeWhenAGapClosesOverAClockSet() {
+        // critic of the joints 1, N-2: 101 is missing, the next reference is "time set" (0x33) with the clock moved on by
+        // 65 min (10:15 by the old clock is 11:20). Dated back from it, the bolus would be 11:15; once 101 comes, forward
+        // from 100 it is 10:10 - a second key for a bolus already fed, a second row in the journal.
+        val sensor101 = raw(0xF00C, 101, 300, "0000" + "7800" + "0000" + "0000")
+        val records = listOf(
+            ref(100, 3600, 10),
+            programmed(102, 600, id = 4, tenths = 30),
+            programmedDetails(103, 600),
+            ref(104, 900, 11, 20, reason = 0x33),
+        )
+        val first = PumpEvents.build(records, null, contiguousTo = 100)
+        val later = PumpEvents.build(records + sensor101, null, contiguousTo = 104)
+        assertEquals(at(10, 10), boluses(later).single().at)
+        for (b in boluses(first)) {
+            assertTrue("issued at ${b.at}, later ${boluses(later).map { it.at }}", boluses(later).any { it.at == b.at && it.sequence == b.sequence })
+        }
+        // not issued meanwhile, only waits: no dose is lost - 101 lost for good (the memory went past it), dated back
+        assertEquals(listOf(102L), first.undated)
+        val lost = PumpEvents.build(records, null, contiguousTo = 104)
+        assertEquals(at(11, 15), boluses(lost).single().at)
+        assertTrue(lost.undated.isEmpty())
+        // a periodic reference dates back at once, as before
+        val periodic = PumpEvents.build(records.dropLast(1) + ref(104, 900, 10, 15), null, contiguousTo = 100)
+        assertEquals(at(10, 10), boluses(periodic).single().at)
+    }
+
+    @Test
     fun storedReferenceAndUndated() {
         val records = listOf(raw(0xF00A, 201, 60, "02"), raw(0xF00B, 202, 900, "01"))
         val stored = HistoryReferenceLocal(200, at(8, 0))

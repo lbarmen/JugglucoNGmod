@@ -19,7 +19,12 @@ sealed class HistoryEvent {
      * Pump clock reference (local time, no time zone). Later records count their
      * relative offset (seconds) from the latest reference.
      */
-    data class ReferenceTime(val time: LocalDateTime) : HistoryEvent()
+    data class ReferenceTime(val time: LocalDateTime, val reason: Int? = null) : HistoryEvent() {
+        companion object {
+            /** Recording reason "periodic"; others: 0x0F undetermined, 0x33 time set, 0x55 time lost. */
+            const val PERIODIC = 0x3C
+        }
+    }
 
     /**
      * Bolus programmed, part 1 (0x005A); same layout as [BolusDelivered]. Bolus type (IDS): 0x0F undetermined,
@@ -127,10 +132,10 @@ data class HistoryRecord(
 
         private fun parseEvent(type: Int, r: ByteReader): HistoryEvent = when (type) {
             0xF00E -> { // NGP reference time: recording reason + date-time
-                r.u8()
+                val reason = r.u8()
                 val time = readDateTime(r)
                 r.expectEnd()
-                HistoryEvent.ReferenceTime(time)
+                HistoryEvent.ReferenceTime(time, reason)
             }
             0x005A -> { // Bolus Programmed P1: id, type, fast, extended, duration
                 val id = r.u16()
