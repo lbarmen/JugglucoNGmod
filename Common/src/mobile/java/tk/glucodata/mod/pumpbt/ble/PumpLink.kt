@@ -362,6 +362,7 @@ internal class PumpLink(
         if (!pair) PumpBtAdapterName.restore(context, store, nameJournal)
         if (running) {
             pairMode = pair
+            update { restarted(it, pair) }
             journal("mode: " + if (pair) "pairing" else "waiting for the pump")
             if (!recoverScheduled) updateAdvertising()
             return
@@ -624,7 +625,7 @@ internal class PumpLink(
             val now = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1)
             val before = intent.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, -1)
             val address = device.address ?: return
-            journal("bond state of ${mac(address)}: ${bondName(before)} → ${bondName(now)}")
+            journal(bondLine(mac(address), before, now, intent.getIntExtra(EXTRA_BOND_REASON, -1)))
             if (!running) return
             val onServer = isLinked(device)
             val ours = address == pumpDevice?.address || address == pairingShownAddress ||
@@ -1830,12 +1831,7 @@ internal class PumpLink(
                         it.tempBasalType = v.tempBasalType
                         it.tempBasalMinutesLeft = v.tempBasalRemainingMinutes
                     }
-                    updateValues {
-                        it.copy(
-                            basalUnitsPerHour = v.unitsPerHour, basalRead = true,
-                            tempBasalUnitsPerHour = v.tempBasalValue, tempBasalRemainingMin = v.tempBasalRemainingMinutes,
-                        )
-                    }
+                    updateValues { withActiveBasal(it, v) }
                 }
                 StatusReaderOpcode.GET_TIME_IN_RANGE.responseOpcode -> {
                     val v = TimeInRange.parse(plain)
@@ -2213,6 +2209,43 @@ internal class PumpLink(
             BluetoothDevice.BOND_BONDED -> "bonded"
             else -> "unknown"
         }
+
+        /**
+         * The trial window's values after an active basal answer: the temporary basal in its own unit - U/h only for
+         * type 0x33, percent only for 0x3C (critic of the joints 1, P-N5: a percentage was shown as U/h); another type
+         * or a special value - neither.
+         */
+        fun withActiveBasal(values: PumpBtValues, v: ActiveBasalRate): PumpBtValues {
+            val temp = v.tempBasalValue?.takeIf { it.isFinite() && it >= 0.0 }
+            return values.copy(
+                basalUnitsPerHour = v.unitsPerHour, basalRead = true,
+                tempBasalUnitsPerHour = temp.takeIf { v.tempBasalType == ActiveBasalRate.TBR_ABSOLUTE },
+                tempBasalPercent = temp.takeIf { v.tempBasalType == ActiveBasalRate.TBR_RELATIVE }?.let { Math.round(it).toInt() },
+                tempBasalRemainingMin = v.tempBasalRemainingMinutes,
+            )
+        }
+
+        /**
+         * The hidden extra of ACTION_BOND_STATE_CHANGED with the system's reason (with BOND_NONE - why the bond went:
+         * failed authentication, removed, ...). Not in the public API: read as a plain int, -1 when absent.
+         */
+        const val EXTRA_BOND_REASON = "android.bluetooth.device.extra.REASON"
+
+        /**
+         * The journal line of a bond change: [device] as [mac] gives it (the address only in the detailed journal), the
+         * states and the system's reason as a number (-1 - none given). After the update of build 14 over 13 the pump's
+         * bond was gone without the person removing it: the reason shows who took it next time.
+         */
+        fun bondLine(device: String, before: Int, now: Int, reason: Int): String =
+            "bond state of $device: ${bondName(before)} → ${bondName(now)}, reason $reason"
+
+        /**
+         * [start] of a running link (the window's pairing over a link already waiting, at any stage - also
+         * PUMP_CONNECTED and LOST): the window sees the mode at once, and an earlier failed pairing is gone, as after a
+         * fresh start (critic B2b, second round, N-1).
+         */
+        fun restarted(state: PumpBtLinkState, pair: Boolean): PumpBtLinkState =
+            state.copy(pairMode = pair, pairingFailedAtMs = null)
     }
 }
 
