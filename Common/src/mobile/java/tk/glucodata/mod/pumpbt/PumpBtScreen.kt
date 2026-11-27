@@ -61,6 +61,8 @@ internal class PumpBtScreenActions(
     /** The trial's "Start pairing", and with the source on "Pair again" (a running link switches to pairing). */
     val onStartPairing: () -> Unit,
     val onWaitForPump: () -> Unit,
+    /** With the source on, during a pairing: back to waiting for the paired pump ([PumpBtSource.cancelPairing]). */
+    val onCancelPairing: () -> Unit,
     val onStop: () -> Unit,
     val onReadAgain: () -> Unit,
     val onLoadKey: () -> Unit,
@@ -399,6 +401,12 @@ private fun PumpSection(state: PumpBtUiState, source: PumpBtSourceState, control
                     Text(stringResource(R.string.mod_pumpbt_start_pairing))
                 }
                 Hint(stringResource(R.string.mod_pumpbt_start_pairing_hint))
+            }
+            if (controls.canCancelPairing) {
+                OutlinedButton(onClick = actions.onCancelPairing, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.mod_pumpbt_cancel_pairing))
+                }
+                Hint(stringResource(R.string.mod_pumpbt_cancel_pairing_hint))
             }
         }
         if (state.keyCrc == null) Warning(stringResource(R.string.mod_pumpbt_need_key))

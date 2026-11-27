@@ -95,6 +95,8 @@
     <!-- %1$s - "Mobile NNNNNN" -->
     <string name="mod_pumpbt_bond_lost_text">The pump is marked as paired, but it is no longer in the phone\'s Bluetooth list, so no data can come. Press Pair again, then on the pump choose Pair New Device and pick %1$s, and confirm the request on the phone (it may come as a notification). No request? Turn Bluetooth off and on; if that does not help, restart the phone.</string>
     <string name="mod_pumpbt_pair_again">Pair again</string>
+    <string name="mod_pumpbt_cancel_pairing">Cancel pairing</string>
+    <string name="mod_pumpbt_cancel_pairing_hint">The phone stops waiting for a new pairing and goes back to waiting for the already paired pump. Use it if the pump did not start the pairing.</string>
 
     <string name="mod_pumpbt_section_backfill">Pump history from before you turned it on</string>
     <!-- %1$d - boluses, %2$d - meals -->

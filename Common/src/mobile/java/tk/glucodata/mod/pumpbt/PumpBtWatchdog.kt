@@ -32,6 +32,7 @@ internal enum class WatchdogAction { NONE, ENSURE_ADVERTISING, READ_NOW, RECONNE
  * accepted - the last read is usually fresher (critic B2c, N2). [remindedAtMs] - the last time the first catch-up card
  * was told (its notification or a reminder). [noAdvertSeenAtMs] - the previous round saw the link running, neither
  * connected nor advertising (critic B2c, N1: the advertisement is mended only when two rounds in a row see it gone).
+ * [bondLostUntold] - the source marks "the phone forgot the pump", but its notification was not delivered.
  */
 internal data class WatchdogInput(
     val nowMs: Long,
@@ -41,6 +42,7 @@ internal data class WatchdogInput(
     val cardWaiting: Boolean,
     val remindedAtMs: Long?,
     val noAdvertSeenAtMs: Long? = null,
+    val bondLostUntold: Boolean = false,
 )
 
 /** The round's outcome: what to do, the marks to keep, whether to remind of the card and to check "no data". */
@@ -56,6 +58,11 @@ internal data class WatchdogDecision(
     val noAdvertSeenAtMs: Long? = null,
     /** How long nothing was read while connected (READ_NOW, RECONNECT: the link journal line). */
     val quietMs: Long? = null,
+    /**
+     * The bond is checked again ([PumpBtSource.recheckBond]): "the phone forgot the pump" was not delivered and no pump
+     * is connected - the check tells it again, and marks it told only when shown (critic of the joints 2, N-2).
+     */
+    val recheckBond: Boolean = false,
 )
 
 /**
@@ -109,15 +116,27 @@ internal object PumpBtWatchdogRules {
         if (i.cardWaiting) {
             val r = reminded
             when {
-                // the source told it when the card was made; a card seen first here (a new process) - from now
-                r == null || r > now -> reminded = now
+                // no mark: the card was never shown (notifications off when it came, the process died before its
+                // notification, an import cleared the marks) - told in this round, not a day later (critic of the
+                // joints 2, N-1); a reminder not shown keeps no mark and is tried again next round
+                r == null -> {
+                    remind = true
+                    reminded = now
+                }
+                // told "in the future" (the phone's clock set back): from now
+                r > now -> reminded = now
                 now - r >= REMIND_MS -> {
                     remind = true
                     reminded = now
                 }
             }
         }
-        return WatchdogDecision(action, seen, remind, reminded, checkNoData = true, keepArmed = true, noAdvertSeenAtMs = noAdvert, quietMs = quietMs)
+        // a connected pump is paired: its handshake clears the mark anyway
+        val recheck = i.bondLostUntold && (h == null || !h.running || !h.connected)
+        return WatchdogDecision(
+            action, seen, remind, reminded, checkNoData = true, keepArmed = true, noAdvertSeenAtMs = noAdvert, quietMs = quietMs,
+            recheckBond = recheck,
+        )
     }
 }
 
@@ -138,6 +157,12 @@ internal interface PumpBtWatchdogActions {
 
     /** The card's reminder; throws when it was not shown. */
     fun remind(context: Context)
+
+    /** "The phone forgot the pump" is marked, but was not delivered. */
+    fun bondLostUntold(): Boolean
+
+    /** The bond checked again (off the main thread, under the source's mutex; the link is not touched). */
+    fun recheckBond(context: Context)
 }
 
 /** The real source, "no data" of the CareLink notifier and our card notification. */
@@ -161,6 +186,10 @@ internal object SourceWatchdogActions : PumpBtWatchdogActions {
     override fun reconnect() = PumpBtSource.reconnect()
     override fun checkNoData(context: Context) = CareLinkNotifier.checkNoData(context)
     override fun remind(context: Context) = PumpBtNotifier.remindCard(context)
+    override fun bondLostUntold(): Boolean = PumpBtSource.bondLostUntold()
+    override fun recheckBond(context: Context) {
+        PumpBtSource.recheckBond(context)
+    }
 }
 
 /**
@@ -276,6 +305,11 @@ internal object PumpBtWatchdog {
                 cardWaiting = a.cardWaiting(),
                 remindedAtMs = remindedBefore,
                 noAdvertSeenAtMs = prefs.long(K_NO_ADVERT),
+                bondLostUntold = try {
+                    a.bondLostUntold()
+                } catch (t: Throwable) {
+                    false
+                },
             ),
         )
         if (!d.keepArmed) {
@@ -299,6 +333,13 @@ internal object PumpBtWatchdog {
                 a.reconnect()
             }
             WatchdogAction.NONE -> {}
+        }
+        if (d.recheckBond) {
+            try {
+                a.recheckBond(app)
+            } catch (t: Throwable) {
+                PumpBtLog.w("watchdog: bond not checked again (${t.javaClass.simpleName})")
+            }
         }
         if (d.checkNoData) {
             try {
@@ -327,19 +368,26 @@ internal object PumpBtWatchdog {
 
     /**
      * After an app update (the update receiver): the link, only when it does not run (critic B2c, N1: the starter's
-     * init may already have started it), upstream's service, the alarm.
+     * init may already have started it), upstream's service, the alarm. The journal line names which it was.
      */
     fun afterUpdate(context: Context) {
         val app = context.applicationContext
         if (!PumpSourceSwitch.bluetoothOn(app)) return
         PumpBtJournal.init(app)
-        PumpBtJournal.add("app updated: link and watchdog started again")
         val a = actions
-        try {
-            if (!a.linkRunning()) a.startLink(app)
+        // the line says what was done (critic of the joints 2, N-6): the link was running already, or started now
+        val line = try {
+            if (a.linkRunning()) {
+                "app updated: the link was running already, watchdog set again"
+            } else {
+                a.startLink(app)
+                "app updated: the link was not running - starting it, watchdog set again"
+            }
         } catch (t: Throwable) {
             PumpBtLog.w("link not started after the update (${t.javaClass.simpleName})")
+            "app updated: link not started (${t.javaClass.simpleName}), watchdog set again"
         }
+        PumpBtJournal.add(line)
         try {
             upstreamService(app)
         } catch (t: Throwable) {

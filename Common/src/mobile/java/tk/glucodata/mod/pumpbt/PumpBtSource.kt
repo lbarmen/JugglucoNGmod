@@ -160,6 +160,10 @@ internal object PumpBtSource {
     @Volatile
     internal var zone: () -> ZoneId = { ZoneId.systemDefault() }
 
+    /** The phone's bonded devices (address, name), null - not known; tests put their own (Robolectric's Bluetooth is off). */
+    @Volatile
+    internal var bondedDevices: (Context) -> List<Pair<String, String?>>? = { bondedFromAdapter(it) }
+
     /** The trial window's link state (until part B2b reads [state] itself). */
     @Volatile
     internal var onLinkState: ((PumpBtLinkState) -> Unit)? = null
@@ -222,15 +226,12 @@ internal object PumpBtSource {
         }
         watchBonds(c)
         return scope.launch {
-            try {
-                cycleLock.withLock {
-                    memoryLocked(c)
-                    if (memory?.backfill == BackfillState.WAITING) refreshCardLocked(c)
-                    checkBondedLocked(c)
-                }
-            } catch (t: Throwable) {
-                if (t is CancellationException) throw t
-                journal("source: history memory not loaded (${t.javaClass.simpleName})")
+            // each step on its own: a card that failed must not skip the bond check, and the journal names what failed
+            // (critic of the joints 2, N-3)
+            cycleLock.withLock {
+                startStep("history memory not loaded") { memoryLocked(c) }
+                if (memory?.backfill == BackfillState.WAITING) startStep("card not refreshed") { refreshCardLocked(c) }
+                startStep("bond not checked") { checkBondedLocked(c) }
             }
             onMain {
                 if (link?.isRunning == true) return@onMain
@@ -241,9 +242,20 @@ internal object PumpBtSource {
         }
     }
 
+    /** One step of [init]: a failure is journalled as [what] and the next step runs. */
+    private inline fun startStep(what: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (t: Throwable) {
+            if (t is CancellationException) throw t
+            journal("source: $what (${t.javaClass.simpleName})")
+        }
+    }
+
     /**
-     * "Paired" against the phone's bonded devices again (the window opened or came back; after every complete
-     * handshake): the "phone forgot the pump" mark goes as soon as the bond is there. The job is for tests.
+     * "Paired" against the phone's bonded devices again (the window opened or came back; a bond changed; the watchdog,
+     * while "the phone forgot the pump" was not delivered): the "phone forgot the pump" mark goes as soon as the bond
+     * is there, and an undelivered one is told again. Cheap, the link is not touched. The job is for tests.
      */
     fun recheckBond(context: Context): Job {
         val c = attach(context)
@@ -627,10 +639,35 @@ internal object PumpBtSource {
         afterLoad(c) { startLinkNow(c, pair) }
     }
 
+    /**
+     * "Cancel pairing" of the window with permanent operation on (critic of the joints 2, N-4): the link goes back to
+     * waiting for the paired pump (FE81), as after turning permanent operation on - a running link switches its mode
+     * ([PumpLink.start] publishes the pair mode), a stopped one is started waiting while the source is on. Nothing else
+     * changes ("paired", the lost-bond mark, the memory).
+     */
+    fun cancelPairing(context: Context) {
+        val c = attach(context)
+        afterLoad(c) {
+            if (link?.isRunning != true && !PumpSourceSwitch.bluetoothOn(c)) return@afterLoad
+            journal("pairing cancelled in the window: waiting for the paired pump")
+            startLinkNow(c, pair = false)
+        }
+    }
+
     /** The trial window's Stop. With the source on the watchdog starts the link again (waiting). */
     fun stopLink() = onMain { link?.stop() }
 
     val linkRunning: Boolean get() = link?.isRunning == true
+
+    /** "The phone forgot the pump" is marked, but its notification was not delivered (the watchdog checks again). */
+    fun bondLostUntold(): Boolean = _state.value.bondLost && store?.alerts?.bondLostTold == false
+
+    /**
+     * A pump's address is kept (the starter: someone who uses the source) - read only: the process's store when there is
+     * one, else the link state file or the old preferences, without making the file (critic of the joints 2, N-5).
+     */
+    fun pumpAddressKnown(context: Context): Boolean =
+        store?.pumpAddress?.isNotBlank() ?: PumpBtStore.addressKnown(context.applicationContext)
 
     /** A key database loaded by the trial window: it reaches the next link start (a running link keeps its key). */
     fun keyLoaded(result: PumpBtKey.Result.Ok) = onMain { key = result }
@@ -810,19 +847,10 @@ internal object PumpBtSource {
      * bonded device looks like a pump (the saved address may be a random one; critic B2a, C-4). Nothing changes while it
      * cannot be told (Bluetooth off, no permission, no address yet).
      */
-    @SuppressLint("MissingPermission")
     private fun checkBondedLocked(c: Context) {
         val s = store(c)
         val bonded: Boolean? = try {
-            val adapter = (c.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
-            if (adapter == null || !adapter.isEnabled) null
-            else PumpBtAlertRules.bondedFrom(s.pumpAddress, adapter.bondedDevices?.map { d ->
-                d.address to try {
-                    d.name
-                } catch (_: SecurityException) {
-                    null
-                }
-            } ?: emptyList())
+            bondedDevices(c)?.let { PumpBtAlertRules.bondedFrom(s.pumpAddress, it) }
         } catch (_: SecurityException) {
             null
         } catch (_: Exception) {
@@ -832,6 +860,20 @@ internal object PumpBtSource {
         applyBond(c, s.paired, PumpBtAlertRules.bondedAfterHandshake(bonded, bondTrusted))
     }
 
+    /** The phone's bonded devices (address, name); null - not known (no adapter, Bluetooth off). */
+    @SuppressLint("MissingPermission")
+    private fun bondedFromAdapter(c: Context): List<Pair<String, String?>>? {
+        val adapter = (c.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
+        if (adapter == null || !adapter.isEnabled) return null
+        return adapter.bondedDevices?.map { d ->
+            d.address to try {
+                d.name
+            } catch (_: SecurityException) {
+                null
+            }
+        } ?: emptyList()
+    }
+
     /** [checkBondedLocked] after the phone was asked: [bonded] - null when it could not be told. */
     private fun applyBond(c: Context, paired: Boolean, bonded: Boolean?) {
         val s = store(c)
@@ -839,9 +881,15 @@ internal object PumpBtSource {
         val check = PumpBtAlertRules.bond(paired, bonded, before.bondLostTold)
         var told = check.told
         if (check.alert) {
-            journal("the phone no longer has the paired pump among its bonded devices - pairing needed")
-            if (!PumpSourceSwitch.bluetoothOn(c) || !sendAlert(c, PumpBtAlert(PumpBtAlertKind.BOND_LOST))) told = before.bondLostTold
-        } else if (check.lost == false && before.bondLostTold) {
+            // the line once per loss in this process: the watchdog checks an undelivered loss again every round (N-2)
+            val seenBefore = _state.value.bondLost
+            if (!seenBefore) journal("the phone no longer has the paired pump among its bonded devices - pairing needed")
+            if (!PumpSourceSwitch.bluetoothOn(c) || !sendAlert(c, PumpBtAlert(PumpBtAlertKind.BOND_LOST))) {
+                told = before.bondLostTold
+            } else if (seenBefore) {
+                journal("the phone forgot the pump: told now")
+            }
+        } else if (check.lost == false && (before.bondLostTold || _state.value.bondLost)) {
             journal("the paired pump is among the phone's bonded devices again")
         }
         if (told != before.bondLostTold) s.alerts = before.copy(bondLostTold = told)
@@ -983,6 +1031,7 @@ internal object PumpBtSource {
         bondReceiver = null
         sensorBluetooth = { runCatching { Natives.getusebluetooth() }.getOrDefault(true) }
         zone = { ZoneId.systemDefault() }
+        bondedDevices = { bondedFromAdapter(it) }
         onLinkState = null
         _state.value = PumpBtSourceState()
     }

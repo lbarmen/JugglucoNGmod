@@ -81,6 +81,8 @@
     <string name="mod_pumpbt_bond_lost_title">Телефон забыл помпу</string>
     <string name="mod_pumpbt_bond_lost_text">Помпа отмечена как сопряжённая, но в списке Bluetooth телефона её больше нет — данные не придут. Нажми «Сопрячь заново», затем на помпе выбери «Сопряжение нового устройства» и %1$s, а на телефоне подтверди запрос (он может прийти уведомлением в шторке). Запроса нет — выключи и включи Bluetooth; не помогло — перезагрузи телефон.</string>
     <string name="mod_pumpbt_pair_again">Сопрячь заново</string>
+    <string name="mod_pumpbt_cancel_pairing">Отменить сопряжение</string>
+    <string name="mod_pumpbt_cancel_pairing_hint">Телефон перестанет ждать новое сопряжение и вернётся к ожиданию уже сопряжённой помпы. Нажми, если помпа сопряжение не начала.</string>
 
     <string name="mod_pumpbt_section_backfill">История помпы до включения</string>
     <string name="mod_pumpbt_backfill_found">До включения найдено: болюсов %1$d, приёмов еды %2$d</string>

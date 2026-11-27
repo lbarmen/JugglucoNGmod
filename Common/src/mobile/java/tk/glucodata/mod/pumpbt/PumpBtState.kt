@@ -165,6 +165,12 @@ internal data class PumpBtControls(
     val pairOffered: Boolean,
     /** The pairing button is pressable: everything there and no pairing going on. */
     val canPair: Boolean,
+    /**
+     * With the source on and a pairing going on: "Cancel pairing" - back to waiting for the paired pump (critic of the
+     * joints 2, N-4: a pairing the pump never starts would otherwise advertise for pairing until permanent operation is
+     * turned off).
+     */
+    val canCancelPairing: Boolean,
 )
 
 /**
@@ -172,7 +178,7 @@ internal data class PumpBtControls(
  * which buttons it allows. Pure functions (tested without Android).
  *
  * With "Permanent operation" on, the trial's Start and Stop are not offered: Stop would end the link and the watchdog
- * would start it again - the link stops only by turning permanent operation off.
+ * would start it again - the link stops only by turning permanent operation off; a pairing is left by "Cancel pairing".
  */
 internal object PumpBtWindow {
 
@@ -240,6 +246,7 @@ internal object PumpBtWindow {
             variantEditable = !on && !link.running,
             pairOffered = pairOffered,
             canPair = pairOffered && ready && !pairing(link),
+            canCancelPairing = on && pairing(link),
         )
     }
 
