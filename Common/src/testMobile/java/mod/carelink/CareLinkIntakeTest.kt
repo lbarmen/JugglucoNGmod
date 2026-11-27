@@ -5,9 +5,10 @@ import android.app.NotificationManager
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -22,9 +23,11 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.ConscryptMode
 import mod.carelink.CareLinkTestData.CARELINK_BASE
+import mod.carelink.CareLinkTestData.NO_NETWORK
 import mod.carelink.CareLinkTestData.TOKEN_URL
 import mod.carelink.CareLinkTestData.access
 import mod.carelink.CareLinkTestData.ok
+import mod.carelink.CareLinkTestData.status
 import tk.glucodata.drivers.api.ApiIobSnapshot
 import tk.glucodata.mod.carelink.AesGcmSessionCipher
 import tk.glucodata.mod.carelink.CareLinkAuth
@@ -97,11 +100,24 @@ class CareLinkIntakeTest {
     private fun accept(events: List<ClEvent> = listOf(bolus(now - 30 * 60_000L)), pump: PumpNow? = pump(now - 60_000L)) =
         runBlocking { CareLinkIntake.accept(app, IntakeSource.BLUETOOTH, events, pump, now) }
 
-    private fun bluetooth(on: Boolean, sinceMs: Long? = null) {
-        app.getSharedPreferences(PumpSourceSwitch.PREFS, 0).edit().apply {
-            putBoolean(PumpSourceSwitch.KEY_ON, on)
-            if (sinceMs != null) putLong(PumpSourceSwitch.KEY_ON_SINCE, sinceMs) else remove(PumpSourceSwitch.KEY_ON_SINCE)
-        }.commit()
+    private fun bluetooth(on: Boolean, sinceMs: Long = now) = PumpSourceSwitch.set(app, on, sinceMs)
+
+    /** A made-up cloud answer: one finished 2 U bolus, pump data 3 min before now, reservoir 150 U. */
+    private fun answer() = """
+        {"metadata": {"kind": "BLENGP", "clientDateTime": "2027-01-15T11:00:00.000+03:00"},
+         "patientData": {
+           "lastMedicalDeviceDataUpdateServerTime": ${now - 3 * 60_000L},
+           "activeInsulin": {"amount": 1.5}, "reservoirRemainingUnits": 150.0, "pumpBatteryLevelPercent": 60,
+           "basal": {"basalRate": 0.8},
+           "markers": [{"type": "INSULIN", "timestamp": "2027-01-15T10:30:00",
+                        "data": {"dataValues": {"programmedFastAmount": 2.0, "deliveredFastAmount": 2.0, "completed": true}}}]
+         }}
+    """.trimIndent()
+
+    /** A live CareLink session with polling on. */
+    private fun signedIn() {
+        CareLinkVault.save(app, session())
+        CareLinkSettings(app).enabled = true
     }
 
     /** Data a source wrote before: an IoB plate, a data time, a snapshot. */
@@ -124,6 +140,7 @@ class CareLinkIntakeTest {
         CareLinkIntake.closeBasal = { closed++ }
         CareLinkVault.cipher = AesGcmSessionCipher(keyProvider = { key })
         CareLinkVault.clear(app)
+        PumpSourceSwitch.set(app, false, now)
     }
 
     @After
@@ -140,23 +157,30 @@ class CareLinkIntakeTest {
     @Test
     fun twoCyclesAtOnceTakeTurns() {
         // the writers' memory is made for one writer: the second cycle waits until the first has finished all three
+        // (a latch, not a pause: the first, inside its journal write, waits for the second to come in - which it must not
+        // before the first lets the lock go)
         bluetooth(true)
         val order = Collections.synchronizedList(mutableListOf<String>())
         val inFirst = CompletableDeferred<Unit>()
-        val release = CompletableDeferred<Unit>()
-        CareLinkIntake.writeBasal = { _, p, _ -> order += "basal ${p!!.reservoirUnits}" }
+        val secondCalling = CompletableDeferred<Unit>()
+        val secondIn = CompletableDeferred<Unit>()
+        var cameIn = false
+        CareLinkIntake.writeBasal = { _, p, _ ->
+            order += "basal ${p!!.reservoirUnits}"
+            if (p.reservoirUnits == 2.0) secondIn.complete(Unit)
+        }
         CareLinkIntake.writeJournal = { _, e, _ ->
             order += "journal in ${e.size}"
             if (e.size == 1) {
                 inFirst.complete(Unit)
-                release.await()
+                secondCalling.await()
+                cameIn = withTimeoutOrNull(1_000) { secondIn.await() } != null
             }
             order += "journal out ${e.size}"
         }
         CareLinkIntake.publishIob = { p -> order += "iob ${p!!.reservoirUnits}" }
         val first = pump(now - 60_000L).copy(reservoirUnits = 1.0)
         val second = pump(now).copy(reservoirUnits = 2.0)
-        var whileFirst: List<String> = emptyList()
         val results = runBlocking {
             withTimeout(10_000) {
                 val a = async(Dispatchers.IO) {
@@ -164,16 +188,14 @@ class CareLinkIntakeTest {
                 }
                 inFirst.await()
                 val b = async(Dispatchers.IO) {
+                    secondCalling.complete(Unit)
                     CareLinkIntake.accept(app, IntakeSource.BLUETOOTH,
                         listOf(bolus(now - 60_000L), bolus(now - 30_000L, 1.0)), second, now)
                 }
-                delay(300)
-                whileFirst = order.toList()
-                release.complete(Unit)
                 listOf(a.await(), b.await())
             }
         }
-        assertEquals("the second waits", listOf("basal 1.0", "journal in 1"), whileFirst)
+        assertFalse("the second came in while the first wrote", cameIn)
         assertEquals(
             listOf("basal 1.0", "journal in 1", "journal out 1", "iob 1.0", "basal 2.0", "journal in 2", "journal out 2", "iob 2.0"),
             order.toList(),
@@ -281,16 +303,190 @@ class CareLinkIntakeTest {
         assertFalse(r.journalAccepted)
         assertTrue(journal.isEmpty() && basal.isEmpty() && iob.isEmpty())
         assertEquals(before, store.read())
-        // turned off while the writers ran: the journal row stands (accepted), but no IoB and no state after it
+        // turned off while the writers ran: the journal row stands (accepted - the memory lets its records go), but no
+        // IoB, no state and no notification check after it (the "sign in again" mark, which afterPoll would clear, stays)
         PumpSourceSwitch.override = null
+        store.needLoginShown = true
         CareLinkIntake.writeBasal = { _, p, _ ->
             basal += p
             bluetooth(false)
         }
         val during = accept()
         assertEquals(IntakeOutcome.WRITTEN, during.outcome)
+        assertTrue(during.journalAccepted)
+        assertNull(during.error)
+        assertEquals(1, journal.size)
         assertTrue(iob.isEmpty())
+        assertEquals(before, during.state)
         assertEquals(before, store.read())
+        assertTrue("afterPoll did not run", store.needLoginShown)
+    }
+
+    @Test
+    fun theSwitchIsAFileThatASettingsImportDoesNotTouch() {
+        // critic B1, C1: upstream's settings import clears every shared_prefs file its export does not carry
+        bluetooth(true, now - 3_600_000L)
+        app.getSharedPreferences("mod_pumpbt", 0).edit().putBoolean("source_on", false).commit()
+        for (name in listOf("mod_pumpbt", CareLinkSettings.PREFS, CareLinkStateStore.PREFS)) {
+            app.getSharedPreferences(name, 0).edit().clear().commit()
+        }
+        assertTrue(PumpSourceSwitch.bluetoothOn(app))
+        assertEquals(now - 3_600_000L, PumpSourceSwitch.onSinceMs(app))
+        // turning on again keeps the moment; off - no moment; on again - a new one
+        bluetooth(true, now)
+        assertEquals(now - 3_600_000L, PumpSourceSwitch.onSinceMs(app))
+        bluetooth(false)
+        assertFalse(PumpSourceSwitch.bluetoothOn(app))
+        assertNull(PumpSourceSwitch.onSinceMs(app))
+        bluetooth(true, now)
+        assertEquals(now, PumpSourceSwitch.onSinceMs(app))
+        assertTrue(java.io.File(app.noBackupFilesDir, "mod-pumpbt/source_on").isFile)
+    }
+
+    @Test
+    fun bluetoothLeavesTheCloudsFirstPollAndAlarmsAlone() {
+        // a live session: arm would at least remove the chain ("cancel") - the Bluetooth intake does not call it, nor
+        // clear the cloud's "first poll pending"
+        signedIn()
+        bluetooth(true)
+        store.firstPollPending = true
+        work.log.clear()
+        assertEquals(IntakeOutcome.WRITTEN, accept().outcome)
+        assertTrue(store.firstPollPending)
+        assertTrue(work.log.toString(), work.log.isEmpty())
+    }
+
+    @Test
+    fun aCloudPollAndABluetoothCycleTakeTurns() {
+        // one lock for both: the cycle waits for the poll's writers (a latch, as above); the Bluetooth source turned
+        // on while the poll wrote - the poll publishes no IoB and stores nothing, the cycle writes after it
+        signedIn()
+        net.on(dm, ok(answer()))
+        val order = Collections.synchronizedList(mutableListOf<String>())
+        val inPoll = CompletableDeferred<Unit>()
+        val cycleCalling = CompletableDeferred<Unit>()
+        val cycleIn = CompletableDeferred<Unit>()
+        var cameIn = false
+        CareLinkIntake.writeBasal = { _, p, _ ->
+            order += "basal ${p?.reservoirUnits}"
+            if (p?.reservoirUnits == 2.0) cycleIn.complete(Unit)
+        }
+        CareLinkIntake.writeJournal = { _, e, _ ->
+            val polling = !inPoll.isCompleted
+            order += if (polling) "journal poll" else "journal cycle"
+            if (polling) {
+                inPoll.complete(Unit)
+                cycleCalling.await()
+                cameIn = withTimeoutOrNull(1_000) { cycleIn.await() } != null
+            }
+        }
+        CareLinkIntake.publishIob = { p -> order += "iob ${p?.reservoirUnits}" }
+        val (polled, cycle) = runBlocking {
+            withTimeout(10_000) {
+                val a = async(Dispatchers.IO) { CareLinkPoller.poll(app, PollReason.MANUAL) }
+                inPoll.await()
+                bluetooth(true)
+                val b = async(Dispatchers.IO) {
+                    cycleCalling.complete(Unit)
+                    CareLinkIntake.accept(app, IntakeSource.BLUETOOTH, listOf(bolus(now - 60_000L)),
+                        pump(now - 60_000L).copy(reservoirUnits = 2.0), now)
+                }
+                a.await() to b.await()
+            }
+        }
+        assertFalse("the cycle came in while the poll wrote", cameIn)
+        assertEquals(listOf("basal 150.0", "journal poll", "basal 2.0", "journal cycle", "iob 2.0"), order.toList())
+        assertEquals(CareLinkState(), polled)
+        assertEquals(IntakeOutcome.WRITTEN, cycle.outcome)
+        assertEquals(2.0, store.read().pumpNow!!.reservoirUnits!!, 1e-9)
+        assertEquals(now - 60_000L, store.read().lastDataAtMs)
+    }
+
+    @Test
+    fun aPollRunningWhenBluetoothIsTurnedOnRecordsNoFailure() {
+        // the key refused, renewed; meanwhile the source is turned on; then no network: failed() writes nothing
+        signedIn()
+        seed(now - 10 * 60_000L)
+        val before = store.read()
+        net.on(dm, status(401), NO_NETWORK)
+        net.on(TOKEN_URL, ok("""{"access_token": "${access(now / 1000 + 10_800)}", "expires_in": 10800}"""))
+        net.onForm = { bluetooth(true) }
+        val s = runBlocking { CareLinkPoller.poll(app, PollReason.ALARM) }
+        assertEquals(listOf("JSON $dm", "FORM $TOKEN_URL refresh_token", "JSON $dm"), net.calls)
+        assertEquals(before, s)
+        assertEquals(before, store.read())
+    }
+
+    @Test
+    fun aPollRunningWhenBluetoothIsTurnedOnAsksNoSignIn() {
+        // the renewal says invalid_grant after the source was turned on: no "sign in again", the basal and the IoB
+        // plate stay, the state stays
+        signedIn()
+        seed(now - 10 * 60_000L)
+        CareLinkIob.publish(pump(now - 60_000L))
+        val before = store.read()
+        net.on(dm, status(401))
+        net.on(TOKEN_URL, status(400, """{"error": "invalid_grant", "error_description": "made-up"}"""))
+        net.onForm = { bluetooth(true) }
+        val s = runBlocking { CareLinkPoller.poll(app, PollReason.MANUAL) }
+        assertEquals(before, s)
+        assertEquals(before, store.read())
+        assertEquals(0, closed)
+        assertNotNull(ApiIobSnapshot.fresh(now))
+        assertNull(shown(CareLinkNotifier.ID_NEED_LOGIN))
+        assertFalse(work.log.contains("cancel"))
+    }
+
+    @Test
+    fun aPollWhoseAnswerCameAfterBluetoothWasTurnedOnWritesNothing() {
+        // the answer parsed after the source was turned on: the cloud intake is off (SKIPPED), nothing is written
+        signedIn()
+        seed(now - 10 * 60_000L)
+        val before = store.read()
+        net.on(dm, ok(answer()))
+        CareLinkPoller.zone = {
+            bluetooth(true)
+            java.time.ZoneOffset.ofHours(5)
+        }
+        val s = runBlocking { CareLinkPoller.poll(app, PollReason.MANUAL) }
+        assertEquals(1, net.calls.size)
+        assertTrue(journal.isEmpty() && basal.isEmpty() && iob.isEmpty())
+        assertEquals(before, s)
+        assertEquals(before, store.read())
+    }
+
+    @Test
+    fun aCallerCancelledDuringTheJournalWriteGetsAnExceptionAfterTheWrites() {
+        // critic B1, N2: the writers are not cancelled and finish with the state; the caller gets an exception instead
+        // of the result - "outcome unknown, do not let the records go" (the KDoc of accept)
+        bluetooth(true)
+        val inJournal = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        CareLinkIntake.writeJournal = { _, e, _ ->
+            inJournal.complete(Unit)
+            release.await()
+            journal += e
+        }
+        var got: Result<tk.glucodata.mod.carelink.IntakeResult>? = null
+        runBlocking {
+            withTimeout(10_000) {
+                val job = launch(Dispatchers.IO) {
+                    got = runCatching {
+                        CareLinkIntake.accept(app, IntakeSource.BLUETOOTH, listOf(bolus(now - 60_000L)), pump(now - 60_000L), now)
+                    }
+                }
+                inJournal.await()
+                job.cancel()
+                release.complete(Unit)
+                job.join()
+            }
+        }
+        val error = got!!.exceptionOrNull()
+        assertTrue("an exception, not a result: $got", error is kotlinx.coroutines.CancellationException)
+        assertEquals("the journal write ran to its end", 1, journal.size)
+        assertEquals("the IoB after it too", 1, iob.size)
+        assertEquals("the state was stored", now - 60_000L, store.read().lastDataAtMs)
+        assertFalse(CareLinkIntake.lock.isLocked)
     }
 
     @Test

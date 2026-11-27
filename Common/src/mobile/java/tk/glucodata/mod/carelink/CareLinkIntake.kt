@@ -6,27 +6,32 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
 
 /**
  * JugglucoNGmod, pump data (series "pump over Bluetooth", part B1): is the Bluetooth pump source on. The source (part
- * B2a) writes [KEY_ON] and [KEY_ON_SINCE] in the preferences [PREFS] (the trial's file: `name_digits`, `name_variant`,
- * `paired`, `pump_address` live there too). While it is on, the CareLink cloud is silent (series brief, decision 17):
- * no poll on any of its five entries, no alarms or work, no "sign in again", and a sign-out touches nothing of the pump
- * data; "no pump data" and "pump records are not saved" are the Bluetooth source's then.
+ * B2a) turns it on and off with [set]. While it is on, the CareLink cloud is silent (series brief, decision 17): no poll
+ * on any of its five entries, no alarms or work, no "sign in again", and a sign-out touches nothing of the pump data;
+ * "no pump data" and "pump records are not saved" are the Bluetooth source's then.
+ *
+ * A file, not a preference (critic B1, C1): upstream's settings import clears every shared_prefs file its export does
+ * not carry (SettingsExporter.importSharedPreferences) and writes back old values of those it does - either would turn
+ * the source off silently or bring back an old "on". `noBackupFilesDir/mod-pumpbt/source_on`: there - on; inside - the
+ * wall-clock time it was turned on (ms), as the cloud's polling flag (CareLinkSettings.enabled).
  */
 object PumpSourceSwitch {
-    const val PREFS = "mod_pumpbt"
-    const val KEY_ON = "source_on"
-    const val KEY_ON_SINCE = "source_on_since"
+    private const val DIR = "mod-pumpbt"
+    private const val FILE = "source_on"
 
-    /** Tests: a fixed answer instead of the preference. */
+    /** Tests: a fixed answer instead of the file. */
     @Volatile
     internal var override: ((Context) -> Boolean)? = null
 
     fun bluetoothOn(context: Context): Boolean {
         override?.let { return it(context) }
         return try {
-            prefs(context).getBoolean(KEY_ON, false)
+            file(context).exists()
         } catch (t: Throwable) {
             CareLinkLog.w("pump source switch not read (${t.javaClass.simpleName})")
             false
@@ -35,21 +40,50 @@ object PumpSourceSwitch {
 
     /**
      * When the source was turned on (wall clock, ms); null - off or unknown. The base of "no pump data" while no data
-     * has come since then.
+     * has come since then. The time written in the file; an unreadable one - the file's own time.
      */
     fun onSinceMs(context: Context): Long? {
         if (!bluetoothOn(context)) return null
         return try {
-            val p = prefs(context)
-            if (p.contains(KEY_ON_SINCE)) p.getLong(KEY_ON_SINCE, 0L).takeIf { it > 0L } else null
+            val f = file(context)
+            if (!f.isFile) return null
+            f.readText(Charsets.UTF_8).trim().toLongOrNull()?.takeIf { it > 0L }
+                ?: f.lastModified().takeIf { it > 0L }
         } catch (t: Throwable) {
             CareLinkLog.w("pump source time not read (${t.javaClass.simpleName})")
             null
         }
     }
 
-    private fun prefs(context: Context) =
-        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    /**
+     * On ([nowMs] - the moment, kept while it stays on: turning on again does not move it) or off. Written at once
+     * (.tmp + rename); a failure is logged, not thrown.
+     */
+    fun set(context: Context, on: Boolean, nowMs: Long) {
+        try {
+            val f = file(context)
+            if (!on) {
+                if (f.exists() && !f.delete()) CareLinkLog.w("pump source flag not removed")
+                return
+            }
+            if (f.isFile) return
+            val dir = f.parentFile ?: return
+            dir.mkdirs()
+            val tmp = File(dir, "$FILE.tmp")
+            FileOutputStream(tmp).use { out ->
+                out.write(nowMs.toString().toByteArray(Charsets.UTF_8))
+                out.fd.sync()
+            }
+            if (!tmp.renameTo(f)) {
+                f.delete()
+                if (!tmp.renameTo(f)) CareLinkLog.w("pump source flag not moved into place")
+            }
+        } catch (t: Throwable) {
+            CareLinkLog.w("pump source flag not changed (${t.javaClass.simpleName})")
+        }
+    }
+
+    private fun file(context: Context) = File(File(context.applicationContext.noBackupFilesDir, DIR), FILE)
 }
 
 /** Where the pump data of one [CareLinkIntake.accept] comes from. */
@@ -111,6 +145,11 @@ object CareLinkIntake {
     /**
      * One cycle of pump data: [events] (the last 24 h and what is to be caught up), [pump] - the snapshot (null - none
      * this time: the basal writer sees a gap), [nowMs] - when it was read. Off the main thread, under [lock].
+     *
+     * An exception instead of a result - the outcome is unknown, do not let the records go (critic B1, N2): a caller
+     * cancelled while the writers ran gets a [kotlinx.coroutines.CancellationException] although the writers, the state
+     * and the notifications finished (the writers are not cancelled; `withContext` drops the result of a cancelled
+     * caller). Sending the same events again is safe: the journal writer updates its rows by key.
      */
     suspend fun accept(
         context: Context, source: IntakeSource, events: List<ClEvent>, pump: PumpNow?,
