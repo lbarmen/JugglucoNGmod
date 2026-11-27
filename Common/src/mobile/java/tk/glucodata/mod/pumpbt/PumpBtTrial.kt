@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import tk.glucodata.mod.pumpbt.ble.PumpBtAdapterName
 import tk.glucodata.mod.pumpbt.ble.PumpLink
+import tk.glucodata.mod.pumpbt.core.PumpCycle
 import java.io.File
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -22,7 +23,7 @@ import java.time.format.DateTimeFormatter
  * JugglucoNGmod, pump over Bluetooth (trial): one per process. Holds the link to the pump and the state the trial
  * window shows; the window only watches [state] and presses buttons. Closing the window or turning the screen off
  * does not end the link (upstream's sensor service keeps the process); Stop or the death of the process do. No own
- * background service, no wakelock. All calls on the main thread.
+ * background service; only the link's short wake holds (handshake, read cycle). All calls on the main thread.
  */
 internal object PumpBtTrial {
 
@@ -35,6 +36,8 @@ internal object PumpBtTrial {
     private var link: PumpLink? = null
     private var key: PumpBtKey.Result.Ok? = null
     private var linkKeyHex: String? = null
+    /** The last history record read without a gap, this process only (as before); null - from the oldest record. */
+    private var historySeq: Long? = null
 
     private val journal: (String) -> Unit = { PumpBtJournal.add(it) }
 
@@ -97,11 +100,17 @@ internal object PumpBtTrial {
         }
         // a key loaded since the link was made reaches a new link (a running link keeps its key until Stop)
         if (link?.isRunning != true && linkKeyHex != k.hex) link = null
-        val l = link ?: PumpLink(c, k.db, s, journal, { PumpBtLog.i(it) }) { ls -> _state.update { it.copy(link = ls) } }
-            .also {
-                link = it
-                linkKeyHex = k.hex
-            }
+        val l = link ?: PumpLink(
+            c, k.db, s,
+            journal = journal,
+            logcat = { PumpBtLog.i(it) },
+            publish = { ls -> _state.update { it.copy(link = ls) } },
+            historyFrom = { historySeq?.plus(1) },
+            onCycle = ::cycleRead,
+        ).also {
+            link = it
+            linkKeyHex = k.hex
+        }
         PumpBtLog.i("trial start (" + (if (pair) "pairing" else "waiting") + ")")
         l.start(pair)
     }
@@ -111,7 +120,18 @@ internal object PumpBtTrial {
     }
 
     fun readAgain() {
-        link?.readAgain()
+        link?.readNow()
+    }
+
+    /**
+     * The trial's history number (until the history memory of the source takes over): only in process memory, moved
+     * to what came without a gap; a pump whose newest record is below it (another pump) starts from its oldest again.
+     */
+    private fun cycleRead(cycle: PumpCycle) {
+        val h = cycle.history
+        val seq = historySeq
+        if (seq != null && h.newestOnPump != null && h.newestOnPump < seq) historySeq = null
+        h.contiguousTo?.let { to -> historySeq = maxOf(historySeq ?: Long.MIN_VALUE, to) }
     }
 
     fun setVariant(v: PumpBtNameVariant) {
