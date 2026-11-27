@@ -12,7 +12,6 @@ import tk.glucodata.Natives
 import tk.glucodata.data.HistoryDatabase
 import tk.glucodata.data.journal.JournalDao
 import tk.glucodata.data.journal.JournalEntryEntity
-import tk.glucodata.mod.carelink.CareLinkAuth
 import tk.glucodata.mod.carelink.CareLinkClock
 import tk.glucodata.mod.carelink.CareLinkBasalWriter
 import tk.glucodata.mod.carelink.CareLinkSeenStore
@@ -50,7 +49,6 @@ internal object CareLinkJournalTestEnv {
         // Notify. Fired between two tests, the application has no base context: Notify's class init fails for the rest
         // of the test JVM, and their later tests go red (MOD sync 44164852207: 88). Loaded here, while the context lives.
         Class.forName("tk.glucodata.Notify", true, Applic::class.java.classLoader)
-        CareLinkAuth.resetForTest()
         CareLinkClock.now = now
         CareLinkBasalWriter.zone = { java.time.ZoneOffset.UTC }
         runBlocking {
@@ -61,7 +59,7 @@ internal object CareLinkJournalTestEnv {
     }
 
     fun tearDown() {
-        CareLinkAuth.resetForTest()
+        CareLinkClock.now = { System.currentTimeMillis() }
         CareLinkBasalWriter.zone = { java.time.ZoneId.systemDefault() }
     }
 

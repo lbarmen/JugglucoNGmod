@@ -34,8 +34,6 @@ import tk.glucodata.drivers.api.ApiIobSnapshot
 import tk.glucodata.mod.carelink.CareLinkClock
 import tk.glucodata.mod.carelink.CareLinkIntake
 import tk.glucodata.mod.carelink.CareLinkIob
-import tk.glucodata.mod.carelink.CareLinkPoller
-import tk.glucodata.mod.carelink.CareLinkScheduler
 import tk.glucodata.mod.carelink.ClEvent
 import tk.glucodata.mod.carelink.ClKind
 import tk.glucodata.mod.carelink.IntakeOutcome
@@ -99,8 +97,7 @@ class PumpBtSourceTest {
         dir.deleteRecursively()
         PumpBtSource.resetForTest()
         PumpBtBridge.resetForTest()
-        CareLinkPoller.resetForTest()
-        CareLinkScheduler.resetForTest()
+        CareLinkIntake.resetForTest()
         PumpSourceSwitch.override = null
         ApiIobSnapshot.clear()
         CareLinkClock.now = { now }
@@ -129,8 +126,7 @@ class PumpBtSourceTest {
     fun tearDown() {
         PumpBtSource.resetForTest()
         PumpBtBridge.resetForTest()
-        CareLinkPoller.resetForTest()
-        CareLinkScheduler.resetForTest()
+        CareLinkIntake.resetForTest()
         PumpSourceSwitch.set(app, false, now)
         CareLinkClock.now = { System.currentTimeMillis() }
         ApiIobSnapshot.clear()

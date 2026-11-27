@@ -438,10 +438,7 @@ def check_xml_drawable_constructors(apk):
 MOD_STARTER = 'tk.glucodata.mod.carelink.ModCareLinkStarter'
 # Every CareLink component of Common/src/mobileMod/AndroidManifest.xml (joint branch, critic of part 6, C6-1: the
 # manifest is merged by hand when CareLink and the watch block meet - a lost receiver would stop the pump data quietly)
-MOD_CARELINK_COMPONENTS = [MOD_STARTER, 'tk.glucodata.mod.carelink.CareLinkLoginActivity',
-                           'tk.glucodata.mod.carelink.CareLinkActivity',
-                           'tk.glucodata.mod.carelink.CareLinkAlarmReceiver',
-                           'tk.glucodata.mod.carelink.CareLinkBootReceiver']
+MOD_CARELINK_COMPONENTS = [MOD_STARTER, 'tk.glucodata.mod.carelink.CareLinkActivity']
 # Every pump-over-Bluetooth component of the same manifest (series part 2, part B2c): without the starter the link does
 # not start with the process, without the watchdog nothing brings a stuck link back, without the update receiver the
 # link waits for the next process start after an update - the pump data would stop quietly.
@@ -450,20 +447,16 @@ MOD_PUMPBT_COMPONENTS = [MOD_PUMPBT_STARTER, 'tk.glucodata.mod.pumpbt.PumpBtActi
                          'tk.glucodata.mod.pumpbt.PumpBtWatchdogReceiver',
                          'tk.glucodata.mod.pumpbt.PumpBtUpdateReceiver']
 NOT_EXPORTED = r'exported\([^)]*\)=(?:false|\(type 0x12\)0x0)\b'
-# Strings that only the CareLink trial code has (part 4p; Common/src/modTrial and .../mod/carelink/trial): the command
-# action, the log tag, the address of the trial session. Release builds rename classes (R8, no -dontobfuscate), so the
-# trial is found by these, not by class names.
-TRIAL_MARKERS = [b'tk.glucodata.ng.mod.CARELINK_TRIAL', b'ModCareLinkTrial', b'trial.invalid']
 # The made-up pump over Bluetooth (series part 2, part P; Common/src/modTrial/.../mod/pumpbt/trial): the class itself -
 # its type descriptor, which only a defined or referenced class puts into the dex (mod/proguard-mod-trial.pro keeps its
 # name in a test build) - and the strings only its code has (command action, log tag). Not the class name in dotted
 # form: ModPumpStarter.TRIAL_ENTRY holds it as a string constant and a candidate keeps it (critic B2c, N10).
 PUMP_TRIAL_MARKERS = [b'Ltk/glucodata/mod/pumpbt/trial/PumpBtTrialEntry;', b'tk.glucodata.ng.mod.PUMPBT_TRIAL',
                       b'ModPumpBtTrial']
-TRIALS = [('CareLink trial', TRIAL_MARKERS), ('made-up Bluetooth pump', PUMP_TRIAL_MARKERS)]
+TRIALS = [('made-up Bluetooth pump', PUMP_TRIAL_MARKERS)]
 
 
-def dex_marker_hits(apk, markers=TRIAL_MARKERS):
+def dex_marker_hits(apk, markers=PUMP_TRIAL_MARKERS):
     """Which of [markers] occur in the raw dex files of [apk] (the string pool holds them whole)."""
     found = set()
     with zipfile.ZipFile(apk) as z:
@@ -511,9 +504,6 @@ def check_mod_components(phone, wear, release):
     check(not missing and f'{PACKAGE}.mod-carelink' in tree,
           f'phone manifest: our {len(MOD_CARELINK_COMPONENTS)} CareLink components (authority {PACKAGE}.mod-carelink)'
           ' - source set mobileMod is in the build' + (f' (missing: {missing})' if missing else ''))
-    boot = blocks.get('tk.glucodata.mod.carelink.CareLinkBootReceiver', '')
-    check('android.intent.action.BOOT_COMPLETED' in boot and 'android.intent.action.MY_PACKAGE_REPLACED' in boot,
-          'CareLink boot receiver: BOOT_COMPLETED and MY_PACKAGE_REPLACED')
     missing = [c for c in MOD_PUMPBT_COMPONENTS if c not in blocks]
     check(not missing and f'{PACKAGE}.mod-pumpbt' in tree,
           f'phone manifest: our {len(MOD_PUMPBT_COMPONENTS)} pump-over-Bluetooth components (authority {PACKAGE}.mod-pumpbt)'

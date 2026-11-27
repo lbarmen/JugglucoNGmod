@@ -4,20 +4,12 @@
      start only in MOD. No package attribute: the namespace comes from Common/build.gradle. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
-        <!-- CareLink starter: runs on every process start, schedules nothing until a CareLink sign-in exists -->
+        <!-- Pump data starter (old name kept): on every process start, in the background, the one-time removal of what
+             the CareLink cloud left on the phone and the pump launcher shortcut. Not exported: nobody queries it. -->
         <provider
             android:name="tk.glucodata.mod.carelink.ModCareLinkStarter"
             android:authorities="${applicationId}.mod-carelink"
             android:exported="false" />
-        <!-- CareLink sign-in: the Medtronic page in a WebView. Not exported: only our own CareLink window opens it.
-             configChanges - rotation, keyboard and theme do not recreate the window, or the page would reload and a
-             code typed from mail or SMS would be lost. -->
-        <activity
-            android:name="tk.glucodata.mod.carelink.CareLinkLoginActivity"
-            android:exported="false"
-            android:theme="@style/Theme.AppCompat.NoActionBar"
-            android:windowSoftInputMode="adjustResize"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|uiMode|density" />
         <!-- The old CareLink window: only forwards to the pump window and finishes, nothing drawn (translucent). Kept for
              a launcher shortcut pinned before and pending intents of an older build. Not exported. -->
         <activity
@@ -45,25 +37,12 @@
             android:exported="false" />
         <!-- Pump over Bluetooth: after an app update the link, upstream's service (by the person's setting) and the
              watchdog at once. With an intent filter Android 12+ wants exported stated; MY_PACKAGE_REPLACED is a
-             protected broadcast only the system sends (as the CareLink boot receiver). -->
+             protected broadcast only the system sends. After a reboot upstream's own boot receiver starts the process,
+             and ModPumpStarter arms the watchdog. -->
         <receiver
             android:name="tk.glucodata.mod.pumpbt.PumpBtUpdateReceiver"
             android:exported="true">
             <intent-filter>
-                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
-            </intent-filter>
-        </receiver>
-        <!-- CareLink poll alarm: only our own PendingIntent sends it -->
-        <receiver
-            android:name="tk.glucodata.mod.carelink.CareLinkAlarmReceiver"
-            android:exported="false" />
-        <!-- CareLink: arm the poll alarm again after a reboot and an app update. With an intent filter Android 12+
-             wants exported stated; only the system sends these actions (RECEIVE_BOOT_COMPLETED is in their manifest). -->
-        <receiver
-            android:name="tk.glucodata.mod.carelink.CareLinkBootReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>

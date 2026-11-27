@@ -5,25 +5,26 @@ import android.content.SharedPreferences
 import java.io.File
 import java.io.FileOutputStream
 
-/** CareLink link: off (not signed in or turned off), working, sign-in needed, the last poll failed. */
-enum class CareLinkStatus { OFF, OK, NEED_LOGIN, ERROR }
+/**
+ * Pump data: nothing yet, the last cycle wrote fine, the last cycle failed. Values of older builds (the cloud's
+ * `NEED_LOGIN`, part D1) read as [OFF].
+ */
+enum class CareLinkStatus { OFF, OK, ERROR }
 
 /**
- * Why the last poll failed (the CareLink window turns it into text, 4e): no network, the cloud refused or failed
- * (HTTP status), an answer that is not pump data, the session file did not open, parsing or the journal write failed.
+ * Why the last cycle failed: the journal or basal write. The cloud's kinds of older builds (`NO_NETWORK`, `SERVER`,
+ * `BAD_ANSWER`, `STORAGE`, `PARSE`; part D1) read as no error.
  */
-enum class CareLinkErrorKind { NO_NETWORK, SERVER, BAD_ANSWER, STORAGE, PARSE, WRITE }
+enum class CareLinkErrorKind { WRITE }
 
-/** A poll failure: kind, HTTP status (0 - none) and the exception class or a short reason - never a body or a key. */
+/** A cycle failure: kind, code (0 - none) and the exception class or a short reason - never a body or a key. */
 data class CareLinkError(val kind: CareLinkErrorKind, val code: Int = 0, val errorClass: String? = null)
 
 /**
- * JugglucoNGmod, CareLink (stage 4c): the state of the link for the window, the notifications and the schedule; no
- * keys, no user name. A cut-down Glucove CareLinkState (no basal watch, no change questions, no modes).
- * [lastPollAtMs] - the last poll attempt (any result), [lastDataAtMs] - the newest pump data time seen
- * (`lastMedicalDeviceDataUpdateServerTime`; moves only forward and only when the answer was parsed and written),
- * [lastError] - why the last poll failed (null after a good one), [pumpNow] - what the pump showed in the last
- * non-empty answer.
+ * JugglucoNGmod, pump data (stage 4c; the cloud left in part D1): the state for the window and the notifications; no
+ * keys, no user name. [lastPollAtMs] - the last pump cycle (any result), [lastDataAtMs] - the newest pump data time
+ * seen (moves only forward; the first catch-up's boundary - PumpBtBridge), [lastError] - why the last cycle failed
+ * (null after a good one), [pumpNow] - what the pump showed in the last snapshot.
  */
 data class CareLinkState(
     val status: CareLinkStatus = CareLinkStatus.OFF,
@@ -35,8 +36,7 @@ data class CareLinkState(
 
 /**
  * Where [CareLinkState] lives: SharedPreferences `mod_carelink_state` (upstream's settings backup takes every
- * shared_prefs file - nothing secret here), the two "shown once" marks of [CareLinkNotifier] and the "first poll
- * pending" mark. The pump snapshot (active insulin, reservoir - medical numbers) is a file in `noBackupFilesDir`
+ * shared_prefs file - nothing secret here) and the "shown once" marks of [CareLinkNotifier]. The pump snapshot (active insulin, reservoir - medical numbers) is a file in `noBackupFilesDir`
  * (`mod-carelink/pump.json`), out of the settings backup (critic 4c, N9).
  */
 class CareLinkStateStore(context: Context) {
@@ -80,29 +80,12 @@ class CareLinkStateStore(context: Context) {
     }
 
     /**
-     * [update] only while [allowed] holds, checked under the same lock as [clear] (critic 4c, N2: a sign-out during a
-     * poll must not be overwritten by its result). null - not allowed, nothing written.
+     * [update] only while [allowed] holds, checked under the store's lock (critic 4c, N2: a source turned off during a
+     * cycle must not be overwritten by its result). null - not allowed, nothing written.
      */
     fun updateIf(allowed: () -> Boolean, change: (CareLinkState) -> CareLinkState): CareLinkState? = synchronized(LOCK) {
         if (!allowed()) null else change(read()).also(::write)
     }
-
-    /**
-     * The next poll is the first after a sign-in: set by the sign-in, cleared only by a poll whose result was written
-     * (critic 4c, C1: a failed first poll or one replaced by the button keeps it).
-     */
-    var firstPollPending: Boolean
-        get() = prefs.getBoolean(K_FIRST_PENDING, false)
-        set(v) {
-            prefs.edit().putBoolean(K_FIRST_PENDING, v).commit()
-        }
-
-    /** "Sign in again" was shown and not answered by a sign-in yet. */
-    var needLoginShown: Boolean
-        get() = prefs.getBoolean(K_NEED_LOGIN_SHOWN, false)
-        set(v) {
-            prefs.edit().putBoolean(K_NEED_LOGIN_SHOWN, v).apply()
-        }
 
     /** "No pump data for N min" was shown and the data has not come back yet. */
     var noDataShown: Boolean
@@ -127,14 +110,6 @@ class CareLinkStateStore(context: Context) {
         set(v) {
             prefs.edit().putBoolean(K_WRITE_FAIL_SHOWN, v).apply()
         }
-
-    /** Back to nothing (sign-out; may run on the main thread - preferences written in the background). */
-    fun clear() {
-        synchronized(LOCK) {
-            prefs.edit().clear().apply()
-            pumpFile.delete()
-        }
-    }
 
     private fun readPump(): PumpNow? {
         val f = pumpFile
@@ -190,8 +165,6 @@ class CareLinkStateStore(context: Context) {
         private const val K_ERROR_CODE = "lastErrorCode"
         private const val K_ERROR_CLASS = "lastErrorClass"
         private const val K_PUMP_OLD = "pumpNow"
-        private const val K_FIRST_PENDING = "firstPollPending"
-        private const val K_NEED_LOGIN_SHOWN = "needLoginShown"
         private const val K_NO_DATA_SHOWN = "noDataShown"
         private const val K_WRITE_FAIL_SINCE = "writeFailSinceMs"
         private const val K_WRITE_FAIL_SHOWN = "writeFailShown"
@@ -199,58 +172,17 @@ class CareLinkStateStore(context: Context) {
 }
 
 /**
- * JugglucoNGmod, CareLink (stage 4c): settings of the CareLink window (SharedPreferences `mod_carelink_settings`, no
- * secrets). [enabled] - polling on (a sign-in turns it on, a sign-out off; a file, see there); [intervalMin] - 5/10/15
- * min, default 5; [presetId] - insulin type of pump boluses, null - upstream's default for calculation (4d);
- * [writeCarbs] - record calculator carbs (on); [sendToNightscout] - pump records go to Nightscout (off; plan, decision 8);
- * [warnAfterMin] - "no pump data" and "pump records are not saved" come after this long: 5/10/15/20/30/60 min, default 30
- * (the person's word 17.11: "I want 5 minutes to test it"; one threshold for both - decision of 4e).
+ * JugglucoNGmod, pump data (stage 4c; the cloud's polling flag and interval left in part D1): settings of the pump
+ * window (SharedPreferences `mod_carelink_settings`, no secrets). [presetId] - insulin type of pump boluses, null -
+ * upstream's default for calculation (4d); [writeCarbs] - record calculator carbs (on); [sendToNightscout] - pump
+ * records go to Nightscout (off; plan, decision 8); [warnAfterMin] - "no pump data" and "pump records are not saved"
+ * come after this long: 5/10/15/20/30/60 min stored, default 30 (one threshold for both - decision of 4e).
  */
 class CareLinkSettings(context: Context) {
 
     private val app = context.applicationContext
 
     private val prefs: SharedPreferences = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-
-    private val enabledFile: File get() = File(File(app.noBackupFilesDir, CareLinkStateStore.DIR), ENABLED_FILE)
-
-    /**
-     * Polling on. A file next to the session in noBackupFilesDir, not a preference (critic of the joints, B1):
-     * upstream's settings import clears every shared_prefs file its export does not carry, and an `apply()` is lost
-     * when the process dies right after a sign-in - either stopped polling silently while the session lived. Written at
-     * once: the work after it (arming, the first poll) reads it. A failed write is logged (the sign-in then shows no
-     * polling rather than throwing in the sign-in listener).
-     */
-    var enabled: Boolean
-        get() = enabledFile.exists()
-        set(v) {
-            val f = enabledFile
-            try {
-                if (v) {
-                    f.parentFile?.mkdirs()
-                    if (!f.exists() && !f.createNewFile() && !f.exists()) CareLinkLog.w("polling flag not written")
-                    f.setLastModified(CareLinkClock.now())
-                } else if (f.exists() && !f.delete()) {
-                    CareLinkLog.w("polling flag not removed")
-                }
-            } catch (t: Throwable) {
-                CareLinkLog.w("polling flag not changed (${t.javaClass.simpleName})")
-            }
-        }
-
-    /**
-     * When polling was turned on (a sign-in, the window's "turn polling on"): the time of the flag file, which upstream's
-     * settings import does not touch. For "no data" while no answer has brought pump data yet (critic of the joints 4e,
-     * N4). null - off or unknown.
-     */
-    val enabledSinceMs: Long?
-        get() = enabledFile.takeIf { it.exists() }?.lastModified()?.takeIf { it > 0L }
-
-    var intervalMin: Int
-        get() = prefs.getInt(K_INTERVAL, DEFAULT_INTERVAL_MIN).takeIf { it in INTERVALS_MIN } ?: DEFAULT_INTERVAL_MIN
-        set(v) {
-            prefs.edit().putInt(K_INTERVAL, v.takeIf { it in INTERVALS_MIN } ?: DEFAULT_INTERVAL_MIN).apply()
-        }
 
     var presetId: Long?
         get() = if (prefs.contains(K_PRESET)) prefs.getLong(K_PRESET, 0L) else null
@@ -291,8 +223,6 @@ class CareLinkSettings(context: Context) {
 
     companion object {
         const val PREFS = "mod_carelink_settings"
-        const val DEFAULT_INTERVAL_MIN = 5
-        val INTERVALS_MIN = listOf(5, 10, 15)
         const val DEFAULT_WARN_MIN = 30
         /**
          * What [warnAfterMin] stores: the pump window's [WARN_CHOICES] and the older 5/10/15, kept as they are (over
@@ -308,9 +238,8 @@ class CareLinkSettings(context: Context) {
             5, 10, 15 -> 20
             else -> DEFAULT_WARN_MIN
         }
-        /** The polling flag in noBackupFilesDir/mod-carelink/ (the `enabled` preference of 4c builds is not read). */
+        /** The cloud's polling flag of older builds in noBackupFilesDir/mod-carelink/ ([CareLinkCloudCleanup] removes it). */
         const val ENABLED_FILE = "enabled"
-        private const val K_INTERVAL = "intervalMin"
         private const val K_PRESET = "presetId"
         private const val K_CARBS = "writeCarbs"
         private const val K_NIGHTSCOUT = "sendToNightscout"
