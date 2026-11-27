@@ -2203,25 +2203,24 @@ internal class PumpLink(
             else -> "state $state"
         }
 
-        fun bondName(state: Int): String = when (state) {
-            BluetoothDevice.BOND_NONE -> "none"
-            BluetoothDevice.BOND_BONDING -> "bonding"
-            BluetoothDevice.BOND_BONDED -> "bonded"
-            else -> "unknown"
-        }
+        fun bondName(state: Int): String = PumpLinkRules.bondName(state)
 
         /**
          * The trial window's values after an active basal answer: the temporary basal in its own unit - U/h only for
          * type 0x33, percent only for 0x3C (critic of the joints 1, P-N5: a percentage was shown as U/h); another type
-         * or a special value - neither.
+         * or a special value - neither, and its type goes to [PumpBtValues.tempBasalType] (the window tells "running"
+         * from "none").
          */
         fun withActiveBasal(values: PumpBtValues, v: ActiveBasalRate): PumpBtValues {
             val temp = v.tempBasalValue?.takeIf { it.isFinite() && it >= 0.0 }
+            val type = v.tempBasalType
+            val shown = temp != null && (type == ActiveBasalRate.TBR_ABSOLUTE || type == ActiveBasalRate.TBR_RELATIVE)
             return values.copy(
                 basalUnitsPerHour = v.unitsPerHour, basalRead = true,
-                tempBasalUnitsPerHour = temp.takeIf { v.tempBasalType == ActiveBasalRate.TBR_ABSOLUTE },
-                tempBasalPercent = temp.takeIf { v.tempBasalType == ActiveBasalRate.TBR_RELATIVE }?.let { Math.round(it).toInt() },
+                tempBasalUnitsPerHour = temp.takeIf { type == ActiveBasalRate.TBR_ABSOLUTE },
+                tempBasalPercent = temp.takeIf { type == ActiveBasalRate.TBR_RELATIVE }?.let { Math.round(it).toInt() },
                 tempBasalRemainingMin = v.tempBasalRemainingMinutes,
+                tempBasalType = type.takeIf { !shown },
             )
         }
 
@@ -2231,13 +2230,9 @@ internal class PumpLink(
          */
         const val EXTRA_BOND_REASON = "android.bluetooth.device.extra.REASON"
 
-        /**
-         * The journal line of a bond change: [device] as [mac] gives it (the address only in the detailed journal), the
-         * states and the system's reason as a number (-1 - none given). After the update of build 14 over 13 the pump's
-         * bond was gone without the person removing it: the reason shows who took it next time.
-         */
+        /** The journal line of a bond change: one format with the source's ([PumpLinkRules.bondLine]). */
         fun bondLine(device: String, before: Int, now: Int, reason: Int): String =
-            "bond state of $device: ${bondName(before)} → ${bondName(now)}, reason $reason"
+            PumpLinkRules.bondLine(device, before, now, reason)
 
         /**
          * [start] of a running link (the window's pairing over a link already waiting, at any stage - also

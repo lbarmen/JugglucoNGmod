@@ -6,7 +6,7 @@
     <string name="mod_pumpbt_notify_unparsed_title">Помпа: болюс или еда не прочитаны</string>
     <string name="mod_pumpbt_notify_unparsed_text">Не удалось прочитать запись болюса или еды вида %1$s. Проверьте историю на помпе и, если дозы нет в журнале, добавьте её вручную.</string>
     <string name="mod_pumpbt_notify_backfill_title">Помпа: найдены прежние дозы</string>
-    <string name="mod_pumpbt_notify_backfill_text">Найдены болюсы и еда до включения чтения помпы. Откройте окно помпы и решите, записывать ли их в журнал.</string>
+    <string name="mod_pumpbt_notify_backfill_text">Найдены болюсы и еда до включения «Постоянной работы». Откройте окно «Помпа» и решите, записывать ли их в журнал.</string>
     <string name="mod_pumpbt_notify_no_result_title">Помпа: итог болюса не получен</string>
     <string name="mod_pumpbt_notify_no_result_text">Помпа не сообщила, сколько болюса введено. Посмотрите введённую дозу на помпе.</string>
     <string name="mod_pumpbt_notify_drift_title">Часы помпы и телефона расходятся</string>

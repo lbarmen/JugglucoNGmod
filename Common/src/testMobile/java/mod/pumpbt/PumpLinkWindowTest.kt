@@ -20,6 +20,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.ConscryptMode
+import tk.glucodata.mod.carelink.CareLinkSettings
 import tk.glucodata.mod.pumpbt.PumpBtLinkState
 import tk.glucodata.mod.pumpbt.PumpBtStore
 import tk.glucodata.mod.pumpbt.PumpBtValues
@@ -30,8 +31,9 @@ import java.io.File
 
 /**
  * PumpLink, what the trial window sees (critic of the joints 1, P-N5; critic B2b, second round, N-1): a temporary basal
- * in its own unit - U/h only for type 0x33, percent only for 0x3C; a start over a running link publishes the mode and
- * clears an earlier failed pairing, as a fresh start does. Made-up answers and key bytes only.
+ * in its own unit - U/h only for type 0x33, percent only for 0x3C, else its type; a start over a running link publishes
+ * the mode and clears an earlier failed pairing, as a fresh start does. And the stored "no data" threshold (part G1).
+ * Made-up answers and key bytes only.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
@@ -94,6 +96,39 @@ class PumpLinkWindowTest {
         assertNull(none.tempBasalUnitsPerHour)
         assertNull(none.tempBasalPercent)
         assertTrue(none.basalRead)
+    }
+
+    @Test
+    fun aTemporaryBasalTheWindowCannotShowKeepsItsType() {
+        // plan, part G1, 5: "running, type not recognised" is told from "none"
+        assertEquals(0x0f, PumpLink.withActiveBasal(PumpBtValues(), answer("0f", "96000000")).tempBasalType)
+        // a special value (NaN) of a known type: the type too
+        assertEquals(0x3c, PumpLink.withActiveBasal(PumpBtValues(), answer("3c", "ffff7f00")).tempBasalType)
+        assertEquals(0x33, PumpLink.withActiveBasal(PumpBtValues(), answer("33", "ffff7f00")).tempBasalType)
+        // shown in its unit: no type
+        assertNull(PumpLink.withActiveBasal(PumpBtValues(), answer("33", "0c0000ff")).tempBasalType)
+        assertNull(PumpLink.withActiveBasal(PumpBtValues(), answer("3c", "96000000")).tempBasalType)
+        // no temporary basal: an earlier type is gone
+        val none = PumpLink.withActiveBasal(PumpBtValues(tempBasalType = 0x0f), ActiveBasalRate.parse(hex("6a0300" + "01" + "080000ff")))
+        assertNull(none.tempBasalType)
+    }
+
+    @Test
+    fun theThresholdStoresTwentyAndKeepsTheOlderValues() {
+        // decisions for the window, 5: 20 is stored; 5/10/15 stay as they are (polling and intake tests); else 30
+        val settings = CareLinkSettings(app)
+        try {
+            settings.warnAfterMin = 20
+            assertEquals(20, CareLinkSettings(app).warnAfterMin)
+            assertEquals(20 * 60_000L, CareLinkSettings(app).warnAfterMs)
+            settings.warnAfterMin = 5
+            assertEquals(5, CareLinkSettings(app).warnAfterMin)
+            assertEquals(20, CareLinkSettings.shownWarnMin(CareLinkSettings(app).warnAfterMin))
+            settings.warnAfterMin = 45
+            assertEquals(30, CareLinkSettings(app).warnAfterMin)
+        } finally {
+            app.getSharedPreferences(CareLinkSettings.PREFS, Context.MODE_PRIVATE).edit().clear().commit()
+        }
     }
 
     @Test

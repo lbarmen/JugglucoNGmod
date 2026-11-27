@@ -32,7 +32,7 @@ import tk.glucodata.Natives
 import tk.glucodata.mod.carelink.CareLinkClock
 import tk.glucodata.mod.carelink.CareLinkIntake
 import tk.glucodata.mod.carelink.CareLinkIob
-import tk.glucodata.mod.carelink.CareLinkScheduler
+import tk.glucodata.mod.carelink.CareLinkNotifier
 import tk.glucodata.mod.carelink.CareLinkSettings
 import tk.glucodata.mod.carelink.ClEvent
 import tk.glucodata.mod.carelink.ClKind
@@ -68,6 +68,11 @@ internal data class PumpBtSourceState(
     /** [PumpSourceSwitch.bluetoothOn]. */
     val enabled: Boolean = false,
     val link: PumpBtLinkState = PumpBtLinkState(),
+    /**
+     * Since when the running link waits for the pump to come (phone clock, [PumpBtWindow.waitingSince]); null - not
+     * waiting (stopped, pairing, connected). Process memory: a new process starts the wait anew.
+     */
+    val waitingSinceMs: Long? = null,
     /** The pump's address is among the phone's bonded devices; null - not known (Bluetooth off, no permission, no address). */
     val pumpBonded: Boolean? = null,
     /**
@@ -273,8 +278,7 @@ internal object PumpBtSource {
      * Turns the source on (decision 5, plan B2a point 3): a new enable moment and boundary saved in the memory - only
      * when it was off, or the memory has no moment -, and only then the switch, with the same moment (critic of the
      * joints 1, C-3: a death between them leaves the source off, not on with an old moment); the link in permanent
-     * operation (variant A, waiting), "paired" checked against the phone's bonded devices, then the cloud's alarms go
-     * ([CareLinkScheduler.arm]). The job is for tests.
+     * operation (variant A, waiting), "paired" checked against the phone's bonded devices. The job is for tests.
      */
     fun enable(context: Context): Job {
         val c = attach(context)
@@ -304,8 +308,6 @@ internal object PumpBtSource {
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 journal("source: not turned on fully (${t.javaClass.simpleName})")
-            } finally {
-                armCloud(c)
             }
         }
     }
@@ -313,8 +315,8 @@ internal object PumpBtSource {
     /**
      * Turns the source off (critic B1, N4): under the source's mutex and in it the intake's lock (the order of every
      * caller: a cycle holds the mutex while the intake takes its lock - critic of the joints 1, C-2) - the switch off,
-     * the open basal segment closed at its last data, the pump's active insulin off the plate (as the cloud's sign-out
-     * did); then the link stops and the cloud may arm its alarms again. The history memory stays. The job is for tests.
+     * the open basal segment closed at its last data, the pump's active insulin off the plate, "no data" and "not
+     * saved" with their marks and clock away; then the link stops. The history memory stays. The job is for tests.
      */
     fun disable(context: Context): Job {
         val c = attach(context)
@@ -330,6 +332,9 @@ internal object PumpBtSource {
                                 journal("source off: basal not closed (${t.javaClass.simpleName})")
                             } finally {
                                 CareLinkIob.clear()
+                                // "no data" and "not saved" with their marks and clock: the next "on" warns afresh
+                                // (joint review 3, C-1)
+                                CareLinkNotifier.cancelAll(c)
                             }
                         }
                     }
@@ -341,8 +346,6 @@ internal object PumpBtSource {
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 journal("source: not turned off fully (${t.javaClass.simpleName})")
-            } finally {
-                armCloud(c)
             }
         }
     }
@@ -822,7 +825,7 @@ internal object PumpBtSource {
             journal = journal,
             logcat = { PumpBtLog.i(it) },
             publish = { ls ->
-                _state.update { it.copy(link = ls) }
+                _state.update { it.copy(link = ls, waitingSinceMs = PumpBtWindow.waitingSince(it.waitingSinceMs, ls, System.currentTimeMillis())) }
                 onLinkState?.invoke(ls)
                 val before = lastStage
                 lastStage = ls.stage
@@ -924,28 +927,36 @@ internal object PumpBtSource {
         bondTrusted = false
     }
 
-    /** Bond changes of the phone: checked again (system action, registered like upstream's receivers). */
+    /**
+     * Bond changes of the phone: checked again (system action, registered like upstream's receivers). A change of our
+     * pump is written to the link journal while the link is not running (a running link writes it itself).
+     */
     private fun watchBonds(c: Context) {
         if (bondReceiver != null) return
         val r = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 if (intent?.action != BluetoothDevice.ACTION_BOND_STATE_CHANGED) return
                 val state = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR)
-                if (state == BluetoothDevice.BOND_NONE) {
-                    val device: BluetoothDevice? = try {
-                        @Suppress("DEPRECATION")
-                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
-                    } catch (_: Throwable) {
-                        null
-                    }
-                    val name = try {
-                        device?.name
-                    } catch (_: SecurityException) {
-                        null
-                    }
-                    val address = store(c).pumpAddress
-                    if (device == null || device.address.equals(address, ignoreCase = true) || PumpLinkRules.pumpLikeName(name)) bondTrusted = false
+                val device: BluetoothDevice? = try {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                } catch (_: Throwable) {
+                    null
                 }
+                val name = try {
+                    device?.name
+                } catch (_: SecurityException) {
+                    null
+                }
+                val s = store(c)
+                val ours = PumpLinkRules.ourPumpBond(device?.address, name, s.pumpAddress)
+                PumpLinkRules.sourceBondLine(
+                    linkRunning = link?.isRunning == true, ours = ours,
+                    device = PumpLinkRules.deviceTag(device?.address, s.verbose),
+                    before = intent.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, -1), now = state,
+                    reason = intent.getIntExtra(PumpLink.EXTRA_BOND_REASON, -1),
+                )?.let { journal(it) }
+                if (state == BluetoothDevice.BOND_NONE && ours) bondTrusted = false
                 if (state == BluetoothDevice.BOND_NONE || state == BluetoothDevice.BOND_BONDED) recheckBond(c)
             }
         }
@@ -972,14 +983,6 @@ internal object PumpBtSource {
         } catch (t: Throwable) {
             PumpBtLog.w("pump alert not shown (${t.javaClass.simpleName})")
             false
-        }
-    }
-
-    private fun armCloud(c: Context) {
-        try {
-            CareLinkScheduler.arm(c)
-        } catch (t: Throwable) {
-            PumpBtLog.w("cloud alarms not set (${t.javaClass.simpleName})")
         }
     }
 

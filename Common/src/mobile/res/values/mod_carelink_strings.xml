@@ -3,24 +3,13 @@
      strings: every name starts with mod_carelink_. One set of words in the window and the notifications: "update"
      (never "poll"), "sign-in" (never "session"). -->
 <resources>
-    <string name="mod_carelink_login_title">CareLink sign-in</string>
-    <string name="mod_carelink_login_close">Close</string>
-    <string name="mod_carelink_login_busy">Signing in to CareLink…</string>
-    <string name="mod_carelink_login_fail_network">No connection to CareLink. Check the internet and try again.</string>
-    <string name="mod_carelink_login_fail_server">CareLink did not answer as expected. Try again later.</string>
-    <string name="mod_carelink_login_fail_unsupported">This CareLink region uses another way of signing in, which the app cannot do yet.</string>
-    <string name="mod_carelink_login_fail_storage">The sign-in could not be saved on this phone. Try again after unlocking it.</string>
-    <string name="mod_carelink_login_fail_generic">Sign-in did not finish. Close this window and try again.</string>
-    <string name="mod_carelink_login_fail_webview">The built-in browser (Android System WebView) is not available on this phone. Turn on or update Android System WebView in Google Play and try again.</string>
-    <string name="mod_carelink_channel_name">CareLink</string>
-    <string name="mod_carelink_channel_description">Warnings: you need to sign in to CareLink, or pump data is not coming in or not saved</string>
-    <string name="mod_carelink_need_login_title">Sign in to CareLink again</string>
-    <string name="mod_carelink_need_login_text">The CareLink sign-in has stopped working, so pump data is not coming in. Open the CareLink window in the app and sign in again.</string>
+    <string name="mod_carelink_channel_name">Pump</string>
+    <string name="mod_carelink_channel_description">Warnings: pump data is not coming in or not saved</string>
     <!-- %1$d - the warning threshold, not the age at the moment of showing (the notification is not updated) -->
     <string name="mod_carelink_no_data_title">No pump data for over %1$d min</string>
-    <string name="mod_carelink_no_data_text">CareLink has no new data from the pump. Check that MiniMed Mobile is running and sees the pump. The active insulin in the app may be old; check the pump.</string>
+    <string name="mod_carelink_no_data_text">No new data has come from the pump. Check that the pump is near the phone and Bluetooth is on, and open the pump window. The active insulin in the app may be old; check the pump.</string>
     <string name="mod_carelink_write_fail_title">Pump records are not saved</string>
-    <string name="mod_carelink_write_fail_text">For %1$d min pump records have not reached the app\'s journal. Open the CareLink window and tap \"Update now\".</string>
+    <string name="mod_carelink_write_fail_text">For %1$d min pump records have not reached the app\'s journal. Open the pump window and tap Read again under Diagnostics; if it repeats, restart the app.</string>
     <string name="mod_carelink_journal_bolus">Pump bolus</string>
     <string name="mod_carelink_journal_carbs">Pump calculator</string>
     <string name="mod_carelink_journal_basal">Pump basal</string>
@@ -32,80 +21,41 @@
     <string name="mod_carelink_note_stop_open">Stop %1$s–…</string>
     <string name="mod_carelink_note_stop">Stop %1$s–%2$s</string>
     <!-- the CareLink window (4e) -->
-    <string name="mod_carelink_title">CareLink</string>
-    <string name="mod_carelink_entry_subtitle">MiniMed pump: sign-in, data, settings</string>
-    <string name="mod_carelink_shortcut_short">CareLink</string>
-    <string name="mod_carelink_shortcut_long">CareLink window</string>
-    <string name="mod_carelink_status_signed_out">Not signed in</string>
-    <string name="mod_carelink_status_signed_out_text">Sign in so that pump boluses, basal and active insulin come to the app.</string>
-    <string name="mod_carelink_status_need_login">Sign in again</string>
-    <!-- the cloud answer always covers the last 24 h (docs: code review of CareLink, the probe of 03-04.11) -->
-    <string name="mod_carelink_status_need_login_text">The CareLink sign-in has stopped working. Sign in again: pump data for roughly the last day will be filled in, earlier data will not.</string>
-    <string name="mod_carelink_status_polling_off">Signed in, updates are off</string>
-    <string name="mod_carelink_status_polling_off_text">Pump data is not coming in because automatic updates are off. Tap \"Turn updates on\".</string>
-    <string name="mod_carelink_status_waiting">Waiting for the first data</string>
-    <string name="mod_carelink_status_waiting_text">Signed in. The first data usually comes within 1–2 minutes. If there is still none after 10 minutes, check that MiniMed Mobile is running and sees the pump. If there is no data for longer than the chosen time, you will get a notification.</string>
-    <string name="mod_carelink_status_ok">Pump data is coming in</string>
-    <string name="mod_carelink_status_stale">Pump data is out of date</string>
-    <!-- %1$s - "2 h 5 min ago" -->
-    <string name="mod_carelink_status_stale_text">The newest pump data came %1$s. Check that MiniMed Mobile is running and sees the pump. The numbers below are old.</string>
-    <string name="mod_carelink_status_error">The last update failed</string>
-    <string name="mod_carelink_status_error_write">Data received but not saved to the journal</string>
-    <string name="mod_carelink_error_network">No connection to CareLink. Check the internet.</string>
-    <string name="mod_carelink_error_server">CareLink answered with error %1$d. It usually passes by itself; if there is no data for longer than the chosen time, you will get a notification.</string>
-    <string name="mod_carelink_error_bad_answer">The CareLink answer does not look like pump data.</string>
-    <string name="mod_carelink_error_storage">The saved sign-in could not be opened. Unlock the phone; if it repeats, sign out and sign in again.</string>
-    <string name="mod_carelink_error_parse">The CareLink answer could not be read.</string>
-    <string name="mod_carelink_error_write">The app\'s journal did not take the boluses and carbs from CareLink. Tap \"Update now\"; if it repeats, restart the app.</string>
-    <!-- %1$s - the text above, %2$s - an exception class name (for a fix) -->
-    <string name="mod_carelink_error_code">%1$s (code: %2$s)</string>
-    <string name="mod_carelink_data_age">Pump data: %1$s</string>
+    <string name="mod_carelink_title">Pump</string>
+    <string name="mod_carelink_entry_subtitle">MiniMed pump over Bluetooth: pairing, data, settings</string>
+    <string name="mod_carelink_shortcut_short">Pump</string>
+    <string name="mod_carelink_shortcut_long">Pump window</string>
     <string name="mod_carelink_data_none">No pump data yet</string>
-    <string name="mod_carelink_poll_age">Last update: %1$s</string>
     <string name="mod_carelink_age_now">just now</string>
     <string name="mod_carelink_age_min">%1$d min ago</string>
     <string name="mod_carelink_age_hours">%1$d h %2$d min ago</string>
     <string name="mod_carelink_age_day">over a day ago</string>
-    <string name="mod_carelink_sign_in">Sign in to CareLink</string>
-    <string name="mod_carelink_sign_in_note">User name and password are typed on the Medtronic page; the app does not see them.</string>
-    <string name="mod_carelink_signed_in">Signed in</string>
-    <string name="mod_carelink_sign_out">Sign out</string>
-    <string name="mod_carelink_sign_out_button">Sign out of CareLink</string>
-    <string name="mod_carelink_sign_out_title">Sign out of CareLink?</string>
-    <string name="mod_carelink_sign_out_text">Pump data will stop coming in, and so will the warnings about it. Records already in the journal stay. To get the data back you will need to sign in to CareLink again with your Medtronic user name and password.</string>
-    <string name="mod_carelink_cancel">Cancel</string>
     <string name="mod_carelink_close">Close</string>
-    <string name="mod_carelink_poll_now">Update now</string>
-    <string name="mod_carelink_polling_on">Turn updates on</string>
     <!-- %1$s - "12 min ago": one data time for every pump number below -->
     <string name="mod_carelink_section_pump">Pump · data %1$s</string>
     <string name="mod_carelink_iob">Pump active insulin</string>
     <string name="mod_carelink_reservoir">Reservoir</string>
     <string name="mod_carelink_battery">Pump battery</string>
-    <string name="mod_carelink_units">%1$s U</string>
     <string name="mod_carelink_percent">%1$d %%</string>
     <string name="mod_carelink_section_settings">Settings</string>
-    <string name="mod_carelink_interval">Update data every</string>
     <string name="mod_carelink_minutes">%1$d min</string>
     <string name="mod_carelink_warn_after">Warn after</string>
     <string name="mod_carelink_warn_after_hint">How many minutes without pump data, or with records not saved to the journal, before a notification.</string>
-    <!-- %1$d - the update interval, %2$d - the interval + 5 min -->
-    <string name="mod_carelink_warn_after_too_soon">Pump data reaches CareLink a few minutes late, and the update runs every %1$d min. A warning sooner than %2$d min may come even when all is well.</string>
     <string name="mod_carelink_insulin">Insulin in the pump</string>
     <string name="mod_carelink_insulin_none">No insulin types available</string>
-    <string name="mod_carelink_insulin_hint">The type goes with the pump\'s boluses in the journal: the app works out active insulin by it.</string>
+    <string name="mod_carelink_insulin_hint">Pump boluses go to the journal with this insulin type: the app works out its own active insulin by it.</string>
     <string name="mod_carelink_write_carbs">Record carbs from the pump calculator</string>
     <string name="mod_carelink_write_carbs_hint">Carbs entered in the pump calculator go to the journal with their bolus.</string>
     <string name="mod_carelink_nightscout">Send pump records to Nightscout</string>
     <string name="mod_carelink_nightscout_hint">New pump records go to Nightscout, and to LibreView if sending to it is on. Older records are not sent. The Nightscout setting \"Send insulin and carbs\" must be on too.</string>
     <string name="mod_carelink_section_phone">Phone</string>
     <string name="mod_carelink_battery_exempt">Exclude from battery saving</string>
-    <string name="mod_carelink_battery_exempt_hint">Otherwise Android may delay the CareLink updates.</string>
+    <string name="mod_carelink_battery_exempt_hint">Otherwise Android may delay the link to the pump and its warnings.</string>
     <string name="mod_carelink_notifications">Allow notifications</string>
     <!-- the three notification titles as they are; %1$d - the warning threshold -->
-    <string name="mod_carelink_notifications_hint">So that these can reach you: \"No pump data for over %1$d min\", \"Pump records are not saved\" and \"Sign in to CareLink again\".</string>
-    <string name="mod_carelink_channel_off">CareLink notifications are off</string>
-    <string name="mod_carelink_channel_off_hint">The CareLink channel is turned off in the phone settings, so no warnings will come. Tap to turn it on.</string>
+    <string name="mod_carelink_notifications_hint">So that the warnings can reach you: \"No pump data for over %1$d min\", \"Pump records are not saved\", \"The phone forgot the pump\" and others.</string>
+    <string name="mod_carelink_channel_off">Pump notifications are off</string>
+    <string name="mod_carelink_channel_off_hint">The pump channel is turned off in the phone settings, so no warnings will come. Tap to turn it on.</string>
     <string name="mod_carelink_sound">Notification sound and vibration</string>
-    <string name="mod_carelink_sound_hint">The system settings of the CareLink notifications.</string>
+    <string name="mod_carelink_sound_hint">The system settings of the pump notifications.</string>
 </resources>

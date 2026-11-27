@@ -1,30 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- JugglucoNGmod, pump over Bluetooth (trial): strings of the hidden trial window and its row in our CareLink window
+<!-- JugglucoNGmod, pump over Bluetooth: strings of the pump window
      (English; Russian in values-ru). Not an overlay of upstream's strings: every name starts with mod_pumpbt_. -->
 <resources>
-    <string name="mod_pumpbt_title">Pump over Bluetooth (trial)</string>
-    <string name="mod_pumpbt_entry_section">Trial</string>
-    <string name="mod_pumpbt_entry_title">Pump over Bluetooth (trial)</string>
-    <string name="mod_pumpbt_entry_hint">Reads the pump directly, without MiniMed Mobile. For the 740G trial only.</string>
+    <string name="mod_pumpbt_title">Pump</string>
 
-    <string name="mod_pumpbt_section_phone">Phone</string>
-    <!-- %1$s - yes / no -->
-    <string name="mod_pumpbt_advertising_supported">Bluetooth advertising supported: %1$s</string>
-    <string name="mod_pumpbt_yes">yes</string>
-    <string name="mod_pumpbt_no">no</string>
     <string name="mod_pumpbt_no_bluetooth">This phone has no Bluetooth</string>
     <string name="mod_pumpbt_bluetooth_off">Bluetooth is off — turn it on in the phone settings</string>
     <string name="mod_pumpbt_no_permissions">Bluetooth permissions not given</string>
     <string name="mod_pumpbt_allow">Allow</string>
 
-    <string name="mod_pumpbt_section_key">Key</string>
-    <string name="mod_pumpbt_key_not_loaded">Key: not loaded</string>
+    <string name="mod_pumpbt_key_not_loaded">Key database: not loaded</string>
     <!-- %1$s - CRC of the key database (8 hex digits) -->
-    <string name="mod_pumpbt_key_loaded">Key: loaded, CRC %1$s, Mobile Application ↔ Insulin Pump</string>
-    <string name="mod_pumpbt_key_loading">Loading the key…</string>
-    <string name="mod_pumpbt_load_key">Load key</string>
-    <string name="mod_pumpbt_load_key_hint">Needs internet, once</string>
-    <string name="mod_pumpbt_load_key_file">Load key from file</string>
+    <string name="mod_pumpbt_key_loaded">Key database: loaded, CRC %1$s, Mobile Application ↔ Insulin Pump</string>
+    <string name="mod_pumpbt_key_loading">Downloading the pump\'s key database…</string>
+    <string name="mod_pumpbt_load_key_file">Load key database from file</string>
     <string name="mod_pumpbt_key_error_network">No internet or the page did not answer</string>
     <!-- %1$d - HTTP status code -->
     <string name="mod_pumpbt_key_error_http">The page answered with error %1$d</string>
@@ -60,40 +49,35 @@
     <!-- %1$s - time, %2$s - duration -->
     <string name="mod_pumpbt_returned">Lost at %1$s, back after %2$s</string>
     <string name="mod_pumpbt_duration">%1$d min %2$d s</string>
-    <string name="mod_pumpbt_variant_a">Name variant: A — manufacturer data</string>
-    <string name="mod_pumpbt_variant_b">B — phone Bluetooth name (changed during the trial)</string>
-    <string name="mod_pumpbt_variant_hint">If the pump does not list Mobile … or pairing fails twice, press Stop and try B.</string>
-    <string name="mod_pumpbt_stop_minimed_hint">Before pairing, stop MiniMed Mobile: Settings → Apps → MiniMed Mobile → Force stop.</string>
+    <string name="mod_pumpbt_variant_b">Pairing with the other name: the phone\'s Bluetooth name is changed while the pairing goes on, then it comes back.</string>
+    <string name="mod_pumpbt_variant_hint">The pump does not list the phone? Try another name: for the pairing the phone\'s Bluetooth name is changed for a while, and it comes back right after.</string>
+    <string name="mod_pumpbt_stop_minimed_hint">Stop MiniMed Mobile on this phone: Settings → Apps → MiniMed Mobile → Force stop (two \"Mobile\" apps get in each other\'s way).</string>
     <string name="mod_pumpbt_start_pairing">Start pairing</string>
-    <string name="mod_pumpbt_start_pairing_hint">Keep this screen open and the phone unlocked. When the phone asks to pair with the pump, confirm at once.</string>
     <string name="mod_pumpbt_wait">Wait for the pump</string>
-    <string name="mod_pumpbt_wait_hint">Keep this screen open.</string>
+    <string name="mod_pumpbt_wait_hint">The phone waits for the already paired pump (no pairing). Keep this screen open.</string>
     <string name="mod_pumpbt_stop">Stop</string>
     <string name="mod_pumpbt_read_again">Read again</string>
-    <string name="mod_pumpbt_need_key">Load the key first</string>
     <string name="mod_pumpbt_stop_by_switch">To stop the link, turn Permanent operation off.</string>
     <!-- %1$s - duration (mod_pumpbt_duration) -->
-    <string name="mod_pumpbt_pair_wait">The phone is waiting for the pump: %1$s (usually up to a minute)</string>
+    <string name="mod_pumpbt_pair_wait">The phone is waiting for the pump: %1$s (usually up to a minute — do not stop earlier)</string>
     <!-- %1$s - "Mobile NNNNNN" -->
-    <string name="mod_pumpbt_pairing_failed">Pairing did not finish. On the pump, choose Pair New Device again and pick %1$s. On the phone, confirm the pairing request (it may come as a notification). No request? Turn Bluetooth off and on; if that does not help, restart the phone. The phone keeps waiting by itself: connecting usually takes about half a minute, so do not stop it early.</string>
+    <string name="mod_pumpbt_pairing_failed">Pairing did not finish. On the pump, open Options → Device Options → Managed Devices → Pair Device again and pick %1$s. On the phone, confirm the pairing request (it may come as a notification). No request? Turn Bluetooth off and on; if that does not help, restart the phone. The phone keeps waiting by itself: connecting usually takes up to a minute, so do not stop it early.</string>
 
-    <string name="mod_pumpbt_section_permanent">Permanent operation</string>
     <string name="mod_pumpbt_permanent">Permanent operation</string>
-    <string name="mod_pumpbt_permanent_off">Off: the pump is read only with the buttons below; pump data over Bluetooth is not written to the journal.</string>
     <string name="mod_pumpbt_permanent_needs_bluetooth">This phone has no Bluetooth LE: permanent operation is not possible.</string>
     <string name="mod_pumpbt_permanent_needs_bluetooth_on">To turn it on, turn Bluetooth on (quick settings at the top of the screen).</string>
     <string name="mod_pumpbt_permanent_needs_advertising">This phone cannot advertise over Bluetooth LE, so the pump cannot connect to it: permanent operation is not possible.</string>
-    <string name="mod_pumpbt_permanent_needs_key">To turn it on, load the key above.</string>
-    <string name="mod_pumpbt_permanent_wait_pairing">A pairing is going on: wait until it ends, or stop it with Stop below, then turn it on.</string>
-    <string name="mod_pumpbt_permanent_on">On: the phone stays linked to the pump in the background and writes its boluses, carbs and basal to the journal.</string>
+    <string name="mod_pumpbt_permanent_needs_key">To turn it on, the pump\'s key database is needed: under Diagnostics press Download key database (needs the internet), or load it from a file there.</string>
+    <string name="mod_pumpbt_permanent_wait_pairing">A pairing is going on: wait until it ends, or press Stop, then turn it on.</string>
+    <string name="mod_pumpbt_permanent_on">On: the phone keeps the link to the pump in the background and writes its boluses, carbs and basal to the journal.</string>
     <string name="mod_pumpbt_permanent_ask_title">Turn on permanent operation?</string>
-    <string name="mod_pumpbt_permanent_ask_text">The app will stay linked to the pump and write its boluses, carbs and basal to the journal. The CareLink cloud is not read while this is on. MiniMed Mobile must not be connected to the pump at the same time. The app only reads the pump and never changes anything on it. This is a trial, not a medical device: check doses on the pump.</string>
+    <string name="mod_pumpbt_permanent_ask_text">The app will stay linked to the pump in the background and write its boluses, carbs and basal to the journal. MiniMed Mobile must not be connected to the pump at the same time. The app only reads the pump and never changes anything on it. It is not a medical device: check doses on the pump.</string>
     <string name="mod_pumpbt_permanent_ask_confirm">Turn on</string>
     <string name="mod_pumpbt_sensor_bluetooth_off">Bluetooth for the sensor is off in this app. Then Android may close the app in the background and pump data will stop coming. Turn on Use Bluetooth in this app\'s sensor Bluetooth settings.</string>
     <string name="mod_pumpbt_memory_load_failed">The saved pump history could not be read. It is being collected again.</string>
     <string name="mod_pumpbt_bond_lost_title">The phone has forgotten the pump</string>
     <!-- %1$s - "Mobile NNNNNN" -->
-    <string name="mod_pumpbt_bond_lost_text">The pump is marked as paired, but it is no longer in the phone\'s Bluetooth list, so no data can come. Press Pair again, then on the pump choose Pair New Device and pick %1$s, and confirm the request on the phone (it may come as a notification). No request? Turn Bluetooth off and on; if that does not help, restart the phone.</string>
+    <string name="mod_pumpbt_bond_lost_text">The pump is marked as paired, but it is no longer in the phone\'s Bluetooth list, so no data can come. Press Pair again, then on the pump open Options → Device Options → Managed Devices → Pair Device and pick %1$s, and confirm the request on the phone (it may come as a notification). No request? Turn Bluetooth off and on; if that does not help, restart the phone.</string>
     <string name="mod_pumpbt_pair_again">Pair again</string>
     <string name="mod_pumpbt_cancel_pairing">Cancel pairing</string>
     <string name="mod_pumpbt_cancel_pairing_hint">The phone stops waiting for a new pairing and goes back to waiting for the already paired pump. Use it if the pump did not start the pairing.</string>
@@ -175,4 +159,58 @@
     <string name="mod_pumpbt_clear_text">Share it first if you need it — clearing cannot be undone.</string>
     <string name="mod_pumpbt_clear_confirm">Clear</string>
     <string name="mod_pumpbt_cancel">Cancel</string>
+
+    <!-- the pump window (part G2b). Pump menu names come from the owner's Russian 740G (27.11): the English ones are a translation, not checked on an English pump -->
+    <string name="mod_pumpbt_section_wizard">Pairing the pump</string>
+    <string name="mod_pumpbt_wizard_warnings_title">Before you start</string>
+    <string name="mod_pumpbt_warn_family">For MiniMed 7xx pumps (740G, 770G, 780G). Checked on a 740G (MMT-1811, firmware 6.28.3) with a Samsung phone on Android 14; on the 770G and 780G only by what other projects report (OpenMinimed), not checked by us.</string>
+    <string name="mod_pumpbt_warn_not_medical">This is not a medical device and it only shows data: the app reads the pump and never changes anything on it. Make dose decisions by the pump\'s own screen.</string>
+    <string name="mod_pumpbt_warn_unpair_minimed">MiniMed Mobile has to be unpaired from the pump. Then the CareLink cloud (reports for the doctor, family following your data) stops getting data, and the pump\'s notifications no longer come to the phone — the pump beeps by itself.</string>
+    <string name="mod_pumpbt_warn_not_checked">SmartGuard auto mode and filling the reservoir are not checked: their records may not reach the journal, or may come in as boluses.</string>
+    <string name="mod_pumpbt_warn_go_back">To go back to MiniMed Mobile: turn Permanent operation off, on the pump unpair \"Mobile\" with six digits (Managed Devices), forget the pump in the phone\'s Bluetooth settings, and pair MiniMed Mobile again.</string>
+    <string name="mod_pumpbt_accept">Got it</string>
+    <string name="mod_pumpbt_wizard_phone_title">The phone is not ready</string>
+    <string name="mod_pumpbt_no_advertising">This phone cannot advertise over Bluetooth LE, so the pump cannot connect to it.</string>
+    <string name="mod_pumpbt_wizard_start_title">Pair the pump with this phone</string>
+    <string name="mod_pumpbt_step_unpair_on_pump">On the pump: Options → Device Options → Managed Devices — unpair MiniMed Mobile (leave the sensor alone).</string>
+    <!-- %1$s - "Mobile NNNNNN" -->
+    <string name="mod_pumpbt_step_pair_after_start">Press Start pairing below. Then on the pump, in the same menu lower down, choose Pair Device and pick %1$s.</string>
+    <!-- %1$s - "Mobile NNNNNN" -->
+    <string name="mod_pumpbt_step_pair_on_pump">On the pump: Options → Device Options → Managed Devices → Pair Device — pick %1$s.</string>
+    <string name="mod_pumpbt_step_confirm">On the phone, confirm the pairing request (it may come as a notification in the shade). It usually takes up to a minute: do not stop it earlier, and keep this screen open.</string>
+    <string name="mod_pumpbt_key_needs_internet">The first start needs the internet once: the pump\'s key database is downloaded from the OpenMinimed page.</string>
+    <string name="mod_pumpbt_wizard_key_title">Pump key database</string>
+    <!-- %1$s - one of the key errors above -->
+    <string name="mod_pumpbt_key_failed">The key database did not download: %1$s. Check the internet and press Retry, or load the file key_databases.md of the OpenMinimed Documentation page.</string>
+    <string name="mod_pumpbt_retry">Retry</string>
+    <string name="mod_pumpbt_wizard_pairing_title">Pairing</string>
+    <string name="mod_pumpbt_other_name">Try another name</string>
+    <string name="mod_pumpbt_wizard_paired_title">The pump is paired</string>
+    <string name="mod_pumpbt_paired_text">Turn on Permanent operation: the phone then stays linked to the pump in the background and writes its boluses, carbs and basal to the journal. Pair again only if the phone has lost the pump.</string>
+    <string name="mod_pumpbt_turn_on">Turn on permanent operation</string>
+    <string name="mod_pumpbt_section_state">State</string>
+    <string name="mod_pumpbt_link_connected">Pump connected</string>
+    <!-- %1$d - whole minutes since the link began waiting -->
+    <string name="mod_pumpbt_link_waiting">Waiting for the pump: %1$d min</string>
+    <string name="mod_pumpbt_link_waiting_hint">It usually comes within a minute; after an app update or a phone restart it can take longer.</string>
+    <string name="mod_pumpbt_link_keep_bond">Do not remove the pairing in the phone\'s Bluetooth settings: if it is really gone, this window will say so.</string>
+    <string name="mod_pumpbt_link_bluetooth_off">Bluetooth is off, so no pump data can come. Turn it on (quick settings at the top of the screen).</string>
+    <string name="mod_pumpbt_link_pairing">A pairing is going on</string>
+    <!-- %1$s - technical detail in English -->
+    <string name="mod_pumpbt_link_error">Link error: %1$s</string>
+    <string name="mod_pumpbt_link_off">The link is not running</string>
+    <!-- %1$s - the IDD type of a temporary basal the window cannot show, hex -->
+    <string name="mod_pumpbt_temp_basal_type">running, type %1$s</string>
+    <string name="mod_pumpbt_delivery_stopped">delivery stopped</string>
+    <!-- %1$d - the lowest threshold over Bluetooth (CareLinkNotifier.BLUETOOTH_MIN_WARN_MIN) -->
+    <string name="mod_pumpbt_warn_min">Less than %1$d min is not offered: the pump brings its data about every 8 minutes and the check runs every 5, so a shorter wait would warn while all is well. An older choice of 5–15 min works as %1$d min.</string>
+    <string name="mod_pumpbt_no_pump_alerts">The pump\'s own alarms do not come to the phone: the pump beeps by itself.</string>
+    <string name="mod_pumpbt_section_diagnostics">Diagnostics</string>
+    <string name="mod_pumpbt_diagnostics_show">Show</string>
+    <string name="mod_pumpbt_diagnostics_hide">Hide</string>
+    <string name="mod_pumpbt_diagnostics_hint">Link stage, buttons, values, link journal — for finding faults</string>
+
+    <!-- %1$s - "2 h 5 min ago": the active insulin's own time; the plate does not show it either -->
+    <string name="mod_pumpbt_iob_old">older than 30 min (%1$s) — check the pump</string>
+    <string name="mod_pumpbt_download_key">Download key database</string>
 </resources>

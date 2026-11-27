@@ -445,14 +445,14 @@ def self_test():
         check('compile error next to a 429', k(LOG_COMPILE_429, {}), 'build')
         check('429 while resolving a compile classpath, no compile error', k(LOG_COMPILE_DOWNLOAD, {}), 'network')
         check('our test red with a socket error of its own', k(LOG_TESTS, {
-            (MOB, 'mod.carelink.CareLinkHttpTest'): _suite('mod.carelink.CareLinkHttpTest', [OUR_SOCKET_FAIL])}), 'ours')
+            (MOB, 'mod.carelink.CareLinkIntakeTest'): _suite('mod.carelink.CareLinkIntakeTest', [OUR_SOCKET_FAIL])}), 'ours')
         check('our test red with a socket error, next to a 429 in the log', k(LOG_429, {
-            (MOB, 'mod.carelink.CareLinkHttpTest'): _suite('mod.carelink.CareLinkHttpTest', [SOCKET_FAIL])}), 'ours')
+            (MOB, 'mod.carelink.CareLinkIntakeTest'): _suite('mod.carelink.CareLinkIntakeTest', [SOCKET_FAIL])}), 'ours')
         check('flaky class of theirs together with our red test', k(LOG_TESTS, {
             (MOB, 'tk.glucodata.ui.AiDexKeyManagementTests'): _suite('tk.glucodata.ui.AiDexKeyManagementTests', [FLAKY_FAIL]),
             (MOB, 'mod.watch.SnoozeButtonTest'): _suite('mod.watch.SnoozeButtonTest', [OUR_FAIL])}), 'ours')
         check('only our classes, all failing on the android-all download', k(LOG_MASS, {
-            (MOB, 'mod.carelink.CareLinkAuthTest'): _suite('mod.carelink.CareLinkAuthTest', [NET_FAIL] * 3),
+            (MOB, 'mod.carelink.CareLinkIntakeTest'): _suite('mod.carelink.CareLinkIntakeTest', [NET_FAIL] * 3),
             (WEAR, 'mod.watch.SnoozeButtonTest'): _suite('mod.watch.SnoozeButtonTest', [NET_FAIL] * 2)}), 'network')
         check('flaky class while the other task hit 429', k(LOG_429, {
             (MOB, 'tk.glucodata.ui.AiDexKeyManagementTests'): _suite('tk.glucodata.ui.AiDexKeyManagementTests', [FLAKY_FAIL])}), 'network')

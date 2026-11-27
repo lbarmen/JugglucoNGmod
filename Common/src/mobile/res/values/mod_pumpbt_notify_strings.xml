@@ -10,7 +10,7 @@
     <!-- %1$s - the record type, hex, e.g. 0x005A -->
     <string name="mod_pumpbt_notify_unparsed_text">A bolus or meal record of type %1$s could not be read. Check the pump\'s history and add the dose to the journal by hand if it is missing.</string>
     <string name="mod_pumpbt_notify_backfill_title">Pump: older doses found</string>
-    <string name="mod_pumpbt_notify_backfill_text">Boluses and meals from before the pump source was turned on were found. Open the pump window and choose whether to write them to the journal.</string>
+    <string name="mod_pumpbt_notify_backfill_text">Boluses and meals from before Permanent operation was turned on were found. Open the pump window and choose whether to write them to the journal.</string>
     <string name="mod_pumpbt_notify_no_result_title">Pump: bolus result not received</string>
     <string name="mod_pumpbt_notify_no_result_text">The pump has not reported how much of a bolus was delivered. Check the delivered amount on the pump.</string>
     <string name="mod_pumpbt_notify_drift_title">Pump and phone clocks differ</string>

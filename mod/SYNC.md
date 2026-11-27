@@ -40,6 +40,10 @@ app; what to check on the phone before installing (risk flags, spec 3.6). A cand
 - our build (`check-apk`, inheritance of `mod` from their `release`) — the author changed the build: fix in our
   files; `Common/schemas changed` - the author did not commit the export of the DB schema: check whether it is the
   same on his side, the owner decides;
+  `upstream boot receiver tk.glucodata.NumAlarm with BOOT_COMPLETED` red - the author renamed `NumAlarm` or took
+  `BOOT_COMPLETED` from it: find his receiver that now starts the process after a reboot and put its name into
+  `UPSTREAM_BOOT_RECEIVER` of `check-apk.py`; if he has none any more - ask the owner (after a reboot the pump
+  watchdog would not be armed until the app is opened);
 - their tests — are they red at the author's too (section 13)? Yes - not our fault, the owner decides; no - investigate;
 - golden alarm runs — the difference table in the report. The decisions changed by their intent (PR in section 3) -
   accept: `gh run download <run> -n sync-tests`, copy `Common/build/mod-golden/actual/*.csv` to

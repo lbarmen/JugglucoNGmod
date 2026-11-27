@@ -18,25 +18,29 @@ What the app itself can do is in the [author's README](/README.md).
 
 ## What JugglucoNGmod adds
 
-### MiniMed 740G pump data from CareLink
-For the MiniMed 740G pump with the MiniMed Mobile app, which sends the pump data to the Medtronic CareLink cloud.
-Every 5 minutes (or 10, 15) JugglucoNGmod takes the pump data from CareLink:
-- the journal gets the pump boluses and the carbs from the pump's bolus calculator; a bolus in progress, stopped
-  early, square or dual wave is marked;
+### MiniMed 7xx pumps over Bluetooth
+For the MiniMed 7xx pumps (740G, 770G, 780G). Checked on a 740G with a Samsung phone on Android 14; the 770G and 780G
+only by what other projects (OpenMinimed) report - not checked by us. The phone reads the pump directly over
+Bluetooth, in place of the MiniMed Mobile app: no cloud and no sign-in. Read only - the app sends the pump no doses
+and no settings, only read requests (the pairing adds the phone to the pump's list of devices); make dose decisions
+by the pump's own screen.
+- the journal gets the pump boluses and the carbs from the pump's bolus calculator;
 - the chart shows the real pump basal, normal and temporary; a pump stop is a gap with the note "Pump stopped";
-- the "IoB" chip on the main screen shows the pump's own active insulin;
+- the "IoB" chip on the main screen and our watch face show the pump's own active insulin;
 - the records go to Nightscout through the author's code, like any journal entry (his "send insulin and carbs"
   setting);
-- the "CareLink" window (in the settings, next to Nightscout): sign-in, reservoir, pump battery, active insulin, data
-  age, "Update now", update interval, how soon to warn;
-- notifications: "Sign in to CareLink again", "No pump data for over N min" (30 by default), "Pump records are not
-  saved".
+- the "Pump" window (in the settings next to Nightscout, and a shortcut on the app icon): a pairing wizard with the
+  steps on the pump, the link state, the pump's reservoir, battery, active insulin and basal with their age,
+  "Permanent operation", how soon to warn (20, 30 or 60 min), diagnostics with the link journal;
+- notifications: "No pump data for over N min" (30 by default), "Pump records are not saved", "The phone forgot the
+  pump".
 
-The user name and password are typed on the Medtronic page inside the app; the app does not see or keep them. The
-sign-in is kept encrypted on the phone and goes into no backup and no settings export. Without a CareLink sign-in
-nothing changes except the "CareLink" row in the settings.
-Pump data reaches CareLink a few minutes late, so the app is a few minutes behind the pump. Some CareLink regions sign
-in another way, which the app cannot do yet.
+MiniMed Mobile has to be unpaired from the pump: then the CareLink cloud (reports for the doctor, family following the
+data) gets no more data and the pump's notifications no longer come to the phone - the pump beeps by itself. The
+pump's key database is downloaded from OpenMinimed's public page when the pairing starts, or loaded from a file.
+SmartGuard auto mode and filling the reservoir are not checked yet: their records may not reach the journal, or may
+come in as boluses. Without a paired pump nothing changes except the "Pump" row in the settings. The earlier CareLink
+cloud data source is removed; what it left on the phone is removed by itself after the update.
 For now do not delete pump records by hand, neither in the app's journal nor in Nightscout: the basal may come back as
 a second record, or sending treatments to Nightscout may stop.
 
@@ -44,7 +48,7 @@ a second record, or sending treatments to Nightscout may stop.
 For a Wear OS watch with JugglucoNGmod on both the phone and the watch (checked on a Galaxy Watch 5 Pro).
 - Own watch face "JugglucoNGmod" on the whole circle: glucose in range color, trend arrow and change over 5 min,
   reading age in seconds, a 1, 3 or 6 h chart with hour lines and the forecast, time, date, phone and watch battery;
-  with CareLink, the pump's active insulin. A new reading is on the face 0–1 s after the phone has it. The chart
+  active insulin from the pump. A new reading is on the face 0–1 s after the phone has it. The chart
   length is set in the "Graph hours" app entry. The author's face stays, named "JugglucoNGmod classic".
 - "Snooze alarm": an app entry without a screen, meant for a watch button; it snoozes the alarm going on, on the
   watch and on the phone.
@@ -68,8 +72,8 @@ The watch is updated by hand: install the watch APK as a file or via adb; the wa
 | In-app update | — | from the releases of this repository (the first is 1.3.3-11): Settings → "App updates" → "Check automatically"; phone only, the watch is updated by hand | 1.3.2-2 |
 | Clone mode, BloodControl service (for AiDEX) | present | do not work: they need secrets of the JugglucoNG author | 1.3.2-2 |
 | Home-screen widget | two widgets: a card with the number, arrow and a 6 h chart (not transparent), and the number with arrow; no change over 5 min, no reading age | a third widget "JugglucoNGmod" in the xDrip look: transparent, number in range color, arrow, change over 5 min, "N min ago", 3 h of 5-minute dots; own settings window with a live preview (checked on a phone, 2026-11-21) | 1.3.3-10 |
-| MiniMed 740G pump (CareLink) | — | every 5 min from the CareLink cloud: pump boluses and carbs in the journal, the real basal on the chart, the pump's active insulin in "IoB", sent to Nightscout; own "CareLink" window and warnings (checked on a phone, 2026-11-18 – 2026-11-23) | 1.3.3-11 |
-| Own watch face | the author's face | own face "JugglucoNGmod" on the whole circle: glucose, arrow, change, age in seconds, 1/3/6 h chart with hour lines and forecast, both batteries, the pump's active insulin with CareLink; the author's face is "JugglucoNGmod classic" (checked on a watch, 2026-11-18 – 2026-11-23) | 1.3.3-11 |
+| MiniMed 7xx pump (740G, 770G, 780G) | — | checked on a 740G only (770G, 780G - by what OpenMinimed reports, not checked by us); read directly over Bluetooth, read only, no cloud: pump boluses and carbs in the journal, the real basal on the chart, the pump's active insulin in "IoB", sent to Nightscout; own "Pump" window with a pairing wizard, and warnings | |
+| Own watch face | the author's face | own face "JugglucoNGmod" on the whole circle: glucose, arrow, change, age in seconds, 1/3/6 h chart with hour lines and forecast, both batteries, active insulin from the pump; the author's face is "JugglucoNGmod classic" (checked on a watch, 2026-11-18 – 2026-11-23) | 1.3.3-11 |
 | Alarms on the watch | only on/off of each alarm comes from the phone; buttons 52 dp | the phone's alarm settings come to the watch; vibration only; own alarm screen with large buttons; "Snooze alarm" for a watch button snoozes on the watch and the phone (checked on a watch, 2026-11-21) | 1.3.3-11 |
 | Heart rate and steps | — | from the watch to the phone: the "JugglucoNGmod watch" screen (checked on a watch, 2026-11-20) | 1.3.3-11 |
 | Always-on display (phone) | number and arrow drift to the side when the chart is on; chart with a filled target band, grid and a grey forecast area | in the look of the watch face's dim mode: white number centred, arrow, change, the reading's time and the pump's active insulin under it, 3 h of 5-minute dots, dashed low and high lines, thin dashed forecast, no background; on Samsung's always-on screen the window is put up anew once a minute, as xDrip+ does, so the value refreshes (checked on a phone, 2026-11-26) | 1.3.3-12 |

@@ -324,6 +324,22 @@ class PumpEventsTest {
     }
 
     @Test
+    fun tbrAdjustmentTypesAreSkippedNotUnknown() {
+        val r = PumpEvents.build(
+            listOf(
+                ref(1, 3600, 6),
+                raw(0x00A5, 2, 0, "0102"), // made-up bodies: only the type matters here
+                raw(0x00AA, 3, 0, "0304"),
+                raw(0x00A6, 4, 0, ""),     // a neighbour stays unknown
+            ),
+            null, 4,
+        )
+        assertEquals(setOf(0x00A6), r.unknownTypes)
+        assertTrue(r.events.isEmpty())
+        assertTrue(r.unparsed.isEmpty())
+    }
+
+    @Test
     fun eventsByTimeThenSequence() {
         val r = PumpEvents.build(
             listOf(ref(1, 3600, 6), raw(0xF00B, 2, 300, "01"), raw(0xF00A, 3, 300, "02"), raw(0xF005, 4, 100, "1400")),

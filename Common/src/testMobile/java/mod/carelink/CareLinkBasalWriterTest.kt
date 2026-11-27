@@ -22,7 +22,6 @@ import tk.glucodata.data.journal.JournalRepository
 import tk.glucodata.drivers.api.ApiIobSnapshot
 import tk.glucodata.mod.carelink.CareLinkBasalWriter
 import tk.glucodata.mod.carelink.CareLinkIob
-import tk.glucodata.mod.carelink.CareLinkPoller
 import tk.glucodata.mod.carelink.CareLinkSettings
 import tk.glucodata.mod.carelink.PumpNow
 import tk.glucodata.mod.carelink.TempBasal
@@ -313,41 +312,5 @@ class CareLinkBasalWriterTest {
         assertEquals(now, ApiIobSnapshot.fresh(now)!!.timestampMillis)
         CareLinkIob.publish(null)
         assertEquals(1.0f, ApiIobSnapshot.fresh(now)!!.iobUnits, 1e-6f)
-    }
-
-    @Test
-    fun signOutTakesThePumpIobOffThePlateEvenWhenClosingTheBasalFails() {
-        // critic 4d, N3 and N7: the clearing after a sign-out runs whether or not closing the basal worked
-        CareLinkIob.publish(PumpNow(now - 2 * min, iobUnits = 2.5))
-        assertNotNull(ApiIobSnapshot.fresh(now))
-        runBlocking { CareLinkPoller.closeAfterSignOut(app).join() }
-        assertNull("the basal closed fine", ApiIobSnapshot.fresh(now))
-        CareLinkIob.publish(PumpNow(now - min, iobUnits = 1.5))
-        assertNotNull(ApiIobSnapshot.fresh(now))
-        CareLinkPoller.closeBasal = { throw IllegalStateException("made-up") }
-        try {
-            runBlocking { CareLinkPoller.closeAfterSignOut(app).join() }
-        } finally {
-            CareLinkPoller.resetForTest()
-        }
-        assertNull("closing the basal failed", ApiIobSnapshot.fresh(now))
-    }
-
-    @Test
-    fun aNewSignInBeforeTheClosingKeepsItsIob() {
-        // critic of the joints 4e, N1: signed out and in again within seconds - the closing left for later must not
-        // close the new session's segment or take its IoB off
-        CareLinkIob.publish(PumpNow(now - min, iobUnits = 1.5))
-        var closedCount = 0
-        CareLinkPoller.closeBasal = { closedCount++ }
-        tk.glucodata.mod.carelink.CareLinkSettings(app).enabled = true
-        try {
-            runBlocking { CareLinkPoller.closeAfterSignOut(app).join() }
-        } finally {
-            tk.glucodata.mod.carelink.CareLinkSettings(app).enabled = false
-            CareLinkPoller.resetForTest()
-        }
-        assertEquals(0, closedCount)
-        assertNotNull(ApiIobSnapshot.fresh(now))
     }
 }

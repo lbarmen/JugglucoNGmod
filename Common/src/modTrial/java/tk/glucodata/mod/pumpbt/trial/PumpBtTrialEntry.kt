@@ -65,8 +65,8 @@ import kotlin.math.roundToLong
  * parsed with the link's own parsers, read from the number the source gives the link and closed with the link's own
  * history rules ([PumpLinkRules.historyPlan], [PumpLinkRules.historyOutcome]), then handed to
  * [PumpBtSource.acceptCycle] like a cycle of the link: history memory, events, bridge, first catch-up card, journal
- * intake, basal writer, active insulin, notifications. The pump's clock follows [CareLinkClock] (as the CareLink trial's
- * pump does) plus its own drift.
+ * intake, basal writer, active insulin, notifications. The pump's clock follows [CareLinkClock] (the clock of the pump
+ * writers) plus its own drift.
  *
  * Turning the source on: [PumpBtSource.enable], the call of the window's "Permanent operation" - only without the
  * window's own gate (key database and Bluetooth: an emulator has no pump key), which exists in test builds alone.

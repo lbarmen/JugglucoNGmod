@@ -46,7 +46,7 @@ The phone and the watch are built in separate runs: the watch needs a parameter 
 by itself.
 
 The build and APK checks are the GitHub Actions job `.github/workflows/mod-build.yml`, the checks are
-`mod/check-apk.py`. Before every commit - `bash mod/check-secrets.sh`. Hooks into the author's files (none at the
+`mod/check-apk.py`. Before every commit - `bash mod/check-secrets.sh`. Hooks into the author's files (two at the
 moment) are in [HOOKS.md](HOOKS.md).
 The check knows the owner's own Nightscout address and serial numbers from a personal list - a file outside the
 repository, `../secrets-deny.txt`; only the check on the owner's computer reads it, it is not there in GitHub Actions.

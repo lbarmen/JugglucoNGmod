@@ -12,8 +12,10 @@ import tk.glucodata.mod.pumpbt.PumpBtNameVariant
 import tk.glucodata.mod.pumpbt.PumpBtProgress
 import tk.glucodata.mod.pumpbt.PumpBtReadiness
 import tk.glucodata.mod.pumpbt.PumpBtReturn
+import tk.glucodata.mod.pumpbt.PumpBtSourceState
 import tk.glucodata.mod.pumpbt.PumpBtStage
 import tk.glucodata.mod.pumpbt.PumpBtUiState
+import tk.glucodata.mod.pumpbt.PumpBtWindow
 import tk.glucodata.mod.pumpbt.ble.PumpLinkRules
 import tk.glucodata.mod.pumpbt.ble.PumpLinkRules.ServerEvent
 import tk.glucodata.mod.pumpbt.core.HistoryReadStatus
@@ -505,6 +507,40 @@ class PumpLinkRulesTest {
     }
 
     @Test
+    fun bondLineHasOneFormat() {
+        assertEquals(
+            "bond state of device-1a2b: bonded → none, reason 9",
+            PumpLinkRules.bondLine("device-1a2b", PumpLinkRules.BOND_BONDED, PumpLinkRules.BOND_NONE, 9),
+        )
+        assertEquals(
+            "bond state of ?: unknown → bonding, reason -1",
+            PumpLinkRules.bondLine("?", -1, PumpLinkRules.BOND_BONDING, -1),
+        )
+        // the platform's values
+        assertEquals(android.bluetooth.BluetoothDevice.BOND_NONE, PumpLinkRules.BOND_NONE)
+        assertEquals(android.bluetooth.BluetoothDevice.BOND_BONDING, PumpLinkRules.BOND_BONDING)
+        assertEquals(android.bluetooth.BluetoothDevice.BOND_BONDED, PumpLinkRules.BOND_BONDED)
+    }
+
+    @Test
+    fun sourceWritesTheBondLineOnlyForOurPumpWhileTheLinkIsNotRunning() {
+        val pump = "C4:AB:12:34:56:78"
+        val tag = PumpLinkRules.deviceTag(pump, verbose = false)
+        val line = PumpLinkRules.bondLine(tag, PumpLinkRules.BOND_BONDED, PumpLinkRules.BOND_NONE, 9)
+        assertEquals(line, PumpLinkRules.sourceBondLine(false, ours = true, device = tag, before = PumpLinkRules.BOND_BONDED, now = PumpLinkRules.BOND_NONE, reason = 9))
+        // a running link writes the line itself: no line twice
+        assertNull(PumpLinkRules.sourceBondLine(true, ours = true, device = tag, before = PumpLinkRules.BOND_BONDED, now = PumpLinkRules.BOND_NONE, reason = 9))
+        // another device (a watch, headphones)
+        assertNull(PumpLinkRules.sourceBondLine(false, ours = false, device = tag, before = PumpLinkRules.BOND_BONDED, now = PumpLinkRules.BOND_NONE, reason = 9))
+
+        assertTrue(PumpLinkRules.ourPumpBond(pump.lowercase(), null, pump))
+        assertTrue(PumpLinkRules.ourPumpBond("00:11:22:33:44:55", "Pump 123456", pump))
+        assertTrue(PumpLinkRules.ourPumpBond(null, null, pump))
+        assertFalse(PumpLinkRules.ourPumpBond("00:11:22:33:44:55", "Galaxy Watch5 Pro", pump))
+        assertFalse(PumpLinkRules.ourPumpBond("00:11:22:33:44:55", null, null))
+    }
+
+    @Test
     fun failedPairingBeforeThePumpIsIdentifiedAdvertisesAgain() {
         assertEquals(PumpLinkRules.Drop.ADVERTISE_AGAIN, PumpLinkRules.bondFailed(running = true, pumpKnown = false, wasBonding = true, nowNone = true))
         assertEquals(PumpLinkRules.Drop.NOTHING, PumpLinkRules.bondFailed(running = true, pumpKnown = true, wasBonding = true, nowNone = true))
@@ -543,21 +579,24 @@ class PumpLinkRulesTest {
     }
 
     @Test
-    fun startNeedsBluetoothAdvertisingAndKey() {
+    fun startNeedsBluetoothAndAdvertisingNotTheKey() {
         assertEquals(
-            listOf(PumpBtBlocker.NO_BLUETOOTH, PumpBtBlocker.NO_PERMISSION, PumpBtBlocker.NO_KEY),
-            PumpBtReadiness.blockers(hasBluetooth = false, on = false, permissions = false, advertising = null, key = false),
+            listOf(PumpBtBlocker.NO_BLUETOOTH, PumpBtBlocker.NO_PERMISSION),
+            PumpBtReadiness.blockers(hasBluetooth = false, on = false, permissions = false, advertising = null),
         )
-        assertEquals(listOf(PumpBtBlocker.BLUETOOTH_OFF), PumpBtReadiness.blockers(true, false, true, null, true))
-        assertEquals(listOf(PumpBtBlocker.NO_ADVERTISING), PumpBtReadiness.blockers(true, true, true, false, true))
-        assertTrue(PumpBtReadiness.blockers(true, true, true, true, true).isEmpty())
+        assertEquals(listOf(PumpBtBlocker.BLUETOOTH_OFF), PumpBtReadiness.blockers(true, false, true, null))
+        assertEquals(listOf(PumpBtBlocker.NO_ADVERTISING), PumpBtReadiness.blockers(true, true, true, false))
+        assertTrue(PumpBtReadiness.blockers(true, true, true, true).isEmpty())
 
         val ready = PumpBtUiState(hasBluetooth = true, bluetoothOn = true, permissionsGranted = true, advertisingSupported = true, keyCrc = "01020304")
-        assertTrue(ready.canStart)
+        val off = PumpBtSourceState()
+        assertTrue(PumpBtWindow.controls(ready, off).canStart)
         // only the permissions missing: the start asks for them
-        assertTrue(ready.copy(permissionsGranted = false).canStart)
-        assertFalse(ready.copy(keyCrc = null).canStart)
-        assertFalse(ready.copy(advertisingSupported = false).canStart)
-        assertFalse(ready.copy(link = PumpBtLinkState(running = true)).canStart)
+        assertTrue(PumpBtWindow.controls(ready.copy(permissionsGranted = false), off).canStart)
+        // no key: the start downloads it first (series brief, decision 11)
+        assertTrue(ready.copy(keyCrc = null).blockers.isEmpty())
+        assertTrue(PumpBtWindow.controls(ready.copy(keyCrc = null), off).canStart)
+        assertFalse(PumpBtWindow.controls(ready.copy(advertisingSupported = false), off).canStart)
+        assertFalse(PumpBtWindow.controls(ready, off.copy(link = PumpBtLinkState(running = true))).canStart)
     }
 }

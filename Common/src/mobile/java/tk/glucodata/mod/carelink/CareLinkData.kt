@@ -3,33 +3,10 @@ package tk.glucodata.mod.carelink
 import org.json.JSONArray
 import org.json.JSONObject
 
-/**
- * JugglucoNGmod, CareLink (stage 4c): the `display/message` answer - `{"metadata": {...}, "patientData": {...}}`
- * (older versions put the pump fields at the root). Moved from Glucove's CareLinkData: only the validity check and the
- * pump data time; nothing of the answer is ever written to disk or to a log (no scrub, no summary).
+/*
+ * JugglucoNGmod: JSON field readers for the stored files (`seen.json`, `pump.json`). The parsing of the CareLink
+ * cloud answer that once lived here went with the cloud.
  */
-object CareLinkData {
-
-    /** The pump part of the answer: `patientData`, or the root itself for older answers. */
-    fun patient(root: JSONObject): JSONObject = root.clObj("patientData") ?: root
-
-    /**
-     * Looks like pump data: at least the markers list or the time of the pump data. An answer with neither (an empty
-     * object, an error page in JSON) is not a poll result.
-     */
-    fun looksValid(root: JSONObject): Boolean {
-        val p = patient(root)
-        return p.clArr("markers") != null || p.clLong("lastMedicalDeviceDataUpdateServerTime") != null
-    }
-
-    /**
-     * When the pump data reached the cloud (`lastMedicalDeviceDataUpdateServerTime`, ms UTC) - the measure of
-     * freshness, not the time of the answer: the cloud answers long after the phone with MiniMed Mobile stopped
-     * uploading. No field, not a number or not positive - null.
-     */
-    fun pumpDataAt(root: JSONObject): Long? =
-        patient(root).clLong("lastMedicalDeviceDataUpdateServerTime")?.takeIf { it > 0 }
-}
 
 /** A nested object; no field, JSON null or another type - null. */
 internal fun JSONObject.clObj(key: String): JSONObject? = if (isNull(key)) null else opt(key) as? JSONObject
