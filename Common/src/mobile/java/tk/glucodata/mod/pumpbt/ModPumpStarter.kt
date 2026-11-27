@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import tk.glucodata.mod.carelink.PumpSourceSwitch
 
 /**
  * JugglucoNGmod, pump over Bluetooth (series part 2, part B2c): starts the Bluetooth pump source with the process,
@@ -21,8 +22,9 @@ import android.util.Log
  * starts at every process start, not when the window opens.
  *
  * Order (critic of B2a, C-3): the notifier first, so that what the source tells at its start (a lost bond, an unknown
- * record) is not lost; the made-up pump of test builds by class name (contract 3.5); then [PumpBtSource.init] (with
- * the source on: the link waiting for the paired pump); then the watchdog follows the source's on/off.
+ * record) is not lost; the made-up pump of test builds by class name (contract 3.5); then [PumpBtSource.init] - only
+ * with the source on (the link waiting for the paired pump) or a pump's address kept (critic B2c, N6); then the
+ * watchdog follows the source's on/off.
  */
 class ModPumpStarter : ContentProvider() {
 
@@ -70,6 +72,9 @@ class ModPumpStarter : ContentProvider() {
             step("watchdog") { s.watchdog(app) }
         }
 
+        /** The source is started with the process: it is on, or the link state holds a pump's address. */
+        internal inline fun sourceInUse(on: Boolean, address: () -> String): Boolean = on || address().isNotBlank()
+
         private inline fun step(name: String, block: () -> Unit) {
             try {
                 block()
@@ -109,8 +114,15 @@ internal object RealStarterSteps : StarterSteps {
 
     override fun trial(app: Context) = ModPumpStarter.installTrial(app)
 
+    /**
+     * Only for someone who uses the pump source: on, or a pump once paired (its address kept). Everyone else's process
+     * start reads no history memory and registers no bond receiver (critic B2c, N6); the trial window calls
+     * [PumpBtSource.init] itself when it opens, and turning the source on works without it.
+     */
     override fun init(app: Context) {
-        PumpBtSource.init(app)
+        if (ModPumpStarter.sourceInUse(PumpSourceSwitch.bluetoothOn(app)) { PumpBtSource.store(app).pumpAddress }) {
+            PumpBtSource.init(app)
+        }
     }
 
     override fun watchdog(app: Context) {

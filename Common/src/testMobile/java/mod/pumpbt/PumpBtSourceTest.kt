@@ -236,10 +236,16 @@ class PumpBtSourceTest {
     @Test
     fun twoCyclesAtOnceRunOneAfterTheOther() {
         enable(ms(11, 0))
-        // the intake is asked for both (the later read time may come first: then the other snapshot is older, SKIPPED)
+        // the intake is asked for both; the second cycle is offered once the first holds the source's lock (the intake
+        // runs under it): with the later read first the earlier one's snapshot would be older and dropped (joints, N-3)
         val intakes = AtomicInteger()
+        val firstInside = CompletableDeferred<Unit>()
         PumpBtSource.intake = { c, e, p, n ->
             intakes.incrementAndGet()
+            if (n == ms(12, 0)) {
+                firstInside.complete(Unit)
+                delay(100) // the second cycle waits at the lock meanwhile
+            }
             CareLinkIntake.accept(c, tk.glucodata.mod.carelink.IntakeSource.BLUETOOTH, e, p, n)
         }
         val inside = AtomicInteger()
@@ -250,10 +256,13 @@ class PumpBtSourceTest {
             inside.decrementAndGet()
         }
         val first = cycle(listOf(ref(100, 3600, 11), sensor(101, 60)), readAtMs = ms(12, 0), oldest = 100).withBasal()
-        // asked from 100 too: whichever comes first, the number ends at 103 with every record
+        // asked from 100 too: the number ends at 103 with every record
         val second = cycle(listOf(sensor(102, 120), sensor(103, 180)), readAtMs = ms(12, 1), from = 100, newest = 103).withBasal()
         runBlocking {
-            listOf(first, second).map { c -> async(Dispatchers.Default) { PumpBtSource.acceptCycle(app, c) } }.awaitAll()
+            val one = async(Dispatchers.Default) { PumpBtSource.acceptCycle(app, first) }
+            withTimeout(10_000) { firstInside.await() }
+            val two = async(Dispatchers.Default) { PumpBtSource.acceptCycle(app, second) }
+            listOf(one, two).awaitAll()
         }
         assertEquals(1, most.get())
         assertEquals(2, intakes.get())
@@ -629,11 +638,12 @@ class PumpBtSourceTest {
         PumpBtSource.offerCycleForTest(app, cycle(emptyList(), readAtMs = ms(12, 15), from = 105, to = 104, newest = 104, contiguousTo = null))
         PumpBtSource.offerCycleForTest(app, cycle(emptyList(), readAtMs = ms(12, 20), from = 105, to = 104, newest = 104, contiguousTo = null))
         runBlocking {
-            withTimeout(10_000) {
-                done.await()
-                while ("INSULIN|2026-10-15T11:20:00|0" !in onDisk().acceptedAt) delay(20)
-            }
+            withTimeout(10_000) { done.await() }
+            // the cycle saves under the source's lock: a bond check queued behind it waits for the end (reading the file
+            // meanwhile made the save's rename fail on Windows, and the test waited in vain)
+            withTimeout(10_000) { PumpBtSource.recheckBond(app).join() }
         }
+        assertTrue("INSULIN|2026-10-15T11:20:00|0" in onDisk().acceptedAt)
         assertEquals(2, calls)
     }
 
@@ -801,7 +811,8 @@ class PumpBtSourceTest {
     fun theLinkJournalOfACycleHoldsNoDoses() {
         enable(ms(11, 0))
         accept(cycle(listOf(ref(100, 3600, 11)) + bolus(101, 1200, id = 1, tenths = 37), readAtMs = ms(12, 5), oldest = 100))
-        val lines = PumpBtJournal.tail.value.filter { "source:" in it }.joinToString("\n")
+        // the messages without their time of day (a line at 16:06:03.703 holds "3.7" too)
+        val lines = PumpBtJournal.tail.value.filter { "source:" in it }.joinToString("\n") { it.substringAfter(' ') }
         assertTrue(lines, lines.contains("fed 1 boluses, 0 meals"))
         assertFalse(lines, lines.contains("3.7"))
         assertFalse(lines, lines.contains("3,7"))

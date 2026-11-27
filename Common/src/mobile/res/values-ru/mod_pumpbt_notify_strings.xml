@@ -2,7 +2,7 @@
 <!-- JugglucoNGmod, pump over Bluetooth (series part 2, part B2c): Russian notifications of the Bluetooth pump source. -->
 <resources>
     <string name="mod_pumpbt_notify_unknown_title">Помпа: неизвестная запись</string>
-    <string name="mod_pumpbt_notify_unknown_text">В истории помпы есть запись вида %1$s, которую приложение не знает. В журнале могут не хватать доз: проверьте историю на помпе и поделитесь журналом связи с помпой.</string>
+    <string name="mod_pumpbt_notify_unknown_text">В истории помпы есть записи, которые приложение не знает (вид %1$s). В журнале могут не хватать доз: проверьте историю на помпе и поделитесь журналом связи с помпой.</string>
     <string name="mod_pumpbt_notify_unparsed_title">Помпа: болюс или еда не прочитаны</string>
     <string name="mod_pumpbt_notify_unparsed_text">Не удалось прочитать запись болюса или еды вида %1$s. Проверьте историю на помпе и, если дозы нет в журнале, добавьте её вручную.</string>
     <string name="mod_pumpbt_notify_backfill_title">Помпа: найдены прежние дозы</string>

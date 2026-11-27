@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.SystemClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -25,9 +26,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 internal enum class WatchdogAction { NONE, ENSURE_ADVERTISING, READ_NOW, RECONNECT }
 
 /**
- * One watchdog round as the rules see it. [connectedSeenAtMs] - the round that first saw the link connected (the
- * watchdog's own mark: the link does not tell since when it is connected); [remindedAtMs] - the last time the first
- * catch-up card was told (its notification or a reminder).
+ * One watchdog round as the rules see it. [connectedSeenAtMs] - the watchdog's own mark, as the link does not tell since
+ * when it is connected: the first round that saw the link connected after the last round that saw it not connected. A
+ * gap between two pump sessions that no round saw (rounds every 5 min, a gap of about a minute) keeps the older mark;
+ * accepted - the last read is usually fresher (critic B2c, N2). [remindedAtMs] - the last time the first catch-up card
+ * was told (its notification or a reminder). [noAdvertSeenAtMs] - the previous round saw the link running, neither
+ * connected nor advertising (critic B2c, N1: the advertisement is mended only when two rounds in a row see it gone).
  */
 internal data class WatchdogInput(
     val nowMs: Long,
@@ -36,6 +40,7 @@ internal data class WatchdogInput(
     val connectedSeenAtMs: Long?,
     val cardWaiting: Boolean,
     val remindedAtMs: Long?,
+    val noAdvertSeenAtMs: Long? = null,
 )
 
 /** The round's outcome: what to do, the marks to keep, whether to remind of the card and to check "no data". */
@@ -47,16 +52,22 @@ internal data class WatchdogDecision(
     val checkNoData: Boolean,
     /** false - the source is off: the alarm goes. */
     val keepArmed: Boolean,
+    /** The mark of a round that saw no advertisement (kept for the next round). */
+    val noAdvertSeenAtMs: Long? = null,
+    /** How long nothing was read while connected (READ_NOW, RECONNECT: the link journal line). */
+    val quietMs: Long? = null,
 )
 
 /**
  * The watchdog's rules (series brief, decision 2; plan B2c, point 2). Pure: no Android, no clock of its own.
  *
  * The pump connects by itself about every 8 min, stays about 7 min and leaves by its own timeout (journal of the
- * trial, 27.11): the link being gone between sessions is normal and only means "make sure we advertise". The 7 and
- * 15 min are counted only while the link is connected, from the later of the last read and the round that first saw
- * this connection - a read from the previous session must not make a fresh handshake look stale. Times in the future
- * (the phone's clock set back) count as now.
+ * trial, 27.11): the link being gone between sessions is normal and only means "make sure we advertise". A link that
+ * does not run is started at once; a running link that neither is connected nor advertises is advertised again only
+ * when the previous round saw the same - while it adds its services, waits for the advertisement to start or pauses to
+ * recover, the flag is false for a moment (critic B2c, N1). The 7 and 15 min are counted only while the link is
+ * connected, from the later of the last read and the round that first saw this connection - a read from the previous
+ * session must not make a fresh handshake look stale. Times in the future (the phone's clock set back) count as now.
  */
 internal object PumpBtWatchdogRules {
     const val TICK_MS = 5 * 60_000L
@@ -71,16 +82,26 @@ internal object PumpBtWatchdogRules {
         val now = i.nowMs
         val h = i.health
         var seen: Long? = null
-        val action = if (h == null || !h.running || !h.connected) {
-            WatchdogAction.ENSURE_ADVERTISING
-        } else {
-            val since = i.connectedSeenAtMs?.takeIf { it <= now } ?: now
-            val lastRead = h.lastCycleAtMs?.takeIf { it <= now }
-            val quiet = now - maxOf(lastRead ?: Long.MIN_VALUE, since)
-            when {
-                quiet >= RECONNECT_AFTER_MS -> WatchdogAction.RECONNECT // the link is dropped: the next connection is new
-                quiet >= READ_AFTER_MS -> WatchdogAction.READ_NOW.also { seen = since }
-                else -> WatchdogAction.NONE.also { seen = since }
+        var noAdvert: Long? = null
+        var quietMs: Long? = null
+        val action = when {
+            h == null || !h.running -> WatchdogAction.ENSURE_ADVERTISING // started at once
+            !h.connected && h.advertising -> WatchdogAction.ENSURE_ADVERTISING // advertising: the source leaves it alone
+            !h.connected -> if (i.noAdvertSeenAtMs != null) {
+                WatchdogAction.ENSURE_ADVERTISING // the second round in a row without an advertisement
+            } else {
+                WatchdogAction.NONE.also { noAdvert = now }
+            }
+            else -> {
+                val since = i.connectedSeenAtMs?.takeIf { it <= now } ?: now
+                val lastRead = h.lastCycleAtMs?.takeIf { it <= now }
+                val quiet = now - maxOf(lastRead ?: Long.MIN_VALUE, since)
+                when {
+                    // the link is dropped: the next connection is new
+                    quiet >= RECONNECT_AFTER_MS -> WatchdogAction.RECONNECT.also { quietMs = quiet }
+                    quiet >= READ_AFTER_MS -> WatchdogAction.READ_NOW.also { seen = since; quietMs = quiet }
+                    else -> WatchdogAction.NONE.also { seen = since }
+                }
             }
         }
         var reminded = i.remindedAtMs
@@ -96,7 +117,7 @@ internal object PumpBtWatchdogRules {
                 }
             }
         }
-        return WatchdogDecision(action, seen, remind, reminded, checkNoData = true, keepArmed = true)
+        return WatchdogDecision(action, seen, remind, reminded, checkNoData = true, keepArmed = true, noAdvertSeenAtMs = noAdvert, quietMs = quietMs)
     }
 }
 
@@ -104,10 +125,18 @@ internal object PumpBtWatchdogRules {
 internal interface PumpBtWatchdogActions {
     fun health(): PumpLinkHealth?
     fun cardWaiting(): Boolean
+
+    /** The link runs (main thread). */
+    fun linkRunning(): Boolean
+
+    /** A stopped link is started; a running one, also one still setting up, is left alone. */
+    fun startLink(context: Context)
     fun ensureAdvertising(context: Context)
     fun readNow()
     fun reconnect()
     fun checkNoData(context: Context)
+
+    /** The card's reminder; throws when it was not shown. */
     fun remind(context: Context)
 }
 
@@ -115,11 +144,23 @@ internal interface PumpBtWatchdogActions {
 internal object SourceWatchdogActions : PumpBtWatchdogActions {
     override fun health(): PumpLinkHealth? = PumpBtSource.linkHealth()
     override fun cardWaiting(): Boolean = PumpBtSource.state.value.let { it.backfill == BackfillState.WAITING && it.card != null }
+    override fun linkRunning(): Boolean = PumpBtSource.linkRunning
+
+    /**
+     * [PumpBtSource.init]: once the memory is loaded, on the main thread, it starts the link only when it does not run
+     * then. Not [PumpBtSource.ensureAdvertising]: after an update the starter's init may have started the link a moment
+     * before, and a link still adding its services does not advertise yet - ensureAdvertising would drop it (critic
+     * B2c, N1).
+     */
+    override fun startLink(context: Context) {
+        PumpBtSource.init(context)
+    }
+
     override fun ensureAdvertising(context: Context) = PumpBtSource.ensureAdvertising(context)
     override fun readNow() = PumpBtSource.readNow()
     override fun reconnect() = PumpBtSource.reconnect()
     override fun checkNoData(context: Context) = CareLinkNotifier.checkNoData(context)
-    override fun remind(context: Context) = PumpBtNotifier.show(context, PumpBtAlert(PumpBtAlertKind.CONFIRM_BACKFILL))
+    override fun remind(context: Context) = PumpBtNotifier.remindCard(context)
 }
 
 /**
@@ -140,27 +181,32 @@ internal object PumpBtWatchdog {
     private const val K_NEXT = "nextAlarmElapsedMs"
     private const val K_SEEN = "connectedSeenAtMs"
     private const val K_REMINDED = "cardRemindedAtMs"
+    private const val K_NO_ADVERT = "noAdvertSeenAtMs"
 
     @Volatile internal var elapsed: () -> Long = { SystemClock.elapsedRealtime() }
     @Volatile internal var actions: PumpBtWatchdogActions = SourceWatchdogActions
 
     /**
-     * After an app update, the source on: upstream's keep-alive service by the person's own setting (upstream has no
-     * receiver of the update; their reboot path `Applic.possiblybluetooth` is not reachable from our package). Tests
-     * put their own.
+     * After an app update, the source on: upstream's keep-alive service, only when the person gets the sensor over
+     * Bluetooth (upstream has no receiver of the update; their reboot path `Applic.possiblybluetooth` is not reachable
+     * from our package). Not otherwise: upstream's `updateservice(c, false)` may stop its service and with it the
+     * "sensor signal lost" alarm (critic B2c, N3). Tests put their own.
      */
-    @Volatile internal var upstreamService: (Context) -> Unit = { c ->
-        if (Applic.stopprogram == 0) Applic.updateservice(c, Natives.getusebluetooth())
+    @Volatile internal var upstreamService: (Context) -> Unit = ::startUpstreamService
+
+    private fun startUpstreamService(c: Context) {
+        if (Applic.stopprogram == 0 && Natives.getusebluetooth()) Applic.updateservice(c, true)
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val following = AtomicBoolean(false)
+    @Volatile private var followJob: Job? = null
 
     /** Once per process (the starter): the alarm follows the source's on/off. */
     fun follow(context: Context) {
         val app = context.applicationContext
         if (!following.compareAndSet(false, true)) return
-        scope.launch {
+        followJob = scope.launch {
             PumpBtSource.state.map { it.enabled }.distinctUntilChanged().collect { on ->
                 try {
                     // the state starts "off" until init has read the switch: the switch decides
@@ -194,8 +240,8 @@ internal object PumpBtWatchdog {
             return true
         }
         val at = now + PumpBtWatchdogRules.TICK_MS
-        setAlarm(app, at)
-        prefs.edit().putLong(K_NEXT, at).apply()
+        // the time is kept only for an alarm that was set: a refused one is tried again at the next arm (critic B2c, N7)
+        if (setAlarm(app, at)) prefs.edit().putLong(K_NEXT, at).apply() else prefs.edit().remove(K_NEXT).apply()
         return true
     }
 
@@ -211,7 +257,7 @@ internal object PumpBtWatchdog {
         } catch (t: Throwable) {
             PumpBtLog.w("watchdog alarm not removed (${t.javaClass.simpleName})")
         }
-        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(K_NEXT).remove(K_SEEN).apply()
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(K_NEXT).remove(K_SEEN).remove(K_NO_ADVERT).apply()
     }
 
     /** One round (the alarm, main thread): the rules, then what they say. Returns the decision (tests). */
@@ -220,6 +266,7 @@ internal object PumpBtWatchdog {
         PumpBtJournal.init(app)
         val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val a = actions
+        val remindedBefore = prefs.long(K_REMINDED)
         val d = PumpBtWatchdogRules.decide(
             WatchdogInput(
                 nowMs = nowMs,
@@ -227,7 +274,8 @@ internal object PumpBtWatchdog {
                 health = a.health(),
                 connectedSeenAtMs = prefs.long(K_SEEN),
                 cardWaiting = a.cardWaiting(),
-                remindedAtMs = prefs.long(K_REMINDED),
+                remindedAtMs = remindedBefore,
+                noAdvertSeenAtMs = prefs.long(K_NO_ADVERT),
             ),
         )
         if (!d.keepArmed) {
@@ -237,15 +285,17 @@ internal object PumpBtWatchdog {
         prefs.edit().apply {
             if (d.connectedSeenAtMs == null) remove(K_SEEN) else putLong(K_SEEN, d.connectedSeenAtMs)
             if (d.remindedAtMs == null) remove(K_REMINDED) else putLong(K_REMINDED, d.remindedAtMs)
+            if (d.noAdvertSeenAtMs == null) remove(K_NO_ADVERT) else putLong(K_NO_ADVERT, d.noAdvertSeenAtMs)
         }.apply()
+        val quietMin = (d.quietMs ?: 0L) / 60_000
         when (d.action) {
             WatchdogAction.ENSURE_ADVERTISING -> a.ensureAdvertising(app)
             WatchdogAction.READ_NOW -> {
-                PumpBtJournal.add("watchdog: connected, nothing read for ${PumpBtWatchdogRules.READ_AFTER_MS / 60_000} min - read now")
+                PumpBtJournal.add("watchdog: connected, nothing read for $quietMin min - read now")
                 a.readNow()
             }
             WatchdogAction.RECONNECT -> {
-                PumpBtJournal.add("watchdog: connected, nothing read for ${PumpBtWatchdogRules.RECONNECT_AFTER_MS / 60_000} min - reconnect")
+                PumpBtJournal.add("watchdog: connected, nothing read for $quietMin min - reconnect")
                 a.reconnect()
             }
             WatchdogAction.NONE -> {}
@@ -258,25 +308,35 @@ internal object PumpBtWatchdog {
             }
         }
         if (d.remind) {
-            PumpBtJournal.add("watchdog: the first catch-up card waits over a day - reminded")
-            a.remind(app)
+            try {
+                a.remind(app)
+                PumpBtJournal.add("watchdog: the first catch-up card waits over a day - reminded")
+            } catch (t: Throwable) {
+                // not shown (notifications off): the old time stays, the next round tries again (critic B2c, C1)
+                prefs.edit().apply { if (remindedBefore == null) remove(K_REMINDED) else putLong(K_REMINDED, remindedBefore) }.apply()
+                PumpBtLog.w("watchdog: card reminder not shown (${t.javaClass.simpleName})")
+            }
         }
         return d
     }
 
-    /** The card was told now (the notifier): its reminder comes a day later. */
+    /** The card was shown now (the notifier): its reminder comes a day later. */
     fun cardTold(context: Context, nowMs: Long = CareLinkClock.now()) {
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putLong(K_REMINDED, nowMs).apply()
     }
 
-    /** After an app update (the update receiver): the link at once, upstream's service, the alarm. */
+    /**
+     * After an app update (the update receiver): the link, only when it does not run (critic B2c, N1: the starter's
+     * init may already have started it), upstream's service, the alarm.
+     */
     fun afterUpdate(context: Context) {
         val app = context.applicationContext
         if (!PumpSourceSwitch.bluetoothOn(app)) return
         PumpBtJournal.init(app)
         PumpBtJournal.add("app updated: link and watchdog started again")
+        val a = actions
         try {
-            actions.ensureAdvertising(app)
+            if (!a.linkRunning()) a.startLink(app)
         } catch (t: Throwable) {
             PumpBtLog.w("link not started after the update (${t.javaClass.simpleName})")
         }
@@ -294,25 +354,29 @@ internal object PumpBtWatchdog {
 
     private fun android.content.SharedPreferences.long(key: String): Long? = if (contains(key)) getLong(key, 0L) else null
 
-    private fun setAlarm(app: Context, atElapsedMs: Long) {
+    /** false - no alarm was set (no alarm service, or both calls refused). */
+    private fun setAlarm(app: Context, atElapsedMs: Long): Boolean {
         val alarms = app.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
         val pending = intent(app, 0)
         if (alarms == null || pending == null) {
             PumpBtLog.w("no alarm service: no pump watchdog")
-            return
+            return false
         }
         val exact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarms.canScheduleExactAlarms()
-        try {
+        return try {
             if (exact) {
                 alarms.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, atElapsedMs, pending)
             } else {
                 alarms.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, atElapsedMs, pending)
             }
+            true
         } catch (t: Throwable) {
             try {
                 alarms.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, atElapsedMs, pending)
+                true
             } catch (t2: Throwable) {
                 PumpBtLog.w("watchdog alarm refused (${t2.javaClass.simpleName})")
+                false
             }
         }
     }
@@ -322,11 +386,14 @@ internal object PumpBtWatchdog {
         return PendingIntent.getBroadcast(app, REQUEST_CODE, i, flags or PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 
-    /** Back to defaults (tests). */
+    /** Back to defaults (tests): also the following of the source, so that a test can start it again. */
     internal fun resetForTest() {
         elapsed = { SystemClock.elapsedRealtime() }
         actions = SourceWatchdogActions
-        upstreamService = { c -> if (Applic.stopprogram == 0) Applic.updateservice(c, Natives.getusebluetooth()) }
+        upstreamService = ::startUpstreamService
+        followJob?.cancel()
+        followJob = null
+        following.set(false)
     }
 }
 
@@ -348,10 +415,11 @@ class PumpBtWatchdogReceiver : BroadcastReceiver() {
 
 /**
  * After an app update (`MY_PACKAGE_REPLACED`, journal of 27.11: the advertisement did not come back for 19 min): the
- * process has just started (our [ModPumpStarter] has called [PumpBtSource.init]); here the link is made sure of, upstream's
- * keep-alive service is started by the person's setting and the watchdog armed - all only with the source on.
- * Exported with its intent filter, as [tk.glucodata.mod.carelink.CareLinkBootReceiver] (Android 12+ wants the value
- * stated): the action is a protected broadcast only the system sends; anything else is ignored.
+ * process has just started (our [ModPumpStarter] has called [PumpBtSource.init]); here the link is started when it does
+ * not run, upstream's keep-alive service is started when the sensor comes over Bluetooth and the watchdog armed - all
+ * only with the source on. Exported with its intent filter, as [tk.glucodata.mod.carelink.CareLinkBootReceiver]
+ * (Android 12+ wants the value stated): the action is a protected broadcast only the system sends; anything else is
+ * ignored.
  */
 class PumpBtUpdateReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {

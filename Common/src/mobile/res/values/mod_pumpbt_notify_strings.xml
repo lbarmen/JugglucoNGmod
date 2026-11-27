@@ -4,8 +4,8 @@
      personal: a record type in hex at most. -->
 <resources>
     <string name="mod_pumpbt_notify_unknown_title">Pump: unknown record</string>
-    <!-- %1$s - the record type, hex, e.g. 0x1234 -->
-    <string name="mod_pumpbt_notify_unknown_text">The pump has a record of type %1$s that the app does not know. Doses may be missing from the journal: check the pump\'s history and share the pump link journal.</string>
+    <!-- %1$s - the record types, hex, e.g. 0x1234 or 0x1234, 0x4321 (types gather while the notification is shown) -->
+    <string name="mod_pumpbt_notify_unknown_text">The pump has records the app does not know (type %1$s). Doses may be missing from the journal: check the pump\'s history and share the pump link journal.</string>
     <string name="mod_pumpbt_notify_unparsed_title">Pump: bolus or meal not read</string>
     <!-- %1$s - the record type, hex, e.g. 0x005A -->
     <string name="mod_pumpbt_notify_unparsed_text">A bolus or meal record of type %1$s could not be read. Check the pump\'s history and add the dose to the journal by hand if it is missing.</string>

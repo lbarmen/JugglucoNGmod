@@ -1,6 +1,7 @@
 package mod.carelink
 
 import android.app.Application
+import android.app.Notification
 import android.app.NotificationManager
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -695,25 +696,71 @@ class CareLinkIntakeTest {
 
     @Test
     fun noPumpDataCountsFromTheSourceTurnedOn() {
-        // CareLink signed out, the source on 25 min ago with data of the cloud from hours before: not "no data" at once,
-        // but threshold + 10 min after turning on (the watchdog calls this without a poll)
-        CareLinkSettings(app).warnAfterMin = 15
+        // CareLink signed out, the source on 40 min ago with data of the cloud from hours before: not "no data" at once,
+        // but threshold + 10 min after turning on (the watchdog calls this without a poll). The threshold 30 min: above
+        // the Bluetooth floor of 20 min (critic B2c, C2), so the person's own counts
+        CareLinkSettings(app).warnAfterMin = 30
         bluetooth(true, now)
         store.write(CareLinkState(CareLinkStatus.OFF, null, now - 5 * 3_600_000L, null, null))
-        CareLinkNotifier.checkNoData(app, store.read(), now + 24 * 60_000L)
+        CareLinkNotifier.checkNoData(app, store.read(), now + 39 * 60_000L)
         assertNull(shown(CareLinkNotifier.ID_NO_DATA))
-        CareLinkNotifier.checkNoData(app, store.read(), now + 25 * 60_000L)
+        CareLinkNotifier.checkNoData(app, store.read(), now + 40 * 60_000L)
         assertNotNull(shown(CareLinkNotifier.ID_NO_DATA))
         // data comes: away; it gets old: back
-        now += 26 * 60_000L
+        now += 41 * 60_000L
         accept(pump = pump(now - 60_000L))
         assertNull(shown(CareLinkNotifier.ID_NO_DATA))
-        CareLinkNotifier.checkNoData(app, store.read(), now + 16 * 60_000L)
+        CareLinkNotifier.checkNoData(app, store.read(), now + 31 * 60_000L)
         assertNotNull(shown(CareLinkNotifier.ID_NO_DATA))
         // the source off and CareLink signed out: nothing
         bluetooth(false)
-        CareLinkNotifier.checkNoData(app, store.read(), now + 17 * 60_000L)
+        CareLinkNotifier.checkNoData(app, store.read(), now + 32 * 60_000L)
         assertNull(shown(CareLinkNotifier.ID_NO_DATA))
         assertNull(PumpSourceSwitch.onSinceMs(app))
+    }
+
+    private fun noDataTitle() = shown(CareLinkNotifier.ID_NO_DATA)?.extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString()
+
+    @Test
+    fun overBluetoothNoDataWaitsAtLeastTwentyMinutes() {
+        // critic B2c, C2: the pump comes about every 8 min - a threshold of 5 or 10 min chosen for the cloud would warn
+        // between two reads; at least 20 min (two reads missed), the title names the threshold in force
+        bluetooth(true, now - 3_600_000L)
+        for (min in listOf(5, 10)) {
+            CareLinkSettings(app).warnAfterMin = min
+            nm.cancelAll()
+            store.write(CareLinkState(CareLinkStatus.OFF, lastDataAtMs = now))
+            store.noDataShown = false
+            CareLinkNotifier.checkNoData(app, store.read(), now + 12 * 60_000L)
+            assertNull("threshold $min", shown(CareLinkNotifier.ID_NO_DATA))
+            CareLinkNotifier.checkNoData(app, store.read(), now + 19 * 60_000L)
+            assertNull("threshold $min", shown(CareLinkNotifier.ID_NO_DATA))
+            CareLinkNotifier.checkNoData(app, store.read(), now + 21 * 60_000L)
+            assertNotNull("threshold $min", shown(CareLinkNotifier.ID_NO_DATA))
+            assertTrue(noDataTitle(), noDataTitle()!!.contains(" 20 "))
+        }
+        // a higher threshold of the person counts as it is
+        CareLinkSettings(app).warnAfterMin = 30
+        nm.cancelAll()
+        store.write(CareLinkState(CareLinkStatus.OFF, lastDataAtMs = now))
+        store.noDataShown = false
+        CareLinkNotifier.checkNoData(app, store.read(), now + 29 * 60_000L)
+        assertNull(shown(CareLinkNotifier.ID_NO_DATA))
+        CareLinkNotifier.checkNoData(app, store.read(), now + 30 * 60_000L)
+        assertNotNull(shown(CareLinkNotifier.ID_NO_DATA))
+        assertTrue(noDataTitle(), noDataTitle()!!.contains(" 30 "))
+    }
+
+    @Test
+    fun overTheCloudNoDataKeepsThePersonsThreshold() {
+        // the cloud: the floor does not apply - 5 min means 5 min, as before
+        signedIn()
+        CareLinkSettings(app).warnAfterMin = 5
+        store.write(CareLinkState(CareLinkStatus.OK, now, now, null, null))
+        CareLinkNotifier.checkNoData(app, store.read(), now + 4 * 60_000L)
+        assertNull(shown(CareLinkNotifier.ID_NO_DATA))
+        CareLinkNotifier.checkNoData(app, store.read(), now + 5 * 60_000L)
+        assertNotNull(shown(CareLinkNotifier.ID_NO_DATA))
+        assertTrue(noDataTitle(), noDataTitle()!!.contains(" 5 "))
     }
 }

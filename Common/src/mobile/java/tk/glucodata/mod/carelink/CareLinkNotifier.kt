@@ -38,6 +38,13 @@ object CareLinkNotifier {
     internal const val FIRST_DATA_MARGIN_MS = 10 * 60_000L
 
     /**
+     * The lowest "no data" threshold while the Bluetooth pump source is on (critic B2c, C2): the pump brings data about
+     * every 8 min (journal of the trial, 27.11) and the watchdog checks every 5 min, so 20 min means two reads missed in
+     * a row; a lower threshold chosen for the cloud would warn and take it back cycle after cycle. A higher one is kept.
+     */
+    internal const val BLUETOOTH_MIN_WARN_MIN = 20
+
+    /**
      * The sign-in is gone: show "sign in again" once; "no data" and "not saved" are replaced by it. Not while the
      * Bluetooth pump source is on (series brief, decision 17): the cloud asks for nothing then, and "no data" and "not
      * saved" are the source's.
@@ -132,7 +139,8 @@ object CareLinkNotifier {
      * While the Bluetooth pump source is on (part B1) it is alive whatever the cloud's session and status, and its
      * watchdog calls this without a poll; the base is then the newest data or, when none has come since the source was
      * turned on, that moment ([PumpSourceSwitch.onSinceMs]) with the same margin - data the cloud brought before does
-     * not make the source's first minutes "no data".
+     * not make the source's first minutes "no data". The threshold is then at least [BLUETOOTH_MIN_WARN_MIN] (the title
+     * names the threshold in force).
      */
     fun checkNoData(context: Context, state: CareLinkState = CareLinkStateStore(context).read(),
                     nowMs: Long = CareLinkClock.now()) {
@@ -150,10 +158,11 @@ object CareLinkNotifier {
             } else {
                 state.lastDataAtMs ?: settings.enabledSinceMs?.plus(FIRST_DATA_MARGIN_MS)
             }
-            val stale = live && last != null && nowMs - last >= settings.warnAfterMs
+            val warnMin = if (bluetooth) maxOf(settings.warnAfterMin, BLUETOOTH_MIN_WARN_MIN) else settings.warnAfterMin
+            val stale = live && last != null && nowMs - last >= warnMin * 60_000L
             if (stale) {
                 if (store.noDataShown && !blocked(app)) return
-                val posted = post(app, ID_NO_DATA, app.getString(R.string.mod_carelink_no_data_title, settings.warnAfterMin),
+                val posted = post(app, ID_NO_DATA, app.getString(R.string.mod_carelink_no_data_title, warnMin),
                     app.getString(R.string.mod_carelink_no_data_text))
                 if (posted != store.noDataShown) store.noDataShown = posted
             } else if (store.noDataShown) {
