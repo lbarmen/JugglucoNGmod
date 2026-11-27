@@ -97,6 +97,7 @@ class PumpBtActivity : ComponentActivity() {
             return
         }
         PumpBtTrial.refreshChecks(this)
+        PumpBtSource.recheckBond(this)
     }
 
     private fun restricted(): Boolean = try {

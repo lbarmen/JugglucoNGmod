@@ -35,9 +35,8 @@ internal object PumpBtTrial {
     fun onScreenOpened(context: Context) {
         val c = context.applicationContext
         app = c
-        // with the source on, init puts a running link back to waiting: not while a pairing from this window runs
-        // (a turned screen makes the window again)
-        if (!PumpBtSource.state.value.link.pairMode) PumpBtSource.init(c)
+        // init leaves a running link alone (a pairing from this window, a turned screen)
+        PumpBtSource.init(c)
         val s = PumpBtSource.store(c)
         journal("trial screen opened ${PumpBtJournal.fullDate()}, Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), ${Build.MANUFACTURER} ${Build.MODEL}")
         PumpBtSource.onLinkState = { ls -> _state.update { it.copy(link = ls, paired = s.paired) } }
@@ -170,6 +169,7 @@ internal object PumpBtTrial {
     /** Empties the journal and deletes its shared copies (the screen asks first). */
     fun clearJournal(context: Context) {
         PumpBtJournal.clear(exportsDir(context))
+        PumpBtSource.journalCleared(context)
     }
 
     /**

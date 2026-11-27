@@ -2,6 +2,7 @@ package mod.pumpbt
 
 import android.app.Application
 import android.content.Context
+import android.os.Looper
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -20,6 +21,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.ConscryptMode
 import mod.pumpbt.B2Fixtures.ZONE
@@ -48,12 +50,15 @@ import tk.glucodata.mod.pumpbt.PumpBtAlert
 import tk.glucodata.mod.pumpbt.PumpBtAlertKind
 import tk.glucodata.mod.pumpbt.PumpBtBridge
 import tk.glucodata.mod.pumpbt.PumpBtHistoryStore
+import tk.glucodata.mod.pumpbt.PumpBtKey
+import tk.glucodata.mod.pumpbt.PumpBtStage
 import tk.glucodata.mod.pumpbt.PumpBtJournal
 import tk.glucodata.mod.pumpbt.PumpBtNameVariant
 import tk.glucodata.mod.pumpbt.PumpBtSource
 import tk.glucodata.mod.pumpbt.PumpBtStore
 import tk.glucodata.mod.pumpbt.PumpHistoryMemory
 import tk.glucodata.mod.pumpbt.core.PumpCycle
+import tk.glucodata.mod.pumpbt.core.toHex
 import java.io.File
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicInteger
@@ -231,6 +236,12 @@ class PumpBtSourceTest {
     @Test
     fun twoCyclesAtOnceRunOneAfterTheOther() {
         enable(ms(11, 0))
+        // the intake is asked for both (the later read time may come first: then the other snapshot is older, SKIPPED)
+        val intakes = AtomicInteger()
+        PumpBtSource.intake = { c, e, p, n ->
+            intakes.incrementAndGet()
+            CareLinkIntake.accept(c, tk.glucodata.mod.carelink.IntakeSource.BLUETOOTH, e, p, n)
+        }
         val inside = AtomicInteger()
         val most = AtomicInteger()
         onWrite = {
@@ -245,7 +256,7 @@ class PumpBtSourceTest {
             listOf(first, second).map { c -> async(Dispatchers.Default) { PumpBtSource.acceptCycle(app, c) } }.awaitAll()
         }
         assertEquals(1, most.get())
-        assertEquals(2, snapshots.size)
+        assertEquals(2, intakes.get())
         val m = onDisk()
         assertEquals(103L, m.contiguousTo)
         assertEquals((100L..103L).toList(), m.records.map { it.sequence })
@@ -429,27 +440,314 @@ class PumpBtSourceTest {
             ),
             a1,
         )
-        // the same next cycle, and a day later while the drift never went: nothing
+        // the same next cycle: nothing
         val (a2, m2) = PumpBtAlertRules.decide(m1, setOf(0x0123), setOf(0x005A), setOf("b1"), setOf("b1", "b2"), drift = true, nowMs = 60_000)
         assertTrue(a2.isEmpty())
+        // the drift still there a day later: told again (critic B2a, N-5)
         val (a3, m3) = PumpBtAlertRules.decide(m2, emptySet(), emptySet(), emptySet(), setOf("b1", "b2"), drift = true, nowMs = 25 * 3_600_000L)
-        assertTrue(a3.isEmpty())
-        // another bolus without its result: told; "not known" is not "gone"
+        assertEquals(listOf(PumpBtAlert(PumpBtAlertKind.CLOCK_DRIFT)), a3)
+        // another bolus without its result: told; the drift not known this cycle: nothing
         val (a4, m4) = PumpBtAlertRules.decide(m3, emptySet(), emptySet(), setOf("b2"), setOf("b1", "b2"), drift = null, nowMs = 26 * 3_600_000L)
         assertEquals(listOf(PumpBtAlert(PumpBtAlertKind.NO_RESULT_BOLUS)), a4)
-        assertFalse(m4.driftArmed)
-        // the drift gone, back an hour later: not before a day after the last one
-        val (_, m5) = PumpBtAlertRules.decide(m4, emptySet(), emptySet(), emptySet(), emptySet(), drift = false, nowMs = 2 * 3_600_000L)
-        assertTrue(m5.driftArmed)
+        // gone, back within the day: not yet; a day after the last one: told
+        val (_, m5) = PumpBtAlertRules.decide(m4, emptySet(), emptySet(), emptySet(), emptySet(), drift = false, nowMs = 27 * 3_600_000L)
         assertTrue(m5.noResultKeys.isEmpty()) // boluses gone from the memory are forgotten
-        val (a6, m6) = PumpBtAlertRules.decide(m5, emptySet(), emptySet(), emptySet(), emptySet(), drift = true, nowMs = 3 * 3_600_000L)
+        val (a6, m6) = PumpBtAlertRules.decide(m5, emptySet(), emptySet(), emptySet(), emptySet(), drift = true, nowMs = 30 * 3_600_000L)
         assertTrue(a6.isEmpty())
-        val (a7, _) = PumpBtAlertRules.decide(m6, emptySet(), emptySet(), emptySet(), emptySet(), drift = true, nowMs = 24 * 3_600_000L)
+        val (a7, _) = PumpBtAlertRules.decide(m6, emptySet(), emptySet(), emptySet(), emptySet(), drift = true, nowMs = 49 * 3_600_000L)
         assertEquals(listOf(PumpBtAlert(PumpBtAlertKind.CLOCK_DRIFT)), a7)
+        // not delivered: stays untold (critic B2a, C-3)
+        val kept = PumpBtAlertRules.keepUndelivered(
+            empty, m1, listOf(PumpBtAlert(PumpBtAlertKind.UNKNOWN_RECORD, 0x0123), PumpBtAlert(PumpBtAlertKind.CLOCK_DRIFT), PumpBtAlert(PumpBtAlertKind.NO_RESULT_BOLUS)),
+        )
+        assertEquals(PumpBtAlertMemory(unparsedTypes = setOf(0x005A)), kept)
         // kept in the link state file
         val f = File(app.cacheDir, "alerts-test.json").apply { delete() }
-        PumpBtStore(f, null).alerts = m4.copy(bondLostTold = true)
+        PumpBtStore(f, null).apply {
+            alerts = m4.copy(bondLostTold = true)
+            awaitWrites()
+        }
         assertEquals(m4.copy(bondLostTold = true), PumpBtStore(f, null).alerts)
+    }
+
+    @Test
+    fun anUnreadableLinkStateIsKeptBesideAndTheMovedPreferencesAreNotTakenAgain() {
+        // critic B2a, N-8
+        val prefs = app.getSharedPreferences("mod_pumpbt", Context.MODE_PRIVATE)
+        prefs.edit().clear().putString("name_digits", "042117").commit()
+        val tmp = File(app.cacheDir, "link-broken-test").apply { deleteRecursively(); mkdirs() }
+        val file = File(tmp, "link.json")
+        assertEquals("042117", PumpBtStore(file, prefs).nameDigits)
+        assertTrue(prefs.getBoolean("moved_to_file", false))
+        // an import writes foreign digits into the preferences, the file breaks: they are not taken
+        prefs.edit().putString("name_digits", "999999").commit()
+        file.writeText("{broken")
+        val again = PumpBtStore(file, prefs)
+        assertTrue(File(tmp, "link.json.broken").isFile)
+        assertFalse(again.nameDigits == "999999")
+    }
+
+    @Test
+    fun aValueIsWrittenOnlyWhenItChanges() {
+        // critic B2a, N-9: off the caller's thread and only on a change
+        val tmp = File(app.cacheDir, "link-change-test").apply { deleteRecursively(); mkdirs() }
+        val file = File(tmp, "link.json")
+        val st = PumpBtStore(file, null)
+        st.historyReference = 5L to 1000L
+        st.paired = true
+        st.awaitWrites()
+        val first = file.lastModified()
+        file.setLastModified(first - 60_000)
+        st.historyReference = 5L to 1000L
+        st.paired = true
+        st.awaitWrites()
+        assertEquals(first - 60_000, file.lastModified())
+        st.historyReference = 6L to 2000L
+        st.awaitWrites()
+        assertEquals(6L to 2000L, PumpBtStore(file, null).historyReference)
+    }
+
+    @Test
+    fun theBondRulesCountAPumpLikeDeviceAndTrustAHandshake() {
+        // critic B2a, C-4: the saved address may be a random one, the bond keeps the identity address
+        assertEquals(true, PumpBtAlertRules.bondedFrom("AA:BB:CC:00:11:22", listOf("aa:bb:cc:00:11:22" to null)))
+        assertEquals(true, PumpBtAlertRules.bondedFrom("7E:01:02:03:04:05", listOf("00:11:22:33:44:55" to "Pump 1234567")))
+        assertEquals(false, PumpBtAlertRules.bondedFrom("7E:01:02:03:04:05", listOf("00:11:22:33:44:55" to "Headphones", "00:11:22:33:44:66" to null)))
+        assertNull(PumpBtAlertRules.bondedFrom("", listOf("00:11:22:33:44:55" to "Pump 1234567")))
+        // point 5: a complete handshake is HANDSHAKE -> reading; a lost link is not
+        assertTrue(PumpBtAlertRules.handshakeDone(PumpBtStage.HANDSHAKE, PumpBtStage.READING))
+        assertTrue(PumpBtAlertRules.handshakeDone(PumpBtStage.HANDSHAKE, PumpBtStage.DATA_READ))
+        assertFalse(PumpBtAlertRules.handshakeDone(PumpBtStage.DATA_READ, PumpBtStage.READING))
+        assertFalse(PumpBtAlertRules.handshakeDone(PumpBtStage.READING, PumpBtStage.LOST))
+        // point 8: after a handshake "not found" counts as bonded until a bond of the pump goes away
+        assertEquals(true, PumpBtAlertRules.bondedAfterHandshake(false, trusted = true))
+        assertEquals(false, PumpBtAlertRules.bondedAfterHandshake(false, trusted = false))
+        assertNull(PumpBtAlertRules.bondedAfterHandshake(null, trusted = true))
+    }
+
+    @Test
+    fun theLostBondIsToldOnlyToAReceiverAndAHandshakeTakesTheMarkAway() {
+        enable(ms(11, 0))
+        PumpBtSource.alert = null
+        runBlocking { PumpBtSource.applyBondForTest(app, paired = true, bonded = false) }
+        assertTrue(PumpBtSource.state.value.bondLost)
+        assertFalse(PumpBtSource.store(app).alerts.bondLostTold) // nobody to tell: not marked (critic B2a, C-3)
+        PumpBtSource.alert = { _, _ -> throw IllegalStateException("made-up notifier failure") }
+        runBlocking { PumpBtSource.applyBondForTest(app, paired = true, bonded = false) }
+        assertFalse(PumpBtSource.store(app).alerts.bondLostTold)
+        PumpBtSource.alert = { _, a -> alerts += a }
+        runBlocking { PumpBtSource.applyBondForTest(app, paired = true, bonded = false) }
+        runBlocking { PumpBtSource.applyBondForTest(app, paired = true, bonded = false) }
+        assertEquals(listOf(PumpBtAlert(PumpBtAlertKind.BOND_LOST)), alerts.toList())
+        assertTrue(PumpBtSource.store(app).alerts.bondLostTold)
+        // a complete handshake: the mark goes at once (point 8)
+        runBlocking { PumpBtSource.handshakeDone(app).join() }
+        assertFalse(PumpBtSource.state.value.bondLost)
+        assertFalse(PumpBtSource.store(app).alerts.bondLostTold)
+        // the link drops afterwards, a check does not find the pump by its address: the mark does not come back
+        runBlocking { PumpBtSource.recheckBond(app).join() }
+        assertFalse(PumpBtSource.state.value.bondLost)
+        // a bond of the pump went away: the next "not bonded" is a loss again
+        PumpBtSource.bondWentAway()
+        runBlocking { PumpBtSource.applyBondForTest(app, paired = true, bonded = false) }
+        assertTrue(PumpBtSource.state.value.bondLost)
+        assertEquals(2, alerts.size)
+    }
+
+    @Test
+    fun detailedLinesStayMarkedUntilTheJournalIsCleared() {
+        // point 9: the window warns on "Share" by this mark, also after the detailed journal is off again
+        PumpBtSource.init(app)
+        assertFalse(PumpBtSource.state.value.journalHasDetail)
+        PumpBtSource.setVerbose(app, true)
+        PumpBtSource.setVerbose(app, false)
+        assertTrue(PumpBtSource.state.value.journalHasDetail)
+        restart()
+        PumpBtJournal.add("a line") // the journal file is there
+        File(File(app.filesDir, "mod-pumpbt"), "journal.txt").apply { parentFile!!.mkdirs(); writeText("x") }
+        PumpBtSource.init(app)
+        assertTrue(PumpBtSource.state.value.journalHasDetail)
+        PumpBtSource.journalCleared(app)
+        assertFalse(PumpBtSource.state.value.journalHasDetail)
+        // made anew (gone): no detailed lines either
+        PumpBtSource.setVerbose(app, true)
+        PumpBtSource.setVerbose(app, false)
+        restart()
+        File(File(app.filesDir, "mod-pumpbt"), "journal.txt").delete()
+        PumpBtSource.init(app)
+        assertFalse(PumpBtSource.state.value.journalHasDetail)
+    }
+
+    @Test
+    fun aMendedMomentWhoseSaveFailedIsKeptAndSavedLater() {
+        // critic B2a, C-2: the mend of C-3 (joints 1) is kept for the process when its save fails once
+        PumpBtHistoryStore(historyFile).save(
+            PumpHistoryMemory(
+                pumpHash = B2Fixtures.HASH, enabledAtMs = ms(8, 0, day = 10), boundaryMs = ms(7, 0, day = 10),
+                backfill = BackfillState.CONFIRMED,
+            ),
+        )
+        PumpSourceSwitch.set(app, true, ms(13, 0))
+        now = ms(13, 5)
+        var fails = 1
+        PumpBtSource.saveMemory = { st, m ->
+            if (fails-- > 0) throw java.io.IOException("made-up full storage")
+            st.save(m)
+        }
+        runBlocking { PumpBtSource.init(app).join() }
+        assertEquals(ms(8, 0, day = 10), onDisk().enabledAtMs) // the save failed
+        // the bolus at 11:20 happened while the source was off: old - it waits for the card, nothing is fed
+        accept(oldBolusCycle(ms(13, 10)))
+        assertEquals(ms(13, 0), onDisk().enabledAtMs)
+        assertEquals(BackfillState.WAITING, onDisk().backfill)
+        assertTrue(bolusKeys().isEmpty())
+    }
+
+    @Test
+    fun anExceptionFromTheIntakeLetsNothingGoAndTheQueueGoesOn() {
+        // critic B2a, N-7a and N-1
+        enable(ms(11, 0))
+        PumpBtSource.intake = { _, _, _, _ -> throw IllegalStateException("made-up intake failure") }
+        accept(oldBolusCycle(ms(12, 5)))
+        assertTrue(onDisk().acceptedAt.isEmpty())
+        assertTrue(onDisk().fedBoluses.isEmpty())
+        PumpBtSource.intake = { _, _, _, _ -> throw kotlinx.coroutines.CancellationException("made-up cancellation") }
+        try {
+            accept(cycle(emptyList(), readAtMs = ms(12, 10), from = 105, to = 104, newest = 104, contiguousTo = null))
+        } catch (_: kotlinx.coroutines.CancellationException) {
+        }
+        assertTrue(onDisk().acceptedAt.isEmpty())
+        assertTrue(onDisk().fedBoluses.isEmpty())
+        // through the link's queue: a cancellation in one cycle, the next one is still taken
+        var calls = 0
+        val done = CompletableDeferred<Unit>()
+        PumpBtSource.intake = { c, e, p, n ->
+            calls++
+            if (calls == 1) throw kotlinx.coroutines.CancellationException("made-up cancellation")
+            CareLinkIntake.accept(c, tk.glucodata.mod.carelink.IntakeSource.BLUETOOTH, e, p, n).also { done.complete(Unit) }
+        }
+        PumpBtSource.offerCycleForTest(app, cycle(emptyList(), readAtMs = ms(12, 15), from = 105, to = 104, newest = 104, contiguousTo = null))
+        PumpBtSource.offerCycleForTest(app, cycle(emptyList(), readAtMs = ms(12, 20), from = 105, to = 104, newest = 104, contiguousTo = null))
+        runBlocking {
+            withTimeout(10_000) {
+                done.await()
+                while ("INSULIN|2026-10-15T11:20:00|0" !in onDisk().acceptedAt) delay(20)
+            }
+        }
+        assertEquals(2, calls)
+    }
+
+    @Test
+    fun offWhileACycleHoldsTheSourceMutexBeforeTheIntakeFinishes() {
+        // critic B2a, N-7b: the cycle holds the source's mutex (reading journal rows), "off" comes, then the cycle goes on
+        // to the intake's lock - with "off" holding that lock first (the wrong order) both would wait for ever
+        enable(ms(11, 0))
+        val entered = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        PumpBtBridge.loadRows = { _, _, _ ->
+            entered.complete(Unit)
+            gate.await()
+            emptyList()
+        }
+        runBlocking {
+            val running = async(Dispatchers.Default) { PumpBtSource.acceptCycle(app, oldBolusCycle(ms(12, 5))) }
+            withTimeout(10_000) { entered.await() }
+            val off = PumpBtSource.disable(app)
+            delay(300)
+            gate.complete(Unit)
+            withTimeout(10_000) {
+                running.await()
+                off.join()
+            }
+        }
+        assertFalse(PumpSourceSwitch.bluetoothOn(app))
+        assertEquals(IntakeOutcome.WRITTEN, PumpBtSource.state.value.lastIntake)
+    }
+
+    @Test
+    fun noResultIsToldOncePerBolusThatRunsTooLong() {
+        // critic B2a, N-7c: the rule inside the source - only the bolus running too long, once
+        enable(ms(11, 0))
+        val recs = listOf(
+            ref(100, 3600, 11),
+            B2Fixtures.programmed(101, 1200, id = 1, tenths = 25), B2Fixtures.programmedDetails(102, 1200), // 11:20, running
+            B2Fixtures.programmed(103, 3600, id = 2, tenths = 10), B2Fixtures.programmedDetails(104, 3600), // 12:00, running
+        )
+        accept(cycle(recs, readAtMs = ms(12, 5), oldest = 100).withBasal())
+        assertEquals(listOf(PumpBtAlert(PumpBtAlertKind.NO_RESULT_BOLUS)), alerts.toList())
+        assertEquals(setOf("INSULIN|2026-10-15T11:20:00|0"), PumpBtSource.store(app).alerts.noResultKeys)
+        accept(cycle(emptyList(), readAtMs = ms(12, 10), from = 105, to = 104, newest = 104, contiguousTo = null).withBasal())
+        assertEquals(1, alerts.size)
+    }
+
+    @Test
+    fun anEmptyMemoryWithoutTheOldestAnswerGoesByTheLastNumberGiven() {
+        // critic B2a, N-7d and N-2: no answer to "first record"
+        accept(oldBolusCycle(ms(12, 5))) // source off: the trial's number moves to 104
+        assertEquals(105L, PumpBtSource.historyFromForTest(app)) // given 105 while off
+        enable(ms(12, 6))
+        accept(cycle(listOf(sensor(105, 1500), sensor(106, 1510)), readAtMs = ms(12, 10), from = 105, oldest = null, newest = 106))
+        assertNull(onDisk().contiguousTo) // asked from the trial's number: not taken
+        assertNull(PumpBtSource.historyFromForTest(app)) // now null is given
+        accept(cycle(listOf(sensor(105, 1500), sensor(106, 1510)), readAtMs = ms(12, 15), from = 105, oldest = null, newest = 106))
+        assertEquals(106L, onDisk().contiguousTo)
+    }
+
+    @Test
+    fun writeWithAnOldListShowsTheCardAgainAndWritesNothing() {
+        // critic B2a, N-7e
+        rows += JournalRow(1, ClKind.BOLUS, ms(11, 0), 9.0, "manual-1") // nothing to match
+        enable(ms(12, 0))
+        accept(oldBolusCycle(ms(12, 5)))
+        val card = PumpBtSource.state.value.card!!
+        assertEquals(listOf("INSULIN|2026-10-15T11:20:00|0"), card.toWrite.map { it.key })
+        runBlocking { PumpBtSource.confirmBackfill(app, listOf("INSULIN|2026-10-15T11:19:00|0")).join() }
+        assertEquals(BackfillState.WAITING, onDisk().backfill)
+        assertNotNull(PumpBtSource.state.value.card)
+        accept(cycle(emptyList(), readAtMs = ms(12, 10), from = 105, to = 104, newest = 104, contiguousTo = null))
+        assertTrue(bolusKeys().isEmpty())
+        // with the list shown: written
+        runBlocking { PumpBtSource.confirmBackfill(app, card.toWrite.map { it.key }).join() }
+        accept(cycle(emptyList(), readAtMs = ms(12, 15), from = 105, to = 104, newest = 104, contiguousTo = null))
+        assertEquals(listOf("INSULIN|2026-10-15T11:20:00|0"), bolusKeys())
+    }
+
+    @Test
+    fun initStartsTheLinkWaitingAndLeavesARunningOneAlone() {
+        // N-7f, critic B2a C-1 and N-4: needs the link itself (no radio: Robolectric's Bluetooth is off)
+        PumpBtKey.file(app).apply { parentFile!!.mkdirs(); writeText(fakeKeyDatabase(local = 4, remotes = listOf(1)).toHex()) }
+        Shadows.shadowOf(app).grantPermissions(*PumpBtSource.permissions())
+        enable(ms(11, 0))
+        idleMain()
+        assertTrue(PumpBtSource.state.value.link.running)
+        assertFalse(PumpBtSource.state.value.link.pairMode)
+        // the window starts a pairing, then a turned screen opens it again: init leaves the pairing alone
+        fun modeLines(mode: String) = PumpBtJournal.tail.value.count { it.endsWith("mode: $mode") }
+        val waiting = modeLines("waiting for the pump")
+        PumpBtSource.startLink(app, pair = true)
+        idleMain()
+        assertEquals(1, modeLines("pairing"))
+        runBlocking { PumpBtSource.init(app).join() }
+        idleMain()
+        assertEquals(waiting, modeLines("waiting for the pump"))
+        // a quick off and on: the link runs, the source is on
+        runBlocking {
+            PumpBtSource.disable(app).join()
+            PumpBtSource.enable(app).join()
+        }
+        idleMain()
+        assertTrue(PumpSourceSwitch.bluetoothOn(app))
+        assertTrue(PumpBtSource.state.value.link.running)
+        PumpBtSource.stopLink()
+        idleMain()
+    }
+
+    private fun idleMain() {
+        repeat(3) {
+            Shadows.shadowOf(Looper.getMainLooper()).idle()
+            Thread.sleep(50)
+        }
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
     }
 
     @Test
@@ -527,6 +825,7 @@ class PumpBtSourceTest {
         assertTrue(file.isFile)
         first.verbose = true
         first.variant = PumpBtNameVariant.A
+        first.awaitWrites()
 
         // upstream's settings import clears the preferences (or writes old values back): the file stays the truth
         prefs.edit().clear().putString("name_digits", "999999").commit()
@@ -540,6 +839,7 @@ class PumpBtSourceTest {
         val fresh = PumpBtStore(File(tmp, "other.json"), null)
         val digits = fresh.nameDigits
         assertTrue(digits.length == 6 && digits.all(Char::isDigit))
+        fresh.awaitWrites()
         assertEquals(digits, PumpBtStore(File(tmp, "other.json"), null).nameDigits)
         assertFalse(fresh.paired)
     }
