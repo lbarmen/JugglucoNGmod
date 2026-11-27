@@ -54,6 +54,11 @@ internal data class PumpBtLinkState(
     val lastProblemAtMs: Long? = null,
     /** The furthest stage reached since the start (see [PumpBtProgress.furthest]). */
     val furthestStage: PumpBtStage? = null,
+    /**
+     * When a pairing failed last (bond "bonding → none", or a device left less than 5 s after connecting without
+     * counting as the pump, while advertising for pairing); null - none since the start. Advertising goes on.
+     */
+    val pairingFailedAtMs: Long? = null,
     val values: PumpBtValues = PumpBtValues(),
 )
 
