@@ -66,8 +66,19 @@ class PumpBtWatchdogRulesTest {
 
     private fun input(
         now: Long = T0, on: Boolean = true, health: PumpLinkHealth? = health(), seen: Long? = null,
-        card: Boolean = false, reminded: Long? = null, noAdvert: Long? = null,
-    ) = WatchdogInput(now, on, health, seen, card, reminded, noAdvert)
+        card: Boolean = false, reminded: Long? = null, noAdvert: Long? = null, bondUntold: Boolean = false,
+    ) = WatchdogInput(now, on, health, seen, card, reminded, noAdvert, bondUntold)
+
+    @Test
+    fun anUndeliveredLostBondIsCheckedAgainInARoundWithoutThePump() {
+        // critic of the joints 2, N-2: the check tells it again; a connected pump is paired (its handshake clears the mark)
+        for (h in listOf(null, health(running = false, connected = false), health(connected = false, advertising = true), health(connected = false))) {
+            assertTrue(h.toString(), PumpBtWatchdogRules.decide(input(health = h, bondUntold = true)).recheckBond)
+        }
+        assertFalse(PumpBtWatchdogRules.decide(input(health = health(), bondUntold = true)).recheckBond)
+        assertFalse(PumpBtWatchdogRules.decide(input(health = null, bondUntold = false)).recheckBond)
+        assertFalse(PumpBtWatchdogRules.decide(input(on = false, health = null, bondUntold = true)).recheckBond)
+    }
 
     @Test
     fun sourceOffDoesNothingAndTheAlarmGoes() {
@@ -158,8 +169,8 @@ class PumpBtWatchdogRulesTest {
     @Test
     fun theCardIsRemindedADayAfterItWasTold() {
         fun card(reminded: Long?, now: Long = T0) = PumpBtWatchdogRules.decide(input(now = now, health = null, card = true, reminded = reminded))
-        // first seen here (a new process): from now, no reminder yet
-        card(null).let { assertFalse(it.remind); assertEquals(T0, it.remindedAtMs) }
+        // no mark - the card was never shown (notifications off when it came): told in this round (critic of the joints 2, N-1)
+        card(null).let { assertTrue(it.remind); assertEquals(T0, it.remindedAtMs) }
         card(T0 - PumpBtWatchdogRules.REMIND_MS + 1).let { assertFalse(it.remind); assertEquals(T0 - PumpBtWatchdogRules.REMIND_MS + 1, it.remindedAtMs) }
         card(T0 - PumpBtWatchdogRules.REMIND_MS).let { assertTrue(it.remind); assertEquals(T0, it.remindedAtMs) }
         // told "in the future" (clock set back): from now
@@ -263,8 +274,11 @@ class PumpBtWatchdogTest {
     private var card = false
     private var running = false
     private var remindFails = false
+    private var bondUntold = false
 
     private val fake = object : PumpBtWatchdogActions {
+        override fun bondLostUntold() = bondUntold
+        override fun recheckBond(context: Context) { calls += "bond" }
         override fun health() = health
         override fun cardWaiting() = card
         override fun linkRunning() = running
@@ -449,6 +463,78 @@ class PumpBtWatchdogTest {
     }
 
     @Test
+    fun aCardNeverShownIsToldInTheNextRoundAndAgainWhileNotShown() {
+        // critic of the joints 2, N-1: notifications were off when the card came - no mark; told at once, not a day later
+        card = true
+        remindFails = true
+        PumpBtWatchdog.tick(app, now)
+        assertEquals(1, calls.count { it == "remind" })
+        assertFalse(prefs.contains("cardRemindedAtMs")) // not shown: still no mark
+        remindFails = false
+        PumpBtWatchdog.tick(app, now + 5 * MIN)
+        assertEquals(2, calls.count { it == "remind" })
+        assertEquals(now + 5 * MIN, prefs.getLong("cardRemindedAtMs", 0L))
+        PumpBtWatchdog.tick(app, now + 10 * MIN)
+        assertEquals(2, calls.count { it == "remind" }) // shown: the next one a day later
+    }
+
+    @Test
+    fun anUndeliveredLostBondIsCheckedAgainEachRoundWithoutThePump() {
+        // critic of the joints 2, N-2
+        bondUntold = true
+        health = PumpLinkHealth(running = true, advertising = true, connected = false, lastCycleAtMs = null, lastHistoryAtMs = null)
+        PumpBtWatchdog.tick(app, now)
+        assertEquals(listOf("advertise", "bond", "noData"), calls)
+        calls.clear()
+        health = PumpLinkHealth(running = true, advertising = false, connected = true, lastCycleAtMs = null, lastHistoryAtMs = null)
+        PumpBtWatchdog.tick(app, now + 5 * MIN)
+        assertEquals(listOf("noData"), calls)
+        calls.clear()
+        bondUntold = false
+        health = null
+        PumpBtWatchdog.tick(app, now + 10 * MIN)
+        assertEquals(listOf("advertise", "noData"), calls)
+    }
+
+    @Test
+    fun theWatchdogsCheckTellsAnUndeliveredLostBondThroughTheRealSource() {
+        // the real source and notifier: notifications off - marked lost, not told; on again - the next round tells it
+        PumpBtWatchdog.actions = object : PumpBtWatchdogActions by fake {
+            override fun bondLostUntold() = SourceWatchdogActions.bondLostUntold()
+            override fun recheckBond(context: Context) {
+                calls += "bond"
+                runBlocking { PumpBtSource.recheckBond(context).join() }
+            }
+        }
+        RealStarterSteps.notifier()
+        PumpBtSource.bondedDevices = { emptyList() }
+        PumpBtSource.store(app).apply {
+            paired = true
+            pumpAddress = "00:11:22:33:44:55"
+        }
+        shadowOf(nm).setNotificationsEnabled(false)
+        runBlocking { PumpBtSource.recheckBond(app).join() }
+        assertTrue(PumpBtSource.state.value.bondLost)
+        assertTrue(PumpBtSource.bondLostUntold())
+        val lostLines = PumpBtJournal.tail.value.count { "no longer has the paired pump" in it }
+        PumpBtWatchdog.tick(app, now)
+        assertTrue("bond" in calls)
+        assertTrue(PumpBtSource.bondLostUntold())
+        // checked again while not shown: no second journal line for the same loss
+        assertEquals(lostLines, PumpBtJournal.tail.value.count { "no longer has the paired pump" in it })
+        shadowOf(nm).setNotificationsEnabled(true)
+        PumpBtWatchdog.tick(app, now + 5 * MIN)
+        assertFalse(PumpBtSource.bondLostUntold())
+        assertTrue(PumpBtSource.store(app).alerts.bondLostTold)
+        assertNotNull(shown(PumpBtNotifier.id(PumpBtAlertKind.BOND_LOST)))
+        assertTrue(PumpBtJournal.tail.value.last { "phone forgot" in it }.endsWith("told now"))
+        // told: the watchdog no longer checks
+        calls.clear()
+        PumpBtWatchdog.tick(app, now + 10 * MIN)
+        assertFalse("bond" in calls)
+    }
+
+    @Test
     fun aReminderNotShownIsTriedAgainNextRound() {
         card = true
         PumpBtWatchdog.cardTold(app, now)
@@ -474,11 +560,14 @@ class PumpBtWatchdogTest {
         PumpBtUpdateReceiver().onReceive(app, Intent(Intent.ACTION_MY_PACKAGE_REPLACED))
         assertEquals(listOf("start", "upstream"), calls)
         assertEquals(1, alarms.size)
+        // the journal says what was done (critic of the joints 2, N-6)
+        assertTrue(PumpBtJournal.tail.value.last { "app updated" in it }.endsWith("the link was not running - starting it, watchdog set again"))
         // the starter has the link running already: left alone (critic B2c, N1)
         calls.clear()
         running = true
         PumpBtUpdateReceiver().onReceive(app, Intent(Intent.ACTION_MY_PACKAGE_REPLACED))
         assertEquals(listOf("upstream"), calls)
+        assertTrue(PumpBtJournal.tail.value.last { "app updated" in it }.endsWith("the link was running already, watchdog set again"))
     }
 
     @Test
@@ -502,6 +591,7 @@ class PumpBtWatchdogTest {
         assertTrue(PumpBtSource.linkRunning)
         assertEquals(waiting, lines("mode: waiting for the pump"))
         assertEquals(reconnects, lines("reconnect"))
+        assertTrue(PumpBtJournal.tail.value.last { "app updated" in it }.endsWith("the link was running already, watchdog set again"))
         PumpBtSource.stopLink()
         idleMain()
     }
@@ -605,9 +695,9 @@ class PumpBtWatchdogTest {
     @Test
     fun theStarterStartsTheSourceOnlyForSomeoneWhoUsesIt() {
         // critic B2c, N6: off and never paired - no init (no memory read, no bond receiver)
-        assertFalse(ModPumpStarter.sourceInUse(false) { "" })
-        assertTrue(ModPumpStarter.sourceInUse(true) { "" })
-        assertTrue(ModPumpStarter.sourceInUse(false) { "00:11:22:33:44:55" })
+        assertFalse(ModPumpStarter.sourceInUse(false) { false })
+        assertTrue(ModPumpStarter.sourceInUse(true) { false })
+        assertTrue(ModPumpStarter.sourceInUse(false) { true })
         // the real step: init publishes the detailed-journal switch, so its mark shows whether init ran
         on = false
         PumpBtSource.store(app).verbose = true
@@ -616,6 +706,46 @@ class PumpBtWatchdogTest {
         PumpBtSource.store(app).pumpAddress = "00:11:22:33:44:55"
         RealStarterSteps.init(app)
         assertTrue(PumpBtSource.state.value.verbose)
+    }
+
+    @Test
+    fun theStarterMakesNoLinkStateFileForSomeoneWhoNeverUsedThePump() {
+        // critic of the joints 2, N-5: the address is only read - no folder, no file, no store
+        on = false
+        val file = File(pumpDir, "link.json")
+        RealStarterSteps.init(app)
+        assertFalse(file.exists())
+        assertFalse(pumpDir.exists())
+        assertFalse(PumpBtSource.pumpAddressKnown(app))
+        // a file with an address (a new process: no store yet) - read, and the source starts
+        pumpDir.mkdirs()
+        file.writeText("""{"pump_address":"00:11:22:33:44:55","verbose":true}""")
+        assertTrue(PumpBtSource.pumpAddressKnown(app))
+        RealStarterSteps.init(app)
+        assertTrue(PumpBtSource.state.value.verbose)
+    }
+
+    @Test
+    fun theAddressIsReadFromTheFileOrTheOldPreferencesWithoutWriting() {
+        val file = File(pumpDir, "link.json")
+        val legacy = app.getSharedPreferences("mod_pumpbt_test_legacy", Context.MODE_PRIVATE)
+        legacy.edit().clear().commit()
+        assertFalse(tk.glucodata.mod.pumpbt.PumpBtStore.addressKnown(file, legacy))
+        // the old preferences of an older build, not moved yet
+        legacy.edit().putString("pump_address", "00:11:22:33:44:55").commit()
+        assertTrue(tk.glucodata.mod.pumpbt.PumpBtStore.addressKnown(file, legacy))
+        // moved before: the file decides
+        legacy.edit().putBoolean("moved_to_file", true).commit()
+        assertFalse(tk.glucodata.mod.pumpbt.PumpBtStore.addressKnown(file, legacy))
+        assertFalse(file.exists())
+        pumpDir.mkdirs()
+        file.writeText("""{"pump_address":""}""")
+        assertFalse(tk.glucodata.mod.pumpbt.PumpBtStore.addressKnown(file, legacy))
+        // unreadable: someone used the pump - the store sorts it out
+        file.writeText("{broken")
+        assertTrue(tk.glucodata.mod.pumpbt.PumpBtStore.addressKnown(file, legacy))
+        assertEquals("{broken", file.readText())
+        legacy.edit().clear().commit()
     }
 
     @Test

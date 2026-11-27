@@ -261,5 +261,30 @@ internal class PumpBtStore internal constructor(private val file: File, private 
 
         /** In the old preferences: their values were moved to the file. */
         const val K_MOVED = "moved_to_file"
+
+        /**
+         * A pump's address is kept - read only, nothing made or written (critic of the joints 2, N-5: the starter asks it
+         * at every process start, also of people who never used the pump). The file when it is there (unreadable - true:
+         * someone used the pump, the store sorts it out), else the old preferences unless they were moved.
+         */
+        fun addressKnown(context: Context): Boolean {
+            val app = context.applicationContext
+            return addressKnown(File(File(app.noBackupFilesDir, DIR), FILE), app.getSharedPreferences(LEGACY_PREFS, Context.MODE_PRIVATE))
+        }
+
+        fun addressKnown(file: File, legacy: SharedPreferences?): Boolean {
+            if (file.isFile) {
+                return try {
+                    JSONObject(file.readText(Charsets.UTF_8)).optString(K_ADDRESS, "").isNotBlank()
+                } catch (_: Throwable) {
+                    true
+                }
+            }
+            return try {
+                legacy != null && !legacy.getBoolean(K_MOVED, false) && !legacy.getString(K_ADDRESS, null).isNullOrBlank()
+            } catch (_: Throwable) {
+                false
+            }
+        }
     }
 }

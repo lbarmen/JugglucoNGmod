@@ -734,9 +734,10 @@ class PumpBtSourceTest {
         // the window starts a pairing, then a turned screen opens it again: init leaves the pairing alone
         fun modeLines(mode: String) = PumpBtJournal.tail.value.count { it.endsWith("mode: $mode") }
         val waiting = modeLines("waiting for the pump")
+        val pairing = modeLines("pairing") // the journal's file outlives a test: counted from here
         PumpBtSource.startLink(app, pair = true)
         idleMain()
-        assertEquals(1, modeLines("pairing"))
+        assertEquals(pairing + 1, modeLines("pairing"))
         runBlocking { PumpBtSource.init(app).join() }
         idleMain()
         assertEquals(waiting, modeLines("waiting for the pump"))
@@ -750,6 +751,64 @@ class PumpBtSourceTest {
         assertTrue(PumpBtSource.state.value.link.running)
         PumpBtSource.stopLink()
         idleMain()
+    }
+
+    @Test
+    fun cancelPairingTakesARunningLinkBackToWaitingForThePairedPump() {
+        // critic of the joints 2, N-4: with permanent operation on, a pairing the pump never starts must not advertise
+        // for pairing until the switch is turned off (no radio: Robolectric's Bluetooth is off, the link still runs)
+        PumpBtKey.file(app).apply { parentFile!!.mkdirs(); writeText(fakeKeyDatabase(local = 4, remotes = listOf(1)).toHex()) }
+        Shadows.shadowOf(app).grantPermissions(*PumpBtSource.permissions())
+        enable(ms(11, 0))
+        idleMain()
+        PumpBtSource.store(app).paired = true
+        PumpBtSource.startLink(app, pair = true) // "Pair again"
+        idleMain()
+        assertTrue(PumpBtSource.state.value.link.pairMode)
+        assertTrue(tk.glucodata.mod.pumpbt.PumpBtWindow.pairing(PumpBtSource.state.value.link))
+        fun waitingLines() = PumpBtJournal.tail.value.count { it.endsWith("mode: waiting for the pump") }
+        val waiting = waitingLines()
+        PumpBtSource.cancelPairing(app)
+        idleMain()
+        val link = PumpBtSource.state.value.link
+        assertTrue(link.running)
+        assertFalse(link.pairMode)
+        assertFalse(tk.glucodata.mod.pumpbt.PumpBtWindow.pairing(link))
+        assertEquals(waiting + 1, waitingLines()) // the running link switched its mode, not started anew
+        assertTrue(PumpBtSource.store(app).paired) // nothing else changes
+        assertTrue(PumpSourceSwitch.bluetoothOn(app))
+        PumpBtSource.stopLink()
+        idleMain()
+        // the source off and the link stopped: nothing is started
+        runBlocking { PumpBtSource.disable(app).join() }
+        idleMain()
+        PumpBtSource.cancelPairing(app)
+        idleMain()
+        assertFalse(PumpBtSource.linkRunning)
+    }
+
+    @Test
+    fun aCardThatFailsAtTheStartDoesNotSkipTheBondCheck() {
+        // critic of the joints 2, N-3: the card's refresh throws (Room at the journal rows); the bond is still checked
+        // and the journal names the card, not the memory
+        enable(ms(12, 0))
+        accept(oldBolusCycle(ms(12, 5)))
+        assertEquals(BackfillState.WAITING, onDisk().backfill)
+        PumpBtSource.store(app).apply {
+            paired = true
+            pumpAddress = "00:11:22:33:44:55"
+        }
+        restart()
+        PumpBtBridge.loadRows = { _, _, _ -> throw IllegalStateException("made-up journal database failure") }
+        PumpBtSource.bondedDevices = { emptyList() } // the phone forgot the pump
+        runBlocking { PumpBtSource.init(app).join() }
+        assertTrue(PumpBtSource.state.value.bondLost)
+        assertEquals(listOf(PumpBtAlert(PumpBtAlertKind.BOND_LOST)), alerts.toList().filter { it.kind == PumpBtAlertKind.BOND_LOST })
+        val lines = PumpBtJournal.tail.value
+        assertTrue(lines.toString(), lines.any { it.endsWith("source: card not refreshed (IllegalStateException)") })
+        assertFalse(lines.toString(), lines.any { "history memory not loaded" in it })
+        // the memory itself was loaded
+        assertEquals(BackfillState.WAITING, PumpBtSource.state.value.backfill)
     }
 
     private fun idleMain() {

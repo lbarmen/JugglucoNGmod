@@ -84,6 +84,7 @@ class PumpBtActivity : ComponentActivity() {
                         onAllow = ::askForPermissions,
                         onStartPairing = { start(pair = true) },
                         onWaitForPump = { start(pair = false) },
+                        onCancelPairing = { PumpBtSource.cancelPairing(this) },
                         onStop = PumpBtTrial::stop,
                         onReadAgain = PumpBtTrial::readAgain,
                         onLoadKey = PumpBtTrial::loadKeyFromInternet,

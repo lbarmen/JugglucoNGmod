@@ -141,6 +141,23 @@ class PumpBtWindowTest {
     }
 
     @Test
+    fun cancelPairingOnlyWithTheSourceOnDuringAPairing() {
+        // critic of the joints 2, N-4: a pairing (by the published mode or the stage) with permanent operation on
+        for (link in listOf(running.copy(pairMode = true), switchedToPairing, switchedToPairing.copy(stage = PumpBtStage.PAIRING))) {
+            assertTrue(link.toString(), PumpBtWindow.controls(ready, on.copy(link = link)).canCancelPairing)
+            assertTrue(link.toString(), PumpBtWindow.controls(ready, on.copy(bondLost = true, link = link)).canCancelPairing)
+            // with no key or Bluetooth too: going back to waiting needs nothing new
+            assertTrue(PumpBtWindow.controls(ready.copy(keyCrc = null, bluetoothOn = false), on.copy(link = link)).canCancelPairing)
+            // the source off: the trial has its own Stop and Wait buttons
+            assertFalse(PumpBtWindow.controls(ready, off.copy(link = link)).canCancelPairing)
+        }
+        // no pairing: waiting, linked, stopped
+        for (link in listOf(running, up, switchedToPairing.copy(running = false), PumpBtLinkState())) {
+            assertFalse(link.toString(), PumpBtWindow.controls(ready, on.copy(link = link)).canCancelPairing)
+        }
+    }
+
+    @Test
     fun bondAdviceByTheSourceMarkOnly() {
         // the source's mark decides, with the source on; no guess from the link's stage
         assertFalse(PumpBtWindow.bondAdvice(off.copy(bondLost = true)))

@@ -73,7 +73,7 @@ class ModPumpStarter : ContentProvider() {
         }
 
         /** The source is started with the process: it is on, or the link state holds a pump's address. */
-        internal inline fun sourceInUse(on: Boolean, address: () -> String): Boolean = on || address().isNotBlank()
+        internal inline fun sourceInUse(on: Boolean, addressKnown: () -> Boolean): Boolean = on || addressKnown()
 
         private inline fun step(name: String, block: () -> Unit) {
             try {
@@ -117,10 +117,11 @@ internal object RealStarterSteps : StarterSteps {
     /**
      * Only for someone who uses the pump source: on, or a pump once paired (its address kept). Everyone else's process
      * start reads no history memory and registers no bond receiver (critic B2c, N6); the trial window calls
-     * [PumpBtSource.init] itself when it opens, and turning the source on works without it.
+     * [PumpBtSource.init] itself when it opens, and turning the source on works without it. The address is only read:
+     * no link state file is made for someone who never used the pump (critic of the joints 2, N-5).
      */
     override fun init(app: Context) {
-        if (ModPumpStarter.sourceInUse(PumpSourceSwitch.bluetoothOn(app)) { PumpBtSource.store(app).pumpAddress }) {
+        if (ModPumpStarter.sourceInUse(PumpSourceSwitch.bluetoothOn(app)) { PumpBtSource.pumpAddressKnown(app) }) {
             PumpBtSource.init(app)
         }
     }
