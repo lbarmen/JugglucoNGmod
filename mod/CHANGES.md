@@ -13,7 +13,9 @@ For the user:
 - 2026-11-27 — pump data over Bluetooth in place of the CareLink cloud. For the MiniMed 7xx pumps (740G, 770G, 780G;
   checked on a 740G, the 770G and 780G only by what other projects report): the phone reads the pump directly over
   Bluetooth, read only, without MiniMed Mobile, a cloud or a sign-in. The journal, the chart basal, the "IoB" chip,
-  the watch face and Nightscout get the pump data as before. One "Pump" window (the settings row next to Nightscout,
+  the watch face and Nightscout get the pump data. Not checked over Bluetooth yet: the marks of a bolus in progress,
+  stopped early, square or dual wave; SmartGuard auto mode and filling the reservoir - their records may not reach
+  the journal, or may come in as boluses. One "Pump" window (the settings row next to Nightscout,
   the app icon shortcut, a tap on the pump notifications): a pairing wizard (warnings, the steps on the pump, the
   pump's key database downloaded by itself or loaded from a file), the link state, the pump's reservoir in units,
   battery, active insulin and basal, "Permanent operation", the warning delay 20, 30 or 60 min, folded diagnostics.

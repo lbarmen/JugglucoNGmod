@@ -21,8 +21,9 @@ What the app itself can do is in the [author's README](/README.md).
 ### MiniMed 7xx pumps over Bluetooth
 For the MiniMed 7xx pumps (740G, 770G, 780G). Checked on a 740G with a Samsung phone on Android 14; the 770G and 780G
 only by what other projects (OpenMinimed) report - not checked by us. The phone reads the pump directly over
-Bluetooth, in place of the MiniMed Mobile app: no cloud and no sign-in. Read only - the app never changes anything on
-the pump; make dose decisions by the pump's own screen.
+Bluetooth, in place of the MiniMed Mobile app: no cloud and no sign-in. Read only - the app sends the pump no doses
+and no settings, only read requests (the pairing adds the phone to the pump's list of devices); make dose decisions
+by the pump's own screen.
 - the journal gets the pump boluses and the carbs from the pump's bolus calculator;
 - the chart shows the real pump basal, normal and temporary; a pump stop is a gap with the note "Pump stopped";
 - the "IoB" chip on the main screen and our watch face show the pump's own active insulin;
@@ -71,7 +72,7 @@ The watch is updated by hand: install the watch APK as a file or via adb; the wa
 | In-app update | — | from the releases of this repository (the first is 1.3.3-11): Settings → "App updates" → "Check automatically"; phone only, the watch is updated by hand | 1.3.2-2 |
 | Clone mode, BloodControl service (for AiDEX) | present | do not work: they need secrets of the JugglucoNG author | 1.3.2-2 |
 | Home-screen widget | two widgets: a card with the number, arrow and a 6 h chart (not transparent), and the number with arrow; no change over 5 min, no reading age | a third widget "JugglucoNGmod" in the xDrip look: transparent, number in range color, arrow, change over 5 min, "N min ago", 3 h of 5-minute dots; own settings window with a live preview (checked on a phone, 2026-11-21) | 1.3.3-10 |
-| MiniMed 7xx pump (740G, 770G, 780G) | — | read directly over Bluetooth, read only, no cloud: pump boluses and carbs in the journal, the real basal on the chart, the pump's active insulin in "IoB", sent to Nightscout; own "Pump" window with a pairing wizard, and warnings | |
+| MiniMed 7xx pump (740G, 770G, 780G) | — | checked on a 740G only (770G, 780G - by what OpenMinimed reports, not checked by us); read directly over Bluetooth, read only, no cloud: pump boluses and carbs in the journal, the real basal on the chart, the pump's active insulin in "IoB", sent to Nightscout; own "Pump" window with a pairing wizard, and warnings | |
 | Own watch face | the author's face | own face "JugglucoNGmod" on the whole circle: glucose, arrow, change, age in seconds, 1/3/6 h chart with hour lines and forecast, both batteries, active insulin from the pump; the author's face is "JugglucoNGmod classic" (checked on a watch, 2026-11-18 – 2026-11-23) | 1.3.3-11 |
 | Alarms on the watch | only on/off of each alarm comes from the phone; buttons 52 dp | the phone's alarm settings come to the watch; vibration only; own alarm screen with large buttons; "Snooze alarm" for a watch button snoozes on the watch and the phone (checked on a watch, 2026-11-21) | 1.3.3-11 |
 | Heart rate and steps | — | from the watch to the phone: the "JugglucoNGmod watch" screen (checked on a watch, 2026-11-20) | 1.3.3-11 |
