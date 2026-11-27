@@ -4,7 +4,7 @@
 #   no environment, no secrets. Signed with a one-time key the job creates and deletes itself; release number 0
 #   (versionName ...-mod0). Its APKs are for checks and the emulator only, never for a phone or a
 #   watch: Android would not install the next build over it. The phone of a test build carries the
-#   CareLink trial (Common/src/modTrial); a last step builds the phone again as a candidate would
+#   made-up Bluetooth pump (Common/src/modTrial); a last step builds the phone again as a candidate would
 #   (-PmodRelease=1, another one-time key, nothing uploaded) and checks the trial is not in it.
 #
 # Candidate (Run workflow on main with release 1..99 and the block branches to test, space-separated,
@@ -148,10 +148,11 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      # CareLink trial (part 4p): a phone built like a candidate (-PmodRelease=1) has no trial. After the upload on
-      # purpose: this APK has the same file name and replaces the -mod0 one; nothing of it is uploaded. Its own
-      # one-time key (the build step's key is gone with its kdir).
-      - name: Candidate-like phone (-mod1) has no CareLink trial
+      # Trial entry points (the made-up Bluetooth pump): a phone built like a candidate (-PmodRelease=1) has none.
+      # After the upload on purpose: this APK has the same file name and replaces the -mod0 one; nothing of it is
+      # uploaded. Its own one-time key (the build step's key is gone with its kdir). The step name is not a required
+      # check (mod/ruleset-main.json requires only `report`).
+      - name: Candidate-like phone (-mod1) has no trial pump
         run: |
           set -euo pipefail
           umask 077

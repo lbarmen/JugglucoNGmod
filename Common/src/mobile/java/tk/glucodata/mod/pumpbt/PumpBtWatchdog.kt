@@ -194,8 +194,8 @@ internal object SourceWatchdogActions : PumpBtWatchdogActions {
 
 /**
  * JugglucoNGmod, pump over Bluetooth (series part 2, part B2c): the watchdog of the Bluetooth pump source - its own
- * class, action, PendingIntent and request code (not the cloud's [tk.glucodata.mod.carelink.CareLinkScheduler]: the
- * cloud's alarm leaves with part D and must not take the watchdog with it). An exact alarm every 5 min
+ * class, action, PendingIntent and request code, apart from the removed CareLink cloud poll (the one-time cleanup,
+ * [tk.glucodata.mod.carelink.CareLinkCloudCleanup], cancels only the cloud's old alarm). An exact alarm every 5 min
  * (`setExactAndAllowWhileIdle(ELAPSED_REALTIME_WAKEUP)`; without the exact-alarm right - `setAndAllowWhileIdle`; Doze
  * lets it through less often). Armed while the source is on: the starter follows [PumpBtSource.state] (enable, init,
  * disable all publish `enabled`) and an alarm with the source off removes itself. The round itself -
@@ -465,9 +465,9 @@ class PumpBtWatchdogReceiver : BroadcastReceiver() {
  * After an app update (`MY_PACKAGE_REPLACED`, journal of 27.11: the advertisement did not come back for 19 min): the
  * process has just started (our [ModPumpStarter] has called [PumpBtSource.init]); here the link is started when it does
  * not run, upstream's keep-alive service is started when the sensor comes over Bluetooth and the watchdog armed - all
- * only with the source on. Exported with its intent filter, as [tk.glucodata.mod.carelink.CareLinkBootReceiver]
- * (Android 12+ wants the value stated): the action is a protected broadcast only the system sends; anything else is
- * ignored.
+ * only with the source on. Exported because of its intent filter (Android 12+ wants the value stated): the action is a
+ * protected broadcast only the system sends; anything else is ignored. After a reboot upstream's own boot receiver
+ * starts the process and [ModPumpStarter] arms the watchdog.
  */
 class PumpBtUpdateReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {

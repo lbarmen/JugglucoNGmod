@@ -10,8 +10,12 @@ Run from the repository root after `bash mod/gradlew-mod.sh ... assembleMobileMo
 --manifest P    update-manifest.json must describe the phone APK (required with --mode release)
 
   python3 mod/check-apk.py --trial-absent PHONE_APK
-                only: a phone APK built with -PmodRelease=N (N >= 1) has no CareLink trial and no made-up
-                Bluetooth pump (marker strings, the pump's class descriptor)
+                only: a phone APK built with -PmodRelease=N (N >= 1) has no made-up Bluetooth pump (marker
+                strings, the pump's class descriptor)
+
+  python3 mod/check-apk.py --self-test
+                only: the manifest and dex checks of the removed CareLink cloud on made-up input (no APK, no
+                build tools) - each must fail on what the cloud left and pass without it
 """
 import argparse
 import fnmatch
@@ -436,9 +440,22 @@ def check_xml_drawable_constructors(apk):
 
 
 MOD_STARTER = 'tk.glucodata.mod.carelink.ModCareLinkStarter'
-# Every CareLink component of Common/src/mobileMod/AndroidManifest.xml (joint branch, critic of part 6, C6-1: the
-# manifest is merged by hand when CareLink and the watch block meet - a lost receiver would stop the pump data quietly)
+# The pump data components of Common/src/mobileMod/AndroidManifest.xml that keep their old CareLink names: the starter
+# (one-time cleanup of the removed cloud, the pump launcher shortcut) and the old window, which only forwards to the
+# pump window (joint branch, critic of part 6, C6-1: the manifest is merged by hand when blocks meet).
 MOD_CARELINK_COMPONENTS = [MOD_STARTER, 'tk.glucodata.mod.carelink.CareLinkActivity']
+# The CareLink cloud is removed (series "pump over Bluetooth", part 2, D1): none of its components may come back in the
+# phone manifest, e.g. with a merge of an older branch.
+CLOUD_COMPONENTS = ['tk.glucodata.mod.carelink.CareLinkLoginActivity', 'tk.glucodata.mod.carelink.CareLinkAlarmReceiver',
+                    'tk.glucodata.mod.carelink.CareLinkBootReceiver']
+# Strings only the cloud code had, in the dex string pool even after R8 renames the classes: the cloud's discovery
+# address (CareLinkConfig.DISCOVERY_URL before D1, host and path apart) and the markers of the old CareLink trial.
+# Not the names the one-time cleanup still uses (CareLinkAlarmReceiver, mod-carelink-poll: CareLinkCloudCleanup).
+CLOUD_DEX_MARKERS = [b'clcloud.minimed.eu', b'/connect/carepartner/', b'tk.glucodata.ng.mod.CARELINK_TRIAL',
+                     b'ModCareLinkTrial']
+# Without the cloud's boot receiver only upstream's own one starts the process after a reboot; ModPumpStarter then arms
+# the pump watchdog (critic of the briefs, C-8, C-9).
+UPSTREAM_BOOT_RECEIVER = 'tk.glucodata.NumAlarm'
 # Every pump-over-Bluetooth component of the same manifest (series part 2, part B2c): without the starter the link does
 # not start with the process, without the watchdog nothing brings a stuck link back, without the update receiver the
 # link waits for the next process start after an update - the pump data would stop quietly.
@@ -468,8 +485,8 @@ def dex_marker_hits(apk, markers=PUMP_TRIAL_MARKERS):
 
 
 def check_trial(phone, release):
-    """Test build (N = 0): every marker of each trial (CareLink, the made-up Bluetooth pump) is in the phone dex -
-    otherwise a trial vanished silently. Candidate (N >= 1): none of them, in the dex or in the manifest."""
+    """Test build (N = 0): every marker of each trial (the made-up Bluetooth pump) is in the phone dex - otherwise a
+    trial vanished silently. Candidate (N >= 1): none of them, in the dex or in the manifest."""
     tree = manifest_tree(phone) if release != 0 else ''
     for what, markers in TRIALS:
         dexes, found = dex_marker_hits(phone, markers)
@@ -489,21 +506,48 @@ def manifest_tree(apk):
     return run([build_tool('aapt2'), 'dump', 'xmltree', '--file', 'AndroidManifest.xml', apk])
 
 
+def cloud_components_found(blocks):
+    """CareLink cloud components (CLOUD_COMPONENTS) among the manifest blocks of component_blocks."""
+    return [c for c in CLOUD_COMPONENTS if c in blocks]
+
+
+def boot_receiver_ok(blocks):
+    """Upstream's boot receiver is in the manifest and listens to BOOT_COMPLETED."""
+    return 'android.intent.action.BOOT_COMPLETED' in blocks.get(UPSTREAM_BOOT_RECEIVER, '')
+
+
+def check_cloud_gone(phone, blocks):
+    """The removed CareLink cloud stays removed: none of its components in the phone manifest, none of its strings in
+    the phone dex (test build and candidate alike), and upstream's boot receiver - the only one left to start the
+    process after a reboot - is there with BOOT_COMPLETED."""
+    found = cloud_components_found(blocks)
+    check(not found, f'phone manifest: none of the {len(CLOUD_COMPONENTS)} components of the removed CareLink cloud'
+          + (f' (found: {found})' if found else ''))
+    dexes, hits = dex_marker_hits(phone, CLOUD_DEX_MARKERS)
+    check(dexes and not hits, f'phone dex: no string of the removed CareLink cloud in {len(dexes)} dex file(s)'
+          + (f' (found: {sorted(hits)})' if hits else ''))
+    check(boot_receiver_ok(blocks), f'phone manifest: upstream boot receiver {UPSTREAM_BOOT_RECEIVER} with BOOT_COMPLETED'
+          ' (after a reboot it starts the process, ModPumpStarter arms the pump watchdog)')
+
+
 def check_mod_components(phone, wear, release):
-    """Our phone-only code (CareLink, stage 4): every CareLink component declared in
-    Common/src/mobileMod/AndroidManifest.xml is in the phone APK, the boot receiver with both of its actions. The
-    watch gets none of our phone-only code: no CareLink class (tk.glucodata.mod.carelink) and none of the phone
-    components of the watch block. Our watch classes (tk.glucodata.mod.watch, .health; check_wear_components) do belong
-    there - joint branch, critic of part 6, V6-1: the former 'no tk.glucodata.mod.* in the watch' predates the watch
-    block. Searched with the dot / slash after `mod`: the package itself is tk.glucodata.ng.mod. The CareLink trial and
-    the made-up Bluetooth pump: in a test build, not in a candidate (check_trial)."""
+    """Our phone-only code (pump data, pump over Bluetooth): the pump data components with old CareLink names and every
+    pump-over-Bluetooth component declared in Common/src/mobileMod/AndroidManifest.xml are in the phone APK, the
+    update receiver with its action; nothing of the removed CareLink cloud is left (check_cloud_gone). The watch gets
+    none of our phone-only code: no class of tk.glucodata.mod.carelink (the pump data writers and notifications keep
+    that package) and none of the phone components of the watch block. Our watch classes (tk.glucodata.mod.watch,
+    .health; check_wear_components) do belong there - joint branch, critic of part 6, V6-1: the former 'no
+    tk.glucodata.mod.* in the watch' predates the watch block. Searched with the dot / slash after `mod`: the package
+    itself is tk.glucodata.ng.mod. The made-up Bluetooth pump: in a test build, not in a candidate (check_trial)."""
     check_trial(phone, release)
     tree = manifest_tree(phone)
     blocks = component_blocks(tree)
     missing = [c for c in MOD_CARELINK_COMPONENTS if c not in blocks]
     check(not missing and f'{PACKAGE}.mod-carelink' in tree,
-          f'phone manifest: our {len(MOD_CARELINK_COMPONENTS)} CareLink components (authority {PACKAGE}.mod-carelink)'
-          ' - source set mobileMod is in the build' + (f' (missing: {missing})' if missing else ''))
+          f'phone manifest: our {len(MOD_CARELINK_COMPONENTS)} pump data components with old CareLink names (starter,'
+          f' forwarding window; authority {PACKAGE}.mod-carelink) - source set mobileMod is in the build'
+          + (f' (missing: {missing})' if missing else ''))
+    check_cloud_gone(phone, blocks)
     missing = [c for c in MOD_PUMPBT_COMPONENTS if c not in blocks]
     check(not missing and f'{PACKAGE}.mod-pumpbt' in tree,
           f'phone manifest: our {len(MOD_PUMPBT_COMPONENTS)} pump-over-Bluetooth components (authority {PACKAGE}.mod-pumpbt)'
@@ -566,9 +610,68 @@ def check_manifest(path, phone, phone_code):
         check(art.get('sha256') == hashlib.sha256(data).hexdigest(), 'manifest: sha256 = phone APK')
 
 
+def _tree_component(kind, name, actions=()):
+    """One component of an `aapt2 dump xmltree` manifest, in its format (made-up input for the self-test)."""
+    attr = 'A: http://schemas.android.com/apk/res/android:name(0x01010003)="{0}" (Raw: "{0}")'
+    lines = [f'      E: {kind} (line=1)', '        ' + attr.format(name)]
+    if actions:
+        lines.append('        E: intent-filter (line=2)')
+        for a in actions:
+            lines += ['          E: action (line=3)', '            ' + attr.format(a)]
+    return '\n'.join(lines) + '\n'
+
+
+def self_test():
+    """--self-test: check_cloud_gone's parts on made-up manifests and dex files - red on what the cloud left (the
+    manifest and dex of a build before its removal), green without it. No APK, no build tools."""
+    import tempfile
+    head = '  E: manifest (line=1)\n    E: application (line=2)\n'
+    boot = _tree_component('receiver', UPSTREAM_BOOT_RECEIVER,
+                           ['android.intent.action.BOOT_COMPLETED', 'android.intent.action.QUICKBOOT_POWERON'])
+    ours = (_tree_component('provider', MOD_STARTER) + _tree_component('activity', 'tk.glucodata.mod.carelink.CareLinkActivity')
+            + _tree_component('receiver', 'tk.glucodata.mod.pumpbt.PumpBtUpdateReceiver',
+                              ['android.intent.action.MY_PACKAGE_REPLACED']))
+    old = component_blocks(head + boot + ours + _tree_component('activity', CLOUD_COMPONENTS[0])
+                           + _tree_component('receiver', CLOUD_COMPONENTS[1])
+                           + _tree_component('receiver', CLOUD_COMPONENTS[2], ['android.intent.action.BOOT_COMPLETED',
+                                                                               'android.intent.action.MY_PACKAGE_REPLACED']))
+    new = component_blocks(head + boot + ours)
+    no_boot = component_blocks(head + ours + _tree_component('receiver', UPSTREAM_BOOT_RECEIVER,
+                                                             ['android.intent.action.QUICKBOOT_POWERON']))
+    check(cloud_components_found(old) == CLOUD_COMPONENTS, 'self-test: the cloud components of an old manifest are found')
+    check(cloud_components_found(new) == [], 'self-test: a manifest without the cloud has none of its components')
+    check(boot_receiver_ok(new) and boot_receiver_ok(old), 'self-test: upstream boot receiver with BOOT_COMPLETED is seen')
+    check(not boot_receiver_ok(no_boot) and not boot_receiver_ok(component_blocks(head + ours)),
+          'self-test: upstream boot receiver without BOOT_COMPLETED or missing is red')
+    tmp = tempfile.mkdtemp(prefix='mod-check-apk-selftest-')
+    try:
+        def apk(name, dex):
+            path = os.path.join(tmp, name)
+            with zipfile.ZipFile(path, 'w') as z:
+                z.writestr('classes.dex', b'dex\n035\0' + dex)
+                z.writestr('classes2.dex', b'dex\n035\0 Ltk/glucodata/mod/carelink/CareLinkCloudCleanup; mod-carelink-poll'
+                           b' tk.glucodata.mod.carelink.CareLinkAlarmReceiver')
+            return path
+        url = b'https://clcloud.minimed.eu/connect/carepartner/v13/discover/android/3.6'
+        _, hits = dex_marker_hits(apk('old.apk', url + b' tk.glucodata.ng.mod.CARELINK_TRIAL'), CLOUD_DEX_MARKERS)
+        check(hits == {'clcloud.minimed.eu', '/connect/carepartner/', 'tk.glucodata.ng.mod.CARELINK_TRIAL'},
+              f'self-test: the cloud strings of an old dex are found {sorted(hits)}')
+        _, hits = dex_marker_hits(apk('trial.apk', b'ModCareLinkTrial'), CLOUD_DEX_MARKERS)
+        check(hits == {'ModCareLinkTrial'}, 'self-test: the old CareLink trial alone is found')
+        dexes, hits = dex_marker_hits(apk('new.apk', b'Ltk/glucodata/mod/pumpbt/PumpBtSource; https://raw.githubusercontent.com/'),
+                                      CLOUD_DEX_MARKERS)
+        check(len(dexes) == 2 and not hits, 'self-test: the cleanup\'s own names and the pump code are not cloud strings')
+    finally:
+        for f in os.listdir(tmp):
+            os.remove(os.path.join(tmp, f))
+        os.rmdir(tmp)
+    print(f'\n{len(failures)} check(s) failed' if failures else '\nAll checks passed')
+    sys.exit(1 if failures else 0)
+
+
 def trial_absent(phone):
     """--trial-absent: a phone APK built like a candidate (-PmodRelease=1, one-time key) inside the test build job has
-    no CareLink trial and no made-up Bluetooth pump. Only that - no wear, signature or update manifest checks."""
+    no made-up Bluetooth pump. Only that - no wear, signature or update manifest checks."""
     pkg, code, name, _ = badging(phone)
     m = re.search(r'-mod(\d+)$', name)
     release = int(m.group(1)) if m else 0
@@ -582,7 +685,9 @@ def trial_absent(phone):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--trial-absent', metavar='PHONE_APK',
-                    help='only: the CareLink trial and the made-up Bluetooth pump are not in this candidate-like phone APK')
+                    help='only: the made-up Bluetooth pump is not in this candidate-like phone APK')
+    ap.add_argument('--self-test', action='store_true',
+                    help='only: the checks of the removed CareLink cloud on made-up input (no APK, no build tools)')
     ap.add_argument('--phone')
     ap.add_argument('--wear')
     ap.add_argument('--release', type=int)
@@ -590,6 +695,8 @@ def main():
     ap.add_argument('--no-vendor', action='store_true')
     ap.add_argument('--manifest', help='update-manifest.json to check against the phone APK')
     a = ap.parse_args()
+    if a.self_test:
+        self_test()
     if a.trial_absent:
         trial_absent(a.trial_absent)
     missing = [f'--{n}' for n in ('phone', 'wear', 'release', 'mode') if getattr(a, n) is None]

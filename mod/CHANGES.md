@@ -9,7 +9,28 @@ Each version has two lists: "For the user" - what is visible in the app, "Build 
 A new line goes into the "After …" section, in the same pull request (PR) as the change itself.
 
 ## After mod-1.3.3-11 (in `main`, no tag yet)
+For the user:
+- 2026-11-27 — pump data over Bluetooth in place of the CareLink cloud. For the MiniMed 7xx pumps (740G, 770G, 780G;
+  checked on a 740G, the 770G and 780G only by what other projects report): the phone reads the pump directly over
+  Bluetooth, read only, without MiniMed Mobile, a cloud or a sign-in. The journal, the chart basal, the "IoB" chip,
+  the watch face and Nightscout get the pump data as before. One "Pump" window (the settings row next to Nightscout,
+  the app icon shortcut, a tap on the pump notifications): a pairing wizard (warnings, the steps on the pump, the
+  pump's key database downloaded by itself or loaded from a file), the link state, the pump's reservoir in units,
+  battery, active insulin and basal, "Permanent operation", the warning delay 20, 30 or 60 min, folded diagnostics.
+  The CareLink cloud is removed: its sign-in, poll, window and "Sign in again" notification are gone, and for those
+  who used it the cloud data stops coming after the update. What it left on the phone (the session, its key, the
+  schedule, the cloud's alarm and work, the sign-in cookies) is removed by itself once, at the first start after the
+  update; the pump journal, the pump state and the pump settings stay. Hooks in the author's files: still two
+  (`carelink-settings`, `carelink-tempbasal`), 4 changed lines as `mod/check-hooks.py` counts them (3 lines of ours,
+  1 of theirs replaced).
+
 Build and checks:
+- 2026-11-27 — `mod/check-apk.py`: the phone manifest has none of the removed cloud's components
+  (`CareLinkLoginActivity`, `CareLinkAlarmReceiver`, `CareLinkBootReceiver`) and the phone dex none of its strings
+  (the cloud's discovery address, the old CareLink trial markers), in a test build and a candidate alike; upstream's
+  boot receiver `NumAlarm` with `BOOT_COMPLETED` is there (after a reboot only it starts the process, and the pump
+  starter arms the pump watchdog). `--self-test` runs these checks on made-up input. The CareLink trial is gone from
+  the test build: only the made-up Bluetooth pump is left in `Common/src/modTrial/`.
 - 2026-11-26 — a candidate reaches everyone only after the owner's "all ok" on the phone, as the very files checked
   there: `mod/publish-candidate.py mod-X.Y.Z-N --publish --checked "<what was checked>"` takes them from the owner's
   copy (`mod/apk-keep.py fetch`), checks them against the sha256 the candidate run printed in its log (GitHub keeps
