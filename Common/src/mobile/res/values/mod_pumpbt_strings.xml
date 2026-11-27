@@ -83,7 +83,7 @@
     <string name="mod_pumpbt_permanent_needs_bluetooth">This phone has no Bluetooth LE: permanent operation is not possible.</string>
     <string name="mod_pumpbt_permanent_needs_bluetooth_on">To turn it on, turn Bluetooth on (quick settings at the top of the screen).</string>
     <string name="mod_pumpbt_permanent_needs_advertising">This phone cannot advertise over Bluetooth LE, so the pump cannot connect to it: permanent operation is not possible.</string>
-    <string name="mod_pumpbt_permanent_needs_key">To turn it on, the pump\'s key database is needed: press Pair again (it is downloaded first), or load it from a file under Diagnostics.</string>
+    <string name="mod_pumpbt_permanent_needs_key">To turn it on, the pump\'s key database is needed: under Diagnostics press Download key database (needs the internet), or load it from a file there.</string>
     <string name="mod_pumpbt_permanent_wait_pairing">A pairing is going on: wait until it ends, or press Stop, then turn it on.</string>
     <string name="mod_pumpbt_permanent_on">On: the phone keeps the link to the pump in the background and writes its boluses, carbs and basal to the journal.</string>
     <string name="mod_pumpbt_permanent_ask_title">Turn on permanent operation?</string>
@@ -225,4 +225,8 @@
     <string name="mod_pumpbt_diagnostics_show">Show</string>
     <string name="mod_pumpbt_diagnostics_hide">Hide</string>
     <string name="mod_pumpbt_diagnostics_hint">Link stage, buttons, values, link journal — for finding faults</string>
+
+    <!-- %1$s - "2 h 5 min ago": the active insulin's own time; the plate does not show it either -->
+    <string name="mod_pumpbt_iob_old">older than 30 min (%1$s) — check the pump</string>
+    <string name="mod_pumpbt_download_key">Download key database</string>
 </resources>

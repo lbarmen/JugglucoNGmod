@@ -2,10 +2,13 @@ package tk.glucodata.mod.pumpbt
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
 import android.content.ActivityNotFoundException
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -120,6 +123,7 @@ class PumpBtActivity : ComponentActivity() {
                         onStop = PumpBtTrial::stop,
                         onReadAgain = PumpBtTrial::readAgain,
                         onLoadKeyFile = ::pickFile,
+                        onDownloadKey = PumpBtTrial::loadKeyFromInternet,
                         onShareJournal = ::shareJournal,
                         onClearJournal = { PumpBtTrial.clearJournal(this) },
                         onPermanent = ::setPermanent,
@@ -172,6 +176,39 @@ class PumpBtActivity : ComponentActivity() {
                 null -> START_NONE
             },
         )
+    }
+
+    /**
+     * Bluetooth turned on or off while the window is shown (a quick-settings tile does not pause the window): the phone
+     * checks again (critic G2, C-3). Registered from onStart to onStop; a system broadcast, no export flag needed.
+     */
+    private val bluetoothState = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == BluetoothAdapter.ACTION_STATE_CHANGED) PumpBtTrial.refreshChecks(this@PumpBtActivity)
+        }
+    }
+
+    private var bluetoothStateOn = false
+
+    override fun onStart() {
+        super.onStart()
+        try {
+            registerReceiver(bluetoothState, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
+            bluetoothStateOn = true
+        } catch (t: Throwable) {
+            PumpBtLog.w("Bluetooth state receiver not registered (${t.javaClass.simpleName})")
+        }
+    }
+
+    override fun onStop() {
+        if (bluetoothStateOn) {
+            bluetoothStateOn = false
+            try {
+                unregisterReceiver(bluetoothState)
+            } catch (_: Throwable) {
+            }
+        }
+        super.onStop()
     }
 
     override fun onResume() {

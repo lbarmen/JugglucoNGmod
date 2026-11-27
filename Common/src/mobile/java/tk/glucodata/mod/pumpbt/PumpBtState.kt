@@ -1,5 +1,7 @@
 package tk.glucodata.mod.pumpbt
 
+import tk.glucodata.mod.carelink.PumpNow
+
 /** The trial's stage, as the screen names it. */
 internal enum class PumpBtStage {
     NOT_STARTED,
@@ -166,6 +168,11 @@ internal data class PumpBtUiState(
      * none. The start goes on once a key is in place (downloaded, or from a file).
      */
     val pendingStart: Boolean? = null,
+    /**
+     * When this window saw the phone's Bluetooth come back on (it was off at an earlier check); null - not seen. The
+     * wait for the pump is counted from it at the latest ([PumpBtWindow.waitShownSince]; critic G2, N-8).
+     */
+    val bluetoothBackAtMs: Long? = null,
 ) {
     val blockers: List<PumpBtBlocker>
         get() = PumpBtReadiness.blockers(hasBluetooth, bluetoothOn, permissionsGranted, advertisingSupported)
@@ -228,6 +235,12 @@ internal data class PumpBtControls(
      */
     val canPairAgain: Boolean,
 )
+
+/**
+ * The pump's active insulin as the window shows it ([PumpBtWindow.iobShown]): [units] null - older than
+ * [PumpBtWindow.IOB_FRESH_MS], not shown as a number; [ownAge] - its own time ([atMs]) is shown next to it.
+ */
+internal data class PumpBtIob(val units: Double?, val atMs: Long, val ownAge: Boolean)
 
 /** The link line of the window's state section ([PumpBtWindow.linkStatus]). */
 internal enum class PumpBtLinkStatus {
@@ -327,6 +340,18 @@ internal object PumpBtWindow {
 
     /** How long the card's buttons wait for the source's answer before they work again (critic B2b, N2). */
     const val ANSWER_WAIT_MS = 10_000L
+
+    /** How often the window's clock (data ages, the wait for the pump) moves while the window is on screen (critic G2, C-1). */
+    const val CLOCK_TICK_MS = 15_000L
+
+    /**
+     * The pump's active insulin older than this is not shown as a number: the IoB plate takes a pump number as fresh for
+     * as long (`ApiIobSnapshot.FRESHNESS_WINDOW_MS`, [tk.glucodata.mod.carelink.CareLinkIob]; critic G2, C-2).
+     */
+    const val IOB_FRESH_MS = 30L * 60_000L
+
+    /** The active insulin's own time is shown when it is this much older than the data time of the snapshot. */
+    const val IOB_OWN_AGE_MS = 5L * 60_000L
 
     /** Stages at which the pump is connected and the handshake went through: the bond works. */
     private val LINK_UP = setOf(PumpBtStage.HANDSHAKE, PumpBtStage.READING, PumpBtStage.DATA_READ)
@@ -534,6 +559,32 @@ internal object PumpBtWindow {
 
     /** The state section (link, last reading, permanent operation, cards): once paired, or with the source on. */
     fun stateShown(step: PumpBtWizardStep): Boolean = step == PumpBtWizardStep.NONE || step == PumpBtWizardStep.PAIRED
+
+    /**
+     * "Pair again" with the source on (the lost-bond card, the diagnostics) goes on: the window shows the wizard's
+     * PAIRING lines there - the wait, the pump steps, the advice after a failed one - and "Cancel pairing" (critic G2, C-4).
+     */
+    fun pairAgainShown(source: PumpBtSourceState): Boolean = source.enabled && pairing(source.link)
+
+    /**
+     * Since when the window counts the wait for the pump: the source's mark, but not before Bluetooth came back on
+     * (the time with Bluetooth off is not waiting; critic G2, N-8); null - not waiting.
+     */
+    fun waitShownSince(waitingSinceMs: Long?, bluetoothBackAtMs: Long?): Long? {
+        val since = waitingSinceMs ?: return null
+        return maxOf(since, bluetoothBackAtMs ?: since)
+    }
+
+    /**
+     * The pump's active insulin as the window shows it (critic G2, C-2: a snapshot keeps an older number with its own
+     * time when a cycle brought none): null - none in the snapshot. Its time is `iobAtMs` (none - the data time).
+     */
+    fun iobShown(pump: PumpNow, nowMs: Long): PumpBtIob? {
+        val units = pump.iobUnits?.takeIf { it.isFinite() && it >= 0.0 } ?: return null
+        val at = pump.iobAtMs ?: pump.dataAtMs
+        if (nowMs - at > IOB_FRESH_MS) return PumpBtIob(units = null, atMs = at, ownAge = true)
+        return PumpBtIob(units, at, ownAge = pump.dataAtMs - at > IOB_OWN_AGE_MS)
+    }
 
     /**
      * "The phone forgot the pump": with the source on, by the source's mark only (it is cleared by every complete

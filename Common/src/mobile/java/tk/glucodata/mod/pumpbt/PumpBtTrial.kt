@@ -143,8 +143,19 @@ internal object PumpBtTrial {
         } catch (_: Throwable) {
             false
         }
-        _state.update { it.copy(hasBluetooth = has, bluetoothOn = on, permissionsGranted = hasPermissions(c), advertisingSupported = advertising) }
+        // Bluetooth seen off, then on: the wait for the pump counts from now at the latest (critic G2, N-8)
+        val back = if (on && lastBluetoothOn == false) env.now() else null
+        lastBluetoothOn = on
+        _state.update {
+            it.copy(
+                hasBluetooth = has, bluetoothOn = on, permissionsGranted = hasPermissions(c), advertisingSupported = advertising,
+                bluetoothBackAtMs = if (!on) null else back ?: it.bluetoothBackAtMs,
+            )
+        }
     }
+
+    /** Bluetooth at the last check; null - not checked yet in this process. */
+    private var lastBluetoothOn: Boolean? = null
 
     /** Android 12+: BLUETOOTH_ADVERTISE and BLUETOOTH_CONNECT (in upstream's manifest); before - install-time ones. */
     fun permissions(): Array<String> = PumpBtSource.permissions()

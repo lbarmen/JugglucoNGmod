@@ -70,7 +70,7 @@
     <string name="mod_pumpbt_permanent_needs_bluetooth">В телефоне нет Bluetooth LE: постоянная работа невозможна.</string>
     <string name="mod_pumpbt_permanent_needs_bluetooth_on">Чтобы включить, включите Bluetooth (быстрые настройки вверху экрана).</string>
     <string name="mod_pumpbt_permanent_needs_advertising">Телефон не умеет рекламу Bluetooth LE, и помпа не сможет к нему подключиться: постоянная работа невозможна.</string>
-    <string name="mod_pumpbt_permanent_needs_key">Чтобы включить, нужна база ключей помпы: нажмите «Сопрячь заново» (сначала она скачается) или загрузите её из файла в разделе «Диагностика».</string>
+    <string name="mod_pumpbt_permanent_needs_key">Чтобы включить, нужна база ключей помпы: в разделе «Диагностика» нажмите «Скачать базу ключей» (нужен интернет) или загрузите её там из файла.</string>
     <string name="mod_pumpbt_permanent_wait_pairing">Идёт сопряжение: дождитесь его конца или нажмите «Остановить», потом включайте.</string>
     <string name="mod_pumpbt_permanent_on">Включена: телефон держит связь с помпой в фоне и пишет её болюсы, углеводы и базал в журнал.</string>
     <string name="mod_pumpbt_permanent_ask_title">Включить постоянную работу?</string>
@@ -198,4 +198,7 @@
     <string name="mod_pumpbt_diagnostics_show">Показать</string>
     <string name="mod_pumpbt_diagnostics_hide">Скрыть</string>
     <string name="mod_pumpbt_diagnostics_hint">Этап связи, кнопки, значения, журнал связи — для разбора сбоев</string>
+
+    <string name="mod_pumpbt_iob_old">старше 30 мин (%1$s) — смотрите на помпе</string>
+    <string name="mod_pumpbt_download_key">Скачать базу ключей</string>
 </resources>

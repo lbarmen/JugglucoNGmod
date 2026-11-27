@@ -31,8 +31,12 @@ class CareLinkActivity : ComponentActivity() {
     }
 
     companion object {
-        /** Where this window sends the person: the pump window when the build declares it, else nowhere (null). */
-        internal fun forward(context: Context): Intent? = PumpBtActivity.intentIfDeclared(context)
+        /**
+         * Where this window sends the person: the pump window when the build declares it, else nowhere (null). An open
+         * pump window is brought back, not opened a second time (critic G2, N-1).
+         */
+        internal fun forward(context: Context): Intent? =
+            PumpBtActivity.intentIfDeclared(context)?.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
 
         /**
          * The intent of this window when the build declares it (the phone `mod` build), else null: upstream's builds

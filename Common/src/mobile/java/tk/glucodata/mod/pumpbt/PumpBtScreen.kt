@@ -33,7 +33,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import tk.glucodata.R
@@ -67,6 +70,8 @@ internal class PumpBtScreenActions(
     val onStop: () -> Unit,
     val onReadAgain: () -> Unit,
     val onLoadKeyFile: () -> Unit,
+    /** The diagnostics' "Download key database" ([PumpBtTrial.loadKeyFromInternet]; critic G2, N-9). */
+    val onDownloadKey: () -> Unit,
     val onShareJournal: () -> Unit,
     val onClearJournal: () -> Unit,
     /** "Permanent operation": true - [PumpBtSource.enable] (after the screen's confirmation), false - [PumpBtSource.disable]. */
@@ -116,6 +121,17 @@ internal fun PumpBtScreen(
     LaunchedEffect(keepOn) { actions.onKeepScreenOn(keepOn) }
     LaunchedEffect(source.lastCycleAtMs) { actions.onPumpRead() }
     var askOn by rememberSaveable { mutableStateOf(false) }
+    // one clock for the data ages and the wait, moving while the window is on screen (critic G2, C-1)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                now = System.currentTimeMillis()
+                delay(PumpBtWindow.CLOCK_TICK_MS)
+            }
+        }
+    }
     Scaffold(
         contentWindowInsets = WindowInsets(0.dp),
         topBar = { AppTopBar(stringResource(R.string.mod_pumpbt_title), actions.onBack) },
@@ -125,10 +141,10 @@ internal fun PumpBtScreen(
                 .padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 32.dp),
         ) {
             if (step != PumpBtWizardStep.NONE) WizardSection(step, state, source, actions, onTurnOn = { askOn = true })
-            if (PumpBtWindow.stateShown(step)) StateSection(state, source, controls, actions)
+            if (PumpBtWindow.stateShown(step)) StateSection(state, source, controls, actions, now)
             PumpBtWindow.card(source)?.let { BackfillSection(it, actions) }
             if (PumpBtWindow.dataShown(source)) DataSection(source)
-            if (pumpNow != null || source.enabled) PumpNowSection(pumpNow, source.link.values)
+            if (pumpNow != null || source.enabled) PumpNowSection(pumpNow, source.link.values, now)
             SettingsSection(settings, actions)
             DiagnosticsSection(step, state, source, controls, journal, actions)
         }
@@ -156,12 +172,12 @@ internal fun PumpBtScreen(
  * while it is on - the wizard's PAIRED step turns it on), its warnings, the lost bond.
  */
 @Composable
-private fun StateSection(state: PumpBtUiState, source: PumpBtSourceState, controls: PumpBtControls, actions: PumpBtScreenActions) {
+private fun StateSection(state: PumpBtUiState, source: PumpBtSourceState, controls: PumpBtControls, actions: PumpBtScreenActions, now: Long) {
     SectionLabel(stringResource(R.string.mod_pumpbt_section_state))
     when (PumpBtWindow.linkStatus(state, source)) {
         PumpBtLinkStatus.BLUETOOTH_OFF -> BtWarning(stringResource(R.string.mod_pumpbt_link_bluetooth_off))
         PumpBtLinkStatus.CONNECTED -> SettingsItem(title = stringResource(R.string.mod_pumpbt_link_connected), position = CardPosition.SINGLE)
-        PumpBtLinkStatus.WAITING -> WaitingForPump(source.waitingSinceMs, keepBond = source.enabled)
+        PumpBtLinkStatus.WAITING -> WaitingForPump(PumpBtWindow.waitShownSince(source.waitingSinceMs, state.bluetoothBackAtMs), now, keepBond = source.enabled)
         PumpBtLinkStatus.PAIRING -> SettingsItem(title = stringResource(R.string.mod_pumpbt_link_pairing), position = CardPosition.SINGLE)
         PumpBtLinkStatus.ERROR -> SettingsItem(
             title = stringResource(R.string.mod_pumpbt_link_error, source.link.error ?: "—"),
@@ -180,7 +196,11 @@ private fun StateSection(state: PumpBtUiState, source: PumpBtSourceState, contro
         if (!source.sensorBluetooth) BtWarning(stringResource(R.string.mod_pumpbt_sensor_bluetooth_off))
     }
     if (source.memoryLoadFailed) BtWarning(stringResource(R.string.mod_pumpbt_memory_load_failed))
-    if (PumpBtWindow.bondAdvice(source)) BondLostCard(state, controls, actions)
+    if (PumpBtWindow.pairAgainShown(source)) {
+        PairingAgainCard(state, source, actions)
+    } else if (PumpBtWindow.bondAdvice(source)) {
+        BondLostCard(state, controls, actions)
+    }
 }
 
 /**
@@ -188,14 +208,7 @@ private fun StateSection(state: PumpBtUiState, source: PumpBtSourceState, contro
  * pairing): how long, how long it usually takes, and - with the source on - not to remove the pairing.
  */
 @Composable
-private fun WaitingForPump(sinceMs: Long?, keepBond: Boolean) {
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(15_000)
-            now = System.currentTimeMillis()
-        }
-    }
+private fun WaitingForPump(sinceMs: Long?, now: Long, keepBond: Boolean) {
     val min = sinceMs?.let { PumpBtWindow.waitingMinutes(it, now) } ?: 0
     SettingsItem(
         title = stringResource(R.string.mod_pumpbt_link_waiting, min),
@@ -397,16 +410,24 @@ private fun warningText(w: PumpWarning): String = when (w) {
  * IDD type) - "running, type N" from the link's values (process memory).
  */
 @Composable
-private fun PumpNowSection(pump: PumpNow?, values: PumpBtValues) {
+private fun PumpNowSection(pump: PumpNow?, values: PumpBtValues, now: Long) {
     if (pump == null) {
         SectionLabel(stringResource(R.string.mod_pumpbt_section_pump))
         BtBody(stringResource(R.string.mod_carelink_data_none))
         return
     }
-    SectionLabel(stringResource(R.string.mod_carelink_section_pump, btAge(System.currentTimeMillis(), pump.dataAtMs)))
+    SectionLabel(stringResource(R.string.mod_carelink_section_pump, btAge(now, pump.dataAtMs)))
     val rows = ArrayList<Pair<String, String>>(6)
-    pump.iobUnits?.let { rows += stringResource(R.string.mod_carelink_iob) to stringResource(R.string.mod_carelink_units, btUnits(it)) }
-    pump.reservoirUnits?.let { rows += stringResource(R.string.mod_carelink_reservoir) to stringResource(R.string.mod_carelink_units, btUnits(it)) }
+    // the active insulin with its own time; older than the plate's 30 min - no number (critic G2, C-2)
+    PumpBtWindow.iobShown(pump, now)?.let { iob ->
+        val value = when {
+            iob.units == null -> stringResource(R.string.mod_pumpbt_iob_old, btAge(now, iob.atMs))
+            iob.ownAge -> stringResource(R.string.mod_pumpbt_units, btUnits(iob.units)) + " · " + btAge(now, iob.atMs)
+            else -> stringResource(R.string.mod_pumpbt_units, btUnits(iob.units))
+        }
+        rows += stringResource(R.string.mod_carelink_iob) to value
+    }
+    pump.reservoirUnits?.let { rows += stringResource(R.string.mod_carelink_reservoir) to stringResource(R.string.mod_pumpbt_units, btUnits(it)) }
     pump.batteryPercent?.let { rows += stringResource(R.string.mod_carelink_battery) to stringResource(R.string.mod_carelink_percent, it) }
     if (pump.suspended == true) {
         rows += stringResource(R.string.mod_pumpbt_basal_now) to stringResource(R.string.mod_pumpbt_delivery_stopped)
@@ -415,18 +436,10 @@ private fun PumpNowSection(pump: PumpNow?, values: PumpBtValues) {
     }
     val tempPercent = pump.tempBasal?.percent
     val tempRate = pump.tempBasal?.rate
-    val tempLeft = pump.tempBasal?.minutesLeft ?: 0
+    val tempLeft = pump.tempBasal?.minutesLeft
     val tempText = when {
-        tempPercent != null -> stringResource(
-            R.string.mod_pumpbt_temp_basal_value,
-            stringResource(R.string.mod_pumpbt_percent, tempPercent),
-            tempLeft,
-        )
-        tempRate != null -> stringResource(
-            R.string.mod_pumpbt_temp_basal_value,
-            stringResource(R.string.mod_pumpbt_units_per_hour, btUnits(tempRate)),
-            tempLeft,
-        )
+        tempPercent != null -> tempValue(stringResource(R.string.mod_pumpbt_percent, tempPercent), tempLeft)
+        tempRate != null -> tempValue(stringResource(R.string.mod_pumpbt_units_per_hour, btUnits(tempRate)), tempLeft)
         values.tempBasalType != null -> stringResource(R.string.mod_pumpbt_temp_basal_type, "0x%02X".format(values.tempBasalType))
         pump.basalKnown -> stringResource(R.string.mod_pumpbt_none)
         else -> null
@@ -471,7 +484,8 @@ private fun DiagnosticsSection(
         KeyRows(state, actions)
     }
     ValuesSection(source.link.values)
-    JournalSection(journal, source, actions)
+    // the journal's switch, Share and Clear write the link state: not before the warnings (critic G2, N-2)
+    if (step != PumpBtWizardStep.WARNINGS) JournalSection(journal, source, actions)
 }
 
 @Composable
@@ -547,8 +561,16 @@ private fun KeyRows(state: PumpBtUiState, actions: PumpBtScreenActions) {
     SettingsItem(title = line, position = CardPosition.SINGLE)
     keyFailureText(state)?.let { BtWarning(it) }
     Spacer(Modifier.padding(top = 8.dp))
-    OutlinedButton(onClick = actions.onLoadKeyFile, enabled = !state.keyLoading) { Text(stringResource(R.string.mod_pumpbt_load_key_file)) }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = actions.onDownloadKey, enabled = !state.keyLoading) { Text(stringResource(R.string.mod_pumpbt_download_key)) }
+        OutlinedButton(onClick = actions.onLoadKeyFile, enabled = !state.keyLoading) { Text(stringResource(R.string.mod_pumpbt_load_key_file)) }
+    }
 }
+
+/** A temporary basal's value, with the minutes left only when the pump gave them (critic G2, N-6). */
+@Composable
+private fun tempValue(value: String, minutesLeft: Int?): String =
+    if (minutesLeft == null || minutesLeft < 0) value else stringResource(R.string.mod_pumpbt_temp_basal_value, value, minutesLeft)
 
 @Composable
 internal fun keyFailureText(state: PumpBtUiState): String? = when (state.keyFailure) {
@@ -583,16 +605,9 @@ private fun ValuesSection(v: PumpBtValues) {
     SectionLabel(stringResource(R.string.mod_pumpbt_section_values, v.readAtMs?.let(::btTime) ?: none))
     val temp = when {
         // a temp basal in percent is shown as percent, never as units per hour
-        v.tempBasalPercent != null -> stringResource(
-            R.string.mod_pumpbt_temp_basal_value,
-            stringResource(R.string.mod_pumpbt_percent, v.tempBasalPercent),
-            v.tempBasalRemainingMin ?: 0,
-        )
-        v.tempBasalUnitsPerHour != null -> stringResource(
-            R.string.mod_pumpbt_temp_basal_value,
-            stringResource(R.string.mod_pumpbt_units_per_hour, btUnits(v.tempBasalUnitsPerHour)),
-            v.tempBasalRemainingMin ?: 0,
-        )
+        v.tempBasalPercent != null -> tempValue(stringResource(R.string.mod_pumpbt_percent, v.tempBasalPercent), v.tempBasalRemainingMin)
+        v.tempBasalUnitsPerHour != null ->
+            tempValue(stringResource(R.string.mod_pumpbt_units_per_hour, btUnits(v.tempBasalUnitsPerHour)), v.tempBasalRemainingMin)
         v.tempBasalType != null -> stringResource(R.string.mod_pumpbt_temp_basal_type, "0x%02X".format(v.tempBasalType))
         v.basalRead -> stringResource(R.string.mod_pumpbt_none)
         else -> none

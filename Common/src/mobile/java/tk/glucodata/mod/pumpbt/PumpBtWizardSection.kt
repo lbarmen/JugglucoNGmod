@@ -48,20 +48,7 @@ internal fun WizardSection(
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stepTitle(step), style = MaterialTheme.typography.titleMedium)
-            val lines = PumpBtWindow.wizardLines(step, state, source)
-            val numbered = step == PumpBtWizardStep.START
-            lines.forEachIndexed { i, line ->
-                val text = lineText(line, step, state, source)
-                when {
-                    line == PumpBtWizardLine.PAIR_WAIT -> PairWait(state.pairingStartedAtMs)
-                    line == PumpBtWizardLine.PAIRING_FAILED || line == PumpBtWizardLine.KEY_FAILED -> BtWarning(text)
-                    line == PumpBtWizardLine.KEY_NEEDS_INTERNET || line == PumpBtWizardLine.TURN_ON_HINT ||
-                        line == PumpBtWizardLine.OTHER_NAME_HINT -> BtHint(text)
-                    step == PumpBtWizardStep.WARNINGS -> BtBody("• $text")
-                    numbered -> BtBody("${i + 1}. $text")
-                    else -> BtBody(text)
-                }
-            }
+            WizardLines(step, state, source)
             Spacer(Modifier.padding(top = 4.dp))
             val controls = PumpBtWindow.controls(state, source)
             PumpBtWindow.wizardButtons(step, state, source).forEachIndexed { i, button ->
@@ -90,6 +77,48 @@ internal fun WizardSection(
                     OutlinedButton(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth()) { Text(buttonText(button)) }
                 }
             }
+        }
+    }
+}
+
+/** The text lines of a wizard step ([PumpBtWindow.wizardLines]). */
+@Composable
+private fun WizardLines(step: PumpBtWizardStep, state: PumpBtUiState, source: PumpBtSourceState) {
+    val numbered = step == PumpBtWizardStep.START
+    PumpBtWindow.wizardLines(step, state, source).forEachIndexed { i, line ->
+        val text = lineText(line, step, state, source)
+        when {
+            line == PumpBtWizardLine.PAIR_WAIT -> PairWait(state.pairingStartedAtMs)
+            line == PumpBtWizardLine.PAIRING_FAILED || line == PumpBtWizardLine.KEY_FAILED -> BtWarning(text)
+            line == PumpBtWizardLine.KEY_NEEDS_INTERNET || line == PumpBtWizardLine.TURN_ON_HINT ||
+                line == PumpBtWizardLine.OTHER_NAME_HINT -> BtHint(text)
+            step == PumpBtWizardStep.WARNINGS -> BtBody("• $text")
+            numbered -> BtBody("${i + 1}. $text")
+            else -> BtBody(text)
+        }
+    }
+}
+
+/**
+ * "Pair again" with the source on ([PumpBtWindow.pairAgainShown]: the lost-bond card, the diagnostics): the wizard's
+ * PAIRING lines - the wait, the pump steps, the advice after a failed one - and "Cancel pairing" in sight (critic G2, C-4).
+ * The other name is not offered here: with the source on a pairing is always variant A (finding 11).
+ */
+@Composable
+internal fun PairingAgainCard(state: PumpBtUiState, source: PumpBtSourceState, actions: PumpBtScreenActions) {
+    Spacer(Modifier.padding(top = 8.dp))
+    Card(
+        Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.mod_pumpbt_wizard_pairing_title), style = MaterialTheme.typography.titleMedium)
+            WizardLines(PumpBtWizardStep.PAIRING, state, source)
+            Spacer(Modifier.padding(top = 4.dp))
+            OutlinedButton(onClick = actions.onCancelPairing, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.mod_pumpbt_cancel_pairing))
+            }
+            BtHint(stringResource(R.string.mod_pumpbt_cancel_pairing_hint))
         }
     }
 }

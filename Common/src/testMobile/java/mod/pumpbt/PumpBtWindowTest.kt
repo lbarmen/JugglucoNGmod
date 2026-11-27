@@ -9,11 +9,13 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import tk.glucodata.mod.carelink.CareLinkSettings
+import tk.glucodata.mod.carelink.PumpNow
 import tk.glucodata.mod.pumpbt.BackfillCard
 import tk.glucodata.mod.pumpbt.BackfillItem
 import tk.glucodata.mod.pumpbt.ModPumpStarter
 import tk.glucodata.mod.pumpbt.PumpBtAnswer
 import tk.glucodata.mod.pumpbt.PumpBtCount
+import tk.glucodata.mod.pumpbt.PumpBtIob
 import tk.glucodata.mod.pumpbt.PumpBtKey
 import tk.glucodata.mod.pumpbt.PumpBtLinkState
 import tk.glucodata.mod.pumpbt.PumpBtLinkStatus
@@ -711,6 +713,57 @@ class PumpBtWindowTest {
         assertTrue("a pump address in the old preferences", PumpBtTrial.usedBefore(false, file) { true })
         PumpBtStore(file, null).awaitWrites()
         assertTrue("the link state file is there", PumpBtTrial.usedBefore(false, file) { false })
+    }
+
+    // MARK: - Review fixes (critic G2)
+
+    @Test
+    fun pairAgainWithTheSourceOnShowsThePairingLinesAndCancel() {
+        // C-4: the lost-bond card's Pair again goes on with the wait, the pump steps and the advice in sight
+        assertTrue(PumpBtWindow.pairAgainShown(on.copy(link = switchedToPairing)))
+        assertTrue(PumpBtWindow.pairAgainShown(on.copy(link = pairingLink)))
+        assertFalse(PumpBtWindow.pairAgainShown(on.copy(link = running)))
+        assertFalse("the wizard has it with the source off", PumpBtWindow.pairAgainShown(off.copy(link = pairingLink)))
+        val pressed = ready.copy(pairingStartedAtMs = 1_000)
+        assertEquals(
+            listOf(PumpBtWizardLine.PAIR_WAIT, PumpBtWizardLine.PAIR_ON_PUMP, PumpBtWizardLine.CONFIRM_ON_PHONE),
+            PumpBtWindow.wizardLines(PumpBtWizardStep.PAIRING, pressed, on.copy(link = switchedToPairing)),
+        )
+        val failed = on.copy(link = switchedToPairing.copy(pairingFailedAtMs = 2_000))
+        assertEquals(
+            listOf(PumpBtWizardLine.PAIR_WAIT, PumpBtWizardLine.PAIRING_FAILED),
+            PumpBtWindow.wizardLines(PumpBtWizardStep.PAIRING, pressed, failed),
+        )
+        assertTrue(PumpBtWindow.controls(pressed, failed).canCancelPairing)
+    }
+
+    @Test
+    fun theWaitIsNotCountedWhileBluetoothWasOff() {
+        // N-8: off from 1 000 to 50 000 - the wait counts from when it came back
+        assertEquals(50_000L, PumpBtWindow.waitShownSince(1_000, 50_000))
+        assertEquals(60_000L, PumpBtWindow.waitShownSince(60_000, 50_000))
+        assertEquals(1_000L, PumpBtWindow.waitShownSince(1_000, null))
+        assertNull(PumpBtWindow.waitShownSince(null, 50_000))
+    }
+
+    @Test
+    fun theActiveInsulinShowsItsOwnTimeAndNoOldNumber() {
+        // C-2: a snapshot keeps an older number with its own time when a cycle brought none
+        val min = 60_000L
+        val now = 100 * min
+        val fresh = PumpNow(dataAtMs = now - 2 * min, iobUnits = 1.5, iobAtMs = now - 2 * min)
+        assertEquals(PumpBtIob(1.5, now - 2 * min, ownAge = false), PumpBtWindow.iobShown(fresh, now))
+        // no own time: the data time
+        assertEquals(PumpBtIob(1.5, now - 2 * min, ownAge = false), PumpBtWindow.iobShown(fresh.copy(iobAtMs = null), now))
+        // older than the data time by more than 5 min: its own age is shown
+        assertEquals(PumpBtIob(1.5, now - 20 * min, ownAge = true), PumpBtWindow.iobShown(fresh.copy(iobAtMs = now - 20 * min), now))
+        // older than the plate's 30 min: no number
+        assertEquals(PumpBtIob(null, now - 31 * min, ownAge = true), PumpBtWindow.iobShown(fresh.copy(iobAtMs = now - 31 * min), now))
+        assertEquals(PumpBtIob(null, now - 40 * min, ownAge = true), PumpBtWindow.iobShown(fresh.copy(dataAtMs = now - 40 * min, iobAtMs = null), now))
+        // none in the snapshot
+        assertNull(PumpBtWindow.iobShown(fresh.copy(iobUnits = null), now))
+        assertNull(PumpBtWindow.iobShown(fresh.copy(iobUnits = Double.NaN), now))
+        assertEquals(30 * min, PumpBtWindow.IOB_FRESH_MS)
     }
 
     @Test
