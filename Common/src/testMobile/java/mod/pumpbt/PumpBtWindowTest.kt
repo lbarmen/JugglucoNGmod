@@ -11,6 +11,7 @@ import org.junit.rules.TemporaryFolder
 import tk.glucodata.mod.carelink.CareLinkSettings
 import tk.glucodata.mod.pumpbt.BackfillCard
 import tk.glucodata.mod.pumpbt.BackfillItem
+import tk.glucodata.mod.pumpbt.ModPumpStarter
 import tk.glucodata.mod.pumpbt.PumpBtAnswer
 import tk.glucodata.mod.pumpbt.PumpBtCount
 import tk.glucodata.mod.pumpbt.PumpBtKey
@@ -27,6 +28,7 @@ import tk.glucodata.mod.pumpbt.PumpBtWindow
 import tk.glucodata.mod.pumpbt.PumpBtWizardStep
 import tk.glucodata.mod.pumpbt.PumpHistoryCounters
 import tk.glucodata.mod.pumpbt.PumpWarning
+import tk.glucodata.mod.pumpbt.core.toHex
 import java.io.File
 
 /**
@@ -424,8 +426,111 @@ class PumpBtWindowTest {
         PumpBtTrial.tryOtherName()
         assertEquals(1, t.starts.size)
         assertEquals(PumpBtNameVariant.A, t.store.variant)
-        assertEquals(PumpBtNameVariant.A, PumpBtWindow.variantForStart(PumpBtNameVariant.B, sourceOn = true))
-        assertEquals(PumpBtNameVariant.B, PumpBtWindow.variantForStart(PumpBtNameVariant.B, sourceOn = false))
+    }
+
+    // MARK: - Review fixes (critic G1)
+
+    @Test
+    fun aDroppedPairingWithBLeavesNoBForTheNextPairing() {
+        // C1: B in the store (a failed or stopped pairing with B, or a dead process) - the next pairing is A
+        val t = FakeTrial(tmp.newFolder())
+        t.key = true
+        t.store.variant = PumpBtNameVariant.B
+        PumpBtTrial.resetForTest(t.env, ready.copy(paired = false, warningsAccepted = true, variant = PumpBtNameVariant.B))
+        PumpBtTrial.startPairing()
+        assertEquals(listOf(true to PumpBtNameVariant.A), t.starts)
+        assertEquals(PumpBtNameVariant.A, PumpBtTrial.state.value.variant)
+
+        // B tried during the pairing, then Stop, then Start pairing: A again
+        PumpBtTrial.onLink(pairingLink)
+        PumpBtTrial.tryOtherName()
+        assertEquals(true to PumpBtNameVariant.B, t.starts.last())
+        PumpBtTrial.stop()
+        PumpBtTrial.onLink(pairingLink.copy(running = false, pairMode = false, stage = PumpBtStage.STOPPED))
+        PumpBtTrial.startPairing()
+        assertEquals(true to PumpBtNameVariant.A, t.starts.last())
+        assertEquals(PumpBtNameVariant.A, t.store.variant)
+    }
+
+    @Test
+    fun aLinkStartedWithBIsStoppedBeforePairingAgainWithA() {
+        // C1: the pairing with B went through (the store is back on A) but the link still runs with B
+        val t = FakeTrial(tmp.newFolder())
+        t.key = true
+        PumpBtTrial.resetForTest(t.env, newcomer.copy(warningsAccepted = true, keyCrc = "01020304"))
+        PumpBtTrial.onLink(pairingLink)
+        t.running = true
+        PumpBtTrial.tryOtherName()
+        t.store.paired = true
+        PumpBtTrial.onLink(up)
+        assertEquals(PumpBtNameVariant.A, t.store.variant)
+        val stops = t.stops
+        t.sourceOn = true
+        PumpBtTrial.startPairing()
+        assertEquals("the link of B is stopped first", stops + 1, t.stops)
+        assertEquals(true to PumpBtNameVariant.A, t.starts.last())
+    }
+
+    @Test
+    fun otherNameOnlyDuringAPairing() {
+        // N1: a waiting link of a paired pump is not stopped for B
+        val t = FakeTrial(tmp.newFolder())
+        t.key = true
+        t.running = true
+        PumpBtTrial.resetForTest(t.env, ready.copy(link = running))
+        PumpBtTrial.tryOtherName()
+        assertEquals(0, t.stops)
+        assertTrue(t.starts.isEmpty())
+        assertEquals(PumpBtNameVariant.A, t.store.variant)
+        assertTrue(t.journal.contains("other name not tried: no pairing going on"))
+    }
+
+    @Test
+    fun aCancelledWaitForTheKeyDoesNotStartWhenTheKeyComesLater() {
+        // C2: Cancel (or Stop) in the KEY step - a key from a file later starts nothing
+        val t = FakeTrial(tmp.newFolder())
+        PumpBtTrial.resetForTest(t.env, newcomer.copy(warningsAccepted = true))
+        PumpBtTrial.startPairing()
+        assertEquals(PumpBtWizardStep.KEY, PumpBtWindow.wizardStep(PumpBtTrial.state.value, off))
+        PumpBtTrial.cancelPendingStart()
+        assertNull(PumpBtTrial.state.value.pendingStart)
+        assertEquals(PumpBtWizardStep.START, PumpBtWindow.wizardStep(PumpBtTrial.state.value, off))
+        PumpBtTrial.applyKey(PumpBtKey.parse(fakeKeyDatabase(local = 4, remotes = listOf(1)).toHex()), "a file")
+        assertTrue("the key is kept", t.key)
+        assertTrue("nothing started", t.starts.isEmpty())
+
+        // Stop clears the wait too; "Retry" is Start pairing again
+        val s = FakeTrial(tmp.newFolder())
+        PumpBtTrial.resetForTest(s.env, newcomer.copy(warningsAccepted = true))
+        PumpBtTrial.startPairing()
+        assertEquals(true, PumpBtTrial.state.value.pendingStart)
+        PumpBtTrial.stop()
+        assertNull(PumpBtTrial.state.value.pendingStart)
+        PumpBtTrial.startPairing()
+        assertEquals("retried: both pages asked again", 4, s.asked.size)
+    }
+
+    @Test
+    fun theProcessStartGivesBackTheNameVariantBLeftChanged() {
+        // C3: a newcomer's process died during a pairing with B - no pump address, the name still changed
+        assertTrue(ModPumpStarter.needsInit(false, { false }, { true }))
+        assertFalse(ModPumpStarter.needsInit(false, { false }, { false }))
+        assertTrue(ModPumpStarter.needsInit(true, { false }, { false }))
+        assertTrue(ModPumpStarter.needsInit(false, { true }, { false }))
+
+        val dir = tmp.newFolder()
+        val file = File(dir, PumpBtStore.FILE)
+        // never used the pump: no file, nothing made
+        assertFalse(PumpBtStore.adapterNameChanged(file, null))
+        assertFalse(file.exists())
+        val store = PumpBtStore(file, null)
+        assertFalse(PumpBtStore.adapterNameChanged(file, null))
+        store.originalAdapterName = "Phone"
+        assertTrue(PumpBtStore.adapterNameChanged(file, null))
+        store.originalAdapterName = null
+        assertFalse(PumpBtStore.adapterNameChanged(file, null))
+        file.writeText("not json")
+        assertFalse(PumpBtStore.adapterNameChanged(file, null))
     }
 
     @Test

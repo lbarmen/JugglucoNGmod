@@ -23,7 +23,8 @@ import tk.glucodata.mod.carelink.PumpSourceSwitch
  *
  * Order (critic of B2a, C-3): the notifier first, so that what the source tells at its start (a lost bond, an unknown
  * record) is not lost; the made-up pump of test builds by class name (contract 3.5); then [PumpBtSource.init] - only
- * with the source on (the link waiting for the paired pump) or a pump's address kept (critic B2c, N6); then the
+ * with the source on (the link waiting for the paired pump), a pump's address kept (critic B2c, N6) or the phone's
+ * name still changed by variant B (critic G1, C3); then the
  * watchdog follows the source's on/off.
  */
 class ModPumpStarter : ContentProvider() {
@@ -75,6 +76,13 @@ class ModPumpStarter : ContentProvider() {
         /** The source is started with the process: it is on, or the link state holds a pump's address. */
         internal inline fun sourceInUse(on: Boolean, addressKnown: () -> Boolean): Boolean = on || addressKnown()
 
+        /**
+         * [PumpBtSource.init] at the process start: the source in use, or the phone's Bluetooth name still changed by
+         * variant B (a newcomer's process died during such a pairing: init gives the name back - critic G1, C3).
+         */
+        internal inline fun needsInit(on: Boolean, addressKnown: () -> Boolean, nameChanged: () -> Boolean): Boolean =
+            sourceInUse(on, addressKnown) || nameChanged()
+
         private inline fun step(name: String, block: () -> Unit) {
             try {
                 block()
@@ -118,10 +126,16 @@ internal object RealStarterSteps : StarterSteps {
      * Only for someone who uses the pump source: on, or a pump once paired (its address kept). Everyone else's process
      * start reads no history memory and registers no bond receiver (critic B2c, N6); the trial window calls
      * [PumpBtSource.init] itself when it opens, and turning the source on works without it. The address is only read:
-     * no link state file is made for someone who never used the pump (critic of the joints 2, N-5).
+     * no link state file is made for someone who never used the pump (critic of the joints 2, N-5). Also when variant B
+     * left the phone's Bluetooth name changed (read only too): init gives it back (critic G1, C3).
      */
     override fun init(app: Context) {
-        if (ModPumpStarter.sourceInUse(PumpSourceSwitch.bluetoothOn(app)) { PumpBtSource.pumpAddressKnown(app) }) {
+        if (ModPumpStarter.needsInit(
+                PumpSourceSwitch.bluetoothOn(app),
+                { PumpBtSource.pumpAddressKnown(app) },
+                { PumpBtStore.adapterNameChanged(app) },
+            )
+        ) {
             PumpBtSource.init(app)
         }
     }

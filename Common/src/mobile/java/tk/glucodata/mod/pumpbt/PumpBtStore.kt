@@ -285,6 +285,30 @@ internal class PumpBtStore internal constructor(private val file: File, private 
             return addressKnown(File(File(app.noBackupFilesDir, DIR), FILE), app.getSharedPreferences(LEGACY_PREFS, Context.MODE_PRIVATE))
         }
 
+        /**
+         * Variant B changed the phone's Bluetooth name and it is not given back yet (critic G1, C3: a process that died
+         * during such a pairing of a newcomer, with no pump address yet) - read only, as [addressKnown].
+         */
+        fun adapterNameChanged(context: Context): Boolean {
+            val app = context.applicationContext
+            return adapterNameChanged(File(File(app.noBackupFilesDir, DIR), FILE), app.getSharedPreferences(LEGACY_PREFS, Context.MODE_PRIVATE))
+        }
+
+        fun adapterNameChanged(file: File, legacy: SharedPreferences?): Boolean {
+            if (file.isFile) {
+                return try {
+                    JSONObject(file.readText(Charsets.UTF_8)).optString(K_ORIGINAL_NAME, "").isNotEmpty()
+                } catch (_: Throwable) {
+                    false
+                }
+            }
+            return try {
+                legacy != null && !legacy.getBoolean(K_MOVED, false) && !legacy.getString(K_ORIGINAL_NAME, null).isNullOrEmpty()
+            } catch (_: Throwable) {
+                false
+            }
+        }
+
         fun addressKnown(file: File, legacy: SharedPreferences?): Boolean {
             if (file.isFile) {
                 return try {

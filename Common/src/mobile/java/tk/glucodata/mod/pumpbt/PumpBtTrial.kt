@@ -92,6 +92,7 @@ internal object PumpBtTrial {
                 journal("name variant back to $after after the pairing")
             }
         }
+        if (!ls.running) linkMayHoldB = false
         val paired = s?.paired ?: false
         _state.update {
             it.copy(link = ls, paired = paired, variant = s?.variant ?: it.variant, warningsAccepted = it.warningsAccepted || paired)
@@ -143,10 +144,12 @@ internal object PumpBtTrial {
 
     /**
      * A start: the phone not ready - refused; no key database - the chain first ([loadKey]; the start goes on once a
-     * key is in place, by the download or from a file); else the link. [afterKey] - the start a key went on with: no
-     * key even then is refused, never downloaded again.
+     * key is in place, by the download or from a file, while it still waits - [cancelPendingStart]); else the link.
+     * [afterKey] - the start a key went on with: no key even then is refused, never downloaded again. [keepVariant] -
+     * only [tryOtherName]: every other pairing starts with variant A (critic G1, C1: a failed or dropped pairing with B
+     * must not leave B for the next one).
      */
-    private fun start(pair: Boolean, afterKey: Boolean = false) {
+    private fun start(pair: Boolean, afterKey: Boolean = false, keepVariant: Boolean = false) {
         env.checkPhone()
         val action = PumpBtWindow.startAction(_state.value, env.hasKey())
         if (action == PumpBtStartAction.REFUSE || (action == PumpBtStartAction.LOAD_KEY && afterKey)) {
@@ -160,36 +163,51 @@ internal object PumpBtTrial {
             loadKey()
             return
         }
-        if (pair) pairWithVariantA()
+        if (pair && !keepVariant) pairWithVariantA()
         // a pairing's wait time and its failures count from here (a running link keeps an older failure mark)
         _state.update { it.copy(pendingStart = null, pairingStartedAtMs = if (pair) env.now() else null) }
+        val fresh = !env.linkRunning()
         env.startLink(pair)
+        // a running link keeps the variant it started with (PumpLink.start)
+        if (fresh) linkMayHoldB = env.store()?.variant == PumpBtNameVariant.B
     }
 
+    /** The running link was started by this window while the stored variant was B (cleared when the link stops). */
+    private var linkMayHoldB = false
+
     /**
-     * "Pair again" with the source on always uses variant A (finding 11). A running link keeps the variant it started
-     * with: when that may have been B, it is stopped first, so the pairing starts anew with A.
+     * A pairing uses variant A (finding 11; with the source on always, with it off unless [tryOtherName] asks for B).
+     * A running link keeps the variant it started with: when that may have been B, it is stopped first, so the pairing
+     * starts anew with A.
      */
     private fun pairWithVariantA() {
-        if (!env.sourceOn()) return
         val s = env.store() ?: return
-        val want = PumpBtWindow.variantForStart(s.variant, sourceOn = true)
-        if (s.variant == want) return
-        s.variant = want
-        _state.update { it.copy(variant = want) }
+        val want = PumpBtNameVariant.A
+        val stored = s.variant
+        if (stored == want && !linkMayHoldB) return
+        if (stored != want) {
+            s.variant = want
+            _state.update { it.copy(variant = want) }
+            journal("name variant set to $want for the pairing")
+        }
         if (env.linkRunning()) env.stopLink()
-        journal("name variant set to $want for pairing again")
+        linkMayHoldB = false
     }
 
     /**
      * Variant B from the wizard's PAIRING step, after A failed: the pump does not see the phone - pair with the other
      * name (the phone's Bluetooth name is changed for the pairing and comes back right after it). The pairing is
-     * stopped, B set, the pairing started again. Only with the source off ("Pair again" with it on stays on A).
+     * stopped, B set, the pairing started again. Only with the source off ("Pair again" with it on stays on A) and
+     * while a pairing goes on (a waiting link of a paired pump is not stopped - critic G1, N1).
      */
     fun tryOtherName() {
         val s = env.store() ?: return
         if (env.sourceOn()) {
             journal("other name not tried: permanent operation is on (pairing again uses variant A)")
+            return
+        }
+        if (!PumpBtWindow.pairing(_state.value.link)) {
+            journal("other name not tried: no pairing going on")
             return
         }
         if (s.variant == PumpBtNameVariant.B) return
@@ -198,11 +216,24 @@ internal object PumpBtTrial {
         env.stopLink()
         s.variant = PumpBtNameVariant.B
         _state.update { it.copy(variant = PumpBtNameVariant.B) }
-        start(pair = true)
+        start(pair = true, keepVariant = true)
     }
 
-    /** Stops the link; with the source on its watchdog starts it again, waiting for the pump. */
-    fun stop() = PumpBtSource.stopLink()
+    /**
+     * The KEY step's "Cancel" (critic G1, C2): a start waiting for the key database no longer goes on by itself when a
+     * key comes later (a download still running is saved, nothing starts).
+     */
+    fun cancelPendingStart() {
+        if (_state.value.pendingStart == null) return
+        journal("start waiting for the key cancelled")
+        _state.update { it.copy(pendingStart = null) }
+    }
+
+    /** Stops the link (and a start waiting for the key); with the source on its watchdog starts it again, waiting. */
+    fun stop() {
+        cancelPendingStart()
+        env.stopLink()
+    }
 
     fun readAgain() = PumpBtSource.readNow()
 
@@ -325,6 +356,7 @@ internal object PumpBtTrial {
     internal fun resetForTest(testEnv: Env?, ui: PumpBtUiState = PumpBtUiState()) {
         env = testEnv ?: Env()
         _state.value = ui
+        linkMayHoldB = false
     }
 
     private fun java.io.InputStream.readNBytesCompat(max: Int): ByteArray {

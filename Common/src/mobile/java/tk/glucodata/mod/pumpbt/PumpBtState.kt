@@ -307,10 +307,6 @@ internal object PumpBtWindow {
     fun variantAfter(variant: PumpBtNameVariant, link: PumpBtLinkState): PumpBtNameVariant =
         if (variant == PumpBtNameVariant.B && linkUp(link)) PumpBtNameVariant.A else variant
 
-    /** The variant a pairing starts with: "Pair again" with the source on always uses A (finding 11). */
-    fun variantForStart(variant: PumpBtNameVariant, sourceOn: Boolean): PumpBtNameVariant =
-        if (sourceOn) PumpBtNameVariant.A else variant
-
     /**
      * Why "Permanent operation" cannot be turned on now - the first thing to do; null - it can (or it is on). A pairing
      * of the trial must end or be stopped first (critic B2b, C1): turning on would leave the phone waiting for a pump
