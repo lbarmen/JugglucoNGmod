@@ -225,7 +225,15 @@ internal object PumpLinkRules {
             override fun toString() = "history $from…$to"
         }
 
-        val isHistory: Boolean get() = this is HistoryFirst || this is HistoryLast || this is HistoryRange
+        /**
+         * Not a request: [FIRST_RECORD_QUIET_MS] of silence after "first record" timed out - history notifications and
+         * RACP answers that arrive meanwhile are late answers to it and are dropped. Sends nothing.
+         */
+        object HistoryQuiet : LinkOp() {
+            override fun toString() = "history: pause after \"first record\""
+        }
+
+        val isHistory: Boolean get() = this is HistoryFirst || this is HistoryLast || this is HistoryRange || this is HistoryQuiet
     }
 
     /**
@@ -296,6 +304,10 @@ internal object PumpLinkRules {
         var oldest = if (first == EndAnswer.SUCCESS) firstSeq else null
         if (last == EndAnswer.NO_RECORDS) return HistoryPlan.NothingToRead(null, null)
         if (last != EndAnswer.SUCCESS || lastSeq == null || lastSeq < 0) return HistoryPlan.Failed(oldest)
+        // "first record" went wrong and the newest is below the memory's number: it may be a late answer to "first
+        // record" taken for "last record" - not given out (the memory would take it for a new pump and clear itself;
+        // a real new pump is caught by the serial number's hash)
+        if (first != EndAnswer.SUCCESS && from != null && lastSeq < from - 1) return HistoryPlan.Failed(null)
         if (oldest != null && oldest > lastSeq) oldest = null
         val start = historyStart(from, oldest, lastSeq) ?: return HistoryPlan.NothingToRead(oldest, lastSeq)
         return HistoryPlan.Read(start, lastSeq, oldest, lastSeq, fallback = from == null && oldest == null)
@@ -353,6 +365,32 @@ internal object PumpLinkRules {
         val finalStatus = if (status == HistoryReadStatus.COMPLETE && missing.isNotEmpty()) HistoryReadStatus.GAP else status
         return HistoryRead(finalStatus, requestedFrom, requestedTo, oldest, newest, contiguous, missing)
     }
+
+    /** After "first record" timed out: this long nothing is sent and late answers are dropped before "last record". */
+    const val FIRST_RECORD_QUIET_MS = 5_000L
+
+    /**
+     * Fallback read (neither the memory's number nor the oldest record known, from newest − [HISTORY_FALLBACK_SPAN]):
+     * a page error before any record came counts as "no records" (the range lies below the oldest record; what the
+     * pump answers there is not verified).
+     */
+    fun fallbackPageErrorIsEmpty(fallback: Boolean, receivedAny: Boolean): Boolean = fallback && !receivedAny
+
+    /**
+     * The result of a fallback read: the read starts at the smallest number that came, which is also the oldest
+     * record on the pump - no false holes below it. Nothing came at all - failed (the pump has records: "last record"
+     * said so).
+     */
+    fun fallbackOutcome(ending: HistoryEnding, requestedFrom: Long, requestedTo: Long, newest: Long?, received: Collection<Long>): HistoryRead {
+        val start = received.filter { it in requestedFrom..requestedTo }.minOrNull()
+            ?: return historyOutcome(HistoryEnding.FAILED, requestedFrom, requestedTo, null, newest, emptyList())
+        return historyOutcome(ending, start, requestedTo, start, newest, received)
+    }
+
+    /** From the pump's identification to its SAKE subscription: 2 min while pairing (a person confirms), else 30 s. */
+    fun identifyToSakeMs(pairMode: Boolean): Long = if (pairMode) PAIRING_IDENTIFY_TO_SAKE_MS else HANDSHAKE_TIMEOUT_MS
+
+    const val PAIRING_IDENTIFY_TO_SAKE_MS = 120_000L
 
     /** Records per type of one read, by their headers only (no values): "0x0069×2, 0xF00E×1". */
     fun typeCounts(records: Collection<RawHistoryRecord>): String =

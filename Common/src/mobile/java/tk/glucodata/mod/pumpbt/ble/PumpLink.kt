@@ -242,8 +242,12 @@ internal class PumpLink(
         var newest: Long? = null
         var requestedFrom: Long? = null
         var requestedTo: Long? = null
+        /** Read from newest − 3000: neither the memory's number nor the oldest record was known. */
+        var fallback = false
         val received = TreeMap<Long, RawHistoryRecord>()
         var outside = 0
+        /** Late answers dropped in the pause after "first record" timed out. */
+        var dropped = 0
         var ending: HistoryEnding? = null
     }
 
@@ -809,8 +813,8 @@ internal class PumpLink(
                 null
             }
             if (name.isNullOrEmpty()) {
-                // the name could not be given back: do not change it
-                showError("phone Bluetooth name not readable — use variant A")
+                // the name could not be given back: do not change it; not a dead end - advertising is tried again
+                fail("phone Bluetooth name not readable — use variant A")
                 return
             }
             if (name != advertisedName) {
@@ -976,8 +980,9 @@ internal class PumpLink(
         journal("pump identified: ${mac(device.address)} ($what), bond state ${bondName(device.bondState)}")
         // the official app stops advertising once the pump is connected
         stopAdvertising()
-        // a device that only read our device information and never starts SAKE must not keep advertising off
-        armHandshakeDeadline()
+        // a device that only read our device information and never starts SAKE must not keep advertising off;
+        // while pairing a person confirms on both devices first: 2 min
+        armHandshakeDeadline(PumpLinkRules.identifyToSakeMs(pairMode))
         if (state.stage in ADVERTISE_STAGES || state.stage == PumpBtStage.LOST) {
             setStage(if (device.bondState == BluetoothDevice.BOND_BONDING) PumpBtStage.PAIRING else PumpBtStage.PUMP_CONNECTED)
         }
@@ -1029,10 +1034,10 @@ internal class PumpLink(
     }
 
     /** [PumpLinkRules.HANDSHAKE_TIMEOUT_MS] from now: at pump identification and again at its SAKE subscription. */
-    private fun armHandshakeDeadline() {
+    private fun armHandshakeDeadline(ms: Long = PumpLinkRules.HANDSHAKE_TIMEOUT_MS) {
         handshakeExtensions = 0
         main.removeCallbacks(handshakeDeadline)
-        main.postDelayed(handshakeDeadline, PumpLinkRules.HANDSHAKE_TIMEOUT_MS)
+        main.postDelayed(handshakeDeadline, ms)
     }
 
     /**
@@ -1171,6 +1176,7 @@ internal class PumpLink(
         refreshPending = false
         historyPending = false
         main.removeCallbacks(operationTimeout)
+        main.removeCallbacks(quietDone)
         featuresRead = false
         gattQueue.clear()
         gattBusy = false
@@ -1423,6 +1429,7 @@ internal class PumpLink(
                 }
                 h.requestedFrom = plan.from
                 h.requestedTo = plan.to
+                h.fallback = plan.fallback
                 val pages = PumpLinkRules.historyPages(plan.from, plan.to)
                 journal("history: reading ${plan.to - plan.from + 1} records (#${plan.from}…#${plan.to}) in ${pages.size} page(s)")
                 operations.addAll(0, pages)
@@ -1436,13 +1443,28 @@ internal class PumpLink(
      * verified, the history must not depend on it).
      */
     private fun historyOpFailed(op: LinkOp, ending: HistoryEnding) {
+        val h = cycle?.history
+        if (op === LinkOp.HistoryQuiet) return
         if (op === LinkOp.HistoryFirst) {
-            cycle?.history?.firstAnswer = PumpLinkRules.EndAnswer.FAILED
+            h?.firstAnswer = PumpLinkRules.EndAnswer.FAILED
             journal("history: \"first record\" not answered, going on without it")
+            if (ending == HistoryEnding.TIMED_OUT) {
+                // a late answer to it must not be taken for "last record": a pause first, dropping what comes
+                operations.addFirst(LinkOp.HistoryQuiet)
+            }
+            return
+        }
+        if (op is LinkOp.HistoryRange && ending == HistoryEnding.FAILED && h != null &&
+            PumpLinkRules.fallbackPageErrorIsEmpty(h.fallback, h.received.isNotEmpty())
+        ) {
+            journal("history: page $op failed before any record came (fallback read): taken as \"no records\"")
+            if (operations.none { it is LinkOp.HistoryRange }) finishHistory(HistoryEnding.DONE)
             return
         }
         finishHistory(ending)
     }
+
+    private val quietDone = Runnable { finish { it === LinkOp.HistoryQuiet } }
 
     /** Ends the running history read once ([ending]) and drops its operations still queued. */
     private fun finishHistory(ending: HistoryEnding) {
@@ -1461,6 +1483,8 @@ internal class PumpLink(
                 (result.contiguousTo?.let { ", all up to #$it" } ?: "") +
                 (if (result.missing.isNotEmpty()) ", missing ${result.missing.sumOf { it.last - it.first + 1 }}" else "") +
                 (if (h.outside > 0) ", ${h.outside} outside the range" else "") +
+                (if (h.dropped > 0) ", ${h.dropped} late answers dropped" else "") +
+                (if (h.fallback) ", fallback read from #${result.requestedFrom ?: h.requestedFrom}" else "") +
                 (if (h.received.isNotEmpty()) "; types: " + PumpLinkRules.typeCounts(h.received.values) else ""),
         )
         if (verbose()) {
@@ -1472,8 +1496,16 @@ internal class PumpLink(
         }
     }
 
-    private fun historyResult(h: HistoryReading): HistoryRead =
-        PumpLinkRules.historyOutcome(h.ending ?: HistoryEnding.FAILED, h.requestedFrom, h.requestedTo, h.oldest, h.newest, h.received.keys)
+    private fun historyResult(h: HistoryReading): HistoryRead {
+        val ending = h.ending ?: HistoryEnding.FAILED
+        val from = h.requestedFrom
+        val to = h.requestedTo
+        return if (h.fallback && from != null && to != null) {
+            PumpLinkRules.fallbackOutcome(ending, from, to, h.newest, h.received.keys)
+        } else {
+            PumpLinkRules.historyOutcome(ending, from, to, h.oldest, h.newest, h.received.keys)
+        }
+    }
 
     /** The cycle ends (queue drained, or the link [lost]): hand it out as a [PumpCycle]. */
     private fun finishCycle(lost: Boolean) {
@@ -1552,6 +1584,11 @@ internal class PumpLink(
     /** Every write of a cycle is [LinkOp.write] - checked by the gate against the read-only policy. */
     private fun start(op: LinkOp): Boolean {
         if (op is LinkOp.Read) return gate.read(op.service, op.characteristic)
+        if (op === LinkOp.HistoryQuiet) {
+            main.removeCallbacks(quietDone)
+            main.postDelayed(quietDone, PumpLinkRules.FIRST_RECORD_QUIET_MS)
+            return true
+        }
         val w = op.write() ?: return false
         return gate.write(w.service, w.characteristic, w.plaintext)
     }
@@ -1690,6 +1727,7 @@ internal class PumpLink(
         when (op) {
             // a late record of an earlier request may arrive here: the smallest / largest number wins, and only a
             // success answer to this request makes it count
+            LinkOp.HistoryQuiet -> h.dropped++
             LinkOp.HistoryFirst -> h.firstSeen = minOf(h.firstSeen ?: record.sequence, record.sequence)
             LinkOp.HistoryLast -> h.lastSeen = maxOf(h.lastSeen ?: record.sequence, record.sequence)
             is LinkOp.HistoryRange -> {
@@ -1707,6 +1745,11 @@ internal class PumpLink(
         val h = cycle?.history
         if (op == null || !op.isHistory || h == null || h.ending != null) {
             journal("history RACP answer without a running history request: ignored")
+            return
+        }
+        if (op === LinkOp.HistoryQuiet) {
+            h.dropped++
+            journal("history: late RACP answer in the pause after \"first record\": dropped")
             return
         }
         // the request opcode inside the answer must be the running request's
@@ -1732,7 +1775,8 @@ internal class PumpLink(
             is LinkOp.HistoryRange -> {
                 wake.extend()
                 if (!ok && !none) {
-                    finishHistory(HistoryEnding.FAILED)
+                    // fallback read below the oldest record: an error before any record came is "no records"
+                    historyOpFailed(op, HistoryEnding.FAILED)
                 } else if (operations.none { it is LinkOp.HistoryRange }) {
                     finishHistory(HistoryEnding.DONE)
                 }

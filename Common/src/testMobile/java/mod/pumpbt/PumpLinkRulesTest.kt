@@ -149,6 +149,59 @@ class PumpLinkRulesTest {
     }
 
     @Test
+    fun lateFirstRecordAnswerIsNotTakenForTheNewest() {
+        val ok = PumpLinkRules.EndAnswer.SUCCESS
+        val bad = PumpLinkRules.EndAnswer.FAILED
+        val plan = PumpLinkRules::historyPlan
+        // "first record" went wrong and the "newest" is below the memory's number: failed, no newestOnPump
+        val late = plan(1000, bad, null, ok, 900)
+        assertEquals(PumpLinkRules.HistoryPlan.Failed(null), late)
+        assertNull(late.newest)
+        val outcome = PumpLinkRules.historyOutcome(PumpLinkRules.HistoryEnding.FAILED, null, null, late.oldest, late.newest, emptyList())
+        assertEquals(HistoryReadStatus.FAILED, outcome.status)
+        assertNull(outcome.newestOnPump)
+        // just nothing new (newest = number - 1) is not that case
+        assertEquals(PumpLinkRules.HistoryPlan.NothingToRead(null, 999), plan(1000, bad, null, ok, 999))
+        // with a successful "first record" a smaller newest is given out (the memory decides "new pump")
+        assertEquals(PumpLinkRules.HistoryPlan.NothingToRead(10, 900), plan(1000, ok, 10, ok, 900))
+        // the pause before "last record" after a timeout sends nothing
+        assertNull(PumpLinkRules.LinkOp.HistoryQuiet.write())
+        assertTrue(PumpLinkRules.LinkOp.HistoryQuiet.isHistory)
+        assertEquals(5_000L, PumpLinkRules.FIRST_RECORD_QUIET_MS)
+    }
+
+    @Test
+    fun fallbackReadStartsAtTheOldestRecordThatCame() {
+        // a page error before any record came: "no records"; after a record: a real failure
+        assertTrue(PumpLinkRules.fallbackPageErrorIsEmpty(fallback = true, receivedAny = false))
+        assertFalse(PumpLinkRules.fallbackPageErrorIsEmpty(fallback = true, receivedAny = true))
+        assertFalse(PumpLinkRules.fallbackPageErrorIsEmpty(fallback = false, receivedAny = false))
+        // read 7000..10000, the pump has 9200..10000: start and oldest = 9200, no false holes below
+        val r = PumpLinkRules.fallbackOutcome(PumpLinkRules.HistoryEnding.DONE, 7_000, 10_000, 10_000, (9_200L..10_000L).toList())
+        assertEquals(HistoryReadStatus.COMPLETE, r.status)
+        assertEquals(9_200L, r.requestedFrom)
+        assertEquals(9_200L, r.oldestOnPump)
+        assertEquals(10_000L, r.contiguousTo)
+        assertTrue(r.missing.isEmpty())
+        // a real hole above the oldest stays a hole
+        val g = PumpLinkRules.fallbackOutcome(PumpLinkRules.HistoryEnding.DONE, 7_000, 10_000, 10_000, (9_200L..9_499L) + (9_501L..10_000L))
+        assertEquals(HistoryReadStatus.GAP, g.status)
+        assertEquals(9_499L, g.contiguousTo)
+        assertEquals(listOf(9_500L..9_500L), g.missing)
+        // nothing came although the pump has records: failed
+        val none = PumpLinkRules.fallbackOutcome(PumpLinkRules.HistoryEnding.DONE, 7_000, 10_000, 10_000, emptyList())
+        assertEquals(HistoryReadStatus.FAILED, none.status)
+        assertNull(none.contiguousTo)
+        assertNull(none.oldestOnPump)
+    }
+
+    @Test
+    fun pairingGetsTwoMinutesFromIdentificationToSake() {
+        assertEquals(120_000L, PumpLinkRules.identifyToSakeMs(pairMode = true))
+        assertEquals(30_000L, PumpLinkRules.identifyToSakeMs(pairMode = false))
+    }
+
+    @Test
     fun handshakeTimeLimitExtendsOnlyTwiceWhilePairing() {
         assertTrue(PumpLinkRules.handshakeExtend(bonding = true, extensions = 0))
         assertTrue(PumpLinkRules.handshakeExtend(bonding = true, extensions = 1))
