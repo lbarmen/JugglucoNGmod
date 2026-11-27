@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Based on iPump-mini (https://github.com/sgitaize/iPump-mini, commit 29aa932),
 // core/MiniMedKitKotlin/src/main/kotlin/de/sgitaize/minimedkit/Bytes.kt, by Simon Gutjahr.
-// Modified for JugglucoNGmod: package name only.
+// Modified for JugglucoNGmod: package name; IEEE-11073 special values as "no value" (the OrNull functions).
 package tk.glucodata.mod.pumpbt.core
 
 /** Unsigned byte at [index] as Int (0…255). */
@@ -66,11 +66,14 @@ internal class ByteReader(private val bytes: ByteArray) {
         return v
     }
 
-    /** IEEE-11073 16-bit SFLOAT (4-bit exponent, 12-bit mantissa). */
+    /** IEEE-11073 16-bit SFLOAT (4-bit exponent, 12-bit mantissa). Special values become numbers: see [sfloatOrNull]. */
     fun sfloat(): Double = MedFloat.decode16(u16())
 
-    /** IEEE-11073 32-bit FLOAT (8-bit exponent, 24-bit mantissa). */
-    fun float32(): Double = MedFloat.decode32(u32())
+    /** IEEE-11073 16-bit SFLOAT; null for the special values (NaN, NRes, +/-INF, reserved). */
+    fun sfloatOrNull(): Double? = MedFloat.decode16OrNull(u16())
+
+    /** IEEE-11073 32-bit FLOAT; null for the special values (NaN, NRes, +/-INF, reserved). */
+    fun float32OrNull(): Double? = MedFloat.decode32OrNull(u32())
 
     fun expectEnd() {
         if (remaining > 0) throw ParseError.TrailingBytes(remaining)
@@ -79,6 +82,18 @@ internal class ByteReader(private val bytes: ByteArray) {
 
 /** IEEE-11073 SFLOAT (16 bit) and FLOAT (32 bit), as used by the Bluetooth health services. */
 object MedFloat {
+    /** SFLOAT special values (IEEE-11073-20601): NaN, NRes, +INF, -INF, reserved. */
+    private val SPECIAL16 = setOf(0x07FF, 0x0800, 0x07FE, 0x0802, 0x0801)
+
+    /** FLOAT special values (IEEE-11073-20601): NaN, NRes, +INF, -INF, reserved. */
+    private val SPECIAL32 = setOf(0x007F_FFFFL, 0x0080_0000L, 0x007F_FFFEL, 0x0080_0002L, 0x0080_0001L)
+
+    /** [decode16], or null for a special value ("no value"). */
+    fun decode16OrNull(raw: Int): Double? = if ((raw and 0xFFFF) in SPECIAL16) null else decode16(raw)
+
+    /** [decode32], or null for a special value ("no value"). */
+    fun decode32OrNull(raw: Long): Double? = if ((raw and 0xFFFF_FFFFL) in SPECIAL32) null else decode32(raw)
+
     /** Decodes an SFLOAT: 12-bit mantissa, 4-bit exponent (base 10). */
     fun decode16(raw: Int): Double {
         var e = (raw shr 12) and 0x0F

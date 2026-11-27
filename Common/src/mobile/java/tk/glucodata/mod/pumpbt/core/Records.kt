@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Based on iPump-mini (https://github.com/sgitaize/iPump-mini, commit 29aa932),
 // core/MiniMedKitKotlin/src/main/kotlin/de/sgitaize/minimedkit/Records.kt, by Simon Gutjahr.
-// Modified for JugglucoNGmod: package name; German texts of sensorMessage and modeDescription in English.
+// Modified for JugglucoNGmod: package name; German texts of sensorMessage and modeDescription in English;
+// IEEE-11073 special values in reservoir, active insulin and basal rates as null ("no value").
 // CGM service payloads (Bluetooth CGMS + Medtronic usage, see OpenMinimed cgm-service.md) and
 // Insulin Delivery Service payloads as used by the 780G (OpenMinimed idd-service.md).
 // IDD values and most CGM values arrive SAKE-encrypted and are decrypted before parsing.
@@ -122,7 +123,8 @@ data class PumpStatus(
     val therapyControlState: Int,
     /** IDS operational state: 0x0F undetermined, 0x33 off, 0x3C standby, 0x55 preparing, 0x5A priming, 0x66 waiting, 0x96 ready. */
     val operationalState: Int,
-    val reservoirUnits: Double,
+    /** null - special value (no value). */
+    val reservoirUnits: Double?,
     val reservoirAttached: Boolean,
     val sensorConnectivity: Int,
     val sensorMessageState: Int,
@@ -167,20 +169,20 @@ data class PumpStatus(
         fun parse(data: ByteArray): PumpStatus {
             if (data.size != 9) throw ParseError.LengthMismatch
             val r = ByteReader(data)
-            return PumpStatus(r.u8(), r.u8(), r.float32(), r.u8() and 0x01 != 0, r.u8(), r.u8())
+            return PumpStatus(r.u8(), r.u8(), r.float32OrNull(), r.u8() and 0x01 != 0, r.u8(), r.u8())
         }
     }
 }
 
-/** Active insulin (IOB) as reported by the pump's status reader. */
-data class InsulinOnBoard(val units: Double, val remainingDurationMinutes: Int?) {
+/** Active insulin (IOB) as reported by the pump's status reader; [units] null - special value (no value). */
+data class InsulinOnBoard(val units: Double?, val remainingDurationMinutes: Int?) {
     companion object {
         fun parse(data: ByteArray): InsulinOnBoard {
             val r = ByteReader(data)
             val opcode = r.u16()
             if (opcode != StatusReaderOpcode.GET_INSULIN_ON_BOARD.responseOpcode) throw ParseError.UnexpectedOpcode(opcode)
             val flags = r.u8()
-            val units = r.float32()
+            val units = r.float32OrNull()
             val remaining = if (flags and 0x01 != 0) r.u16() else null
             if (flags and 0x02 != 0) { r.u16(); r.u16() }
             r.expectEnd()
@@ -254,10 +256,10 @@ data class TherapyAlgorithmStates(
     }
 }
 
-/** Active basal rate and a running temporary basal, if any. */
+/** Active basal rate and a running temporary basal, if any. Rates: null - special value (no value). */
 data class ActiveBasalRate(
     val profileNumber: Int,
-    val unitsPerHour: Double,
+    val unitsPerHour: Double?,
     val tempBasalUnitsPerHour: Double?,
     val tempBasalRemainingMinutes: Int?,
 ) {
@@ -268,12 +270,12 @@ data class ActiveBasalRate(
             if (opcode != StatusReaderOpcode.GET_ACTIVE_BASAL_RATE_DELIVERY.responseOpcode) throw ParseError.UnexpectedOpcode(opcode)
             val flags = r.u8()
             val profile = r.u8()
-            val rate = r.float32()
+            val rate = r.float32OrNull()
             var temp: Double? = null
             var remaining: Int? = null
             if (flags and 0x01 != 0) {
                 r.u8() // TBR type
-                temp = r.float32()
+                temp = r.float32OrNull()
                 r.u16() // programmed duration
                 remaining = r.u16()
             }

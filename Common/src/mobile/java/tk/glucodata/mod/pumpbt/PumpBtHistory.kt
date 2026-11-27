@@ -1,14 +1,19 @@
 package tk.glucodata.mod.pumpbt
 
+import tk.glucodata.mod.pumpbt.core.HistoryDating
 import tk.glucodata.mod.pumpbt.core.HistoryEvent
 import tk.glucodata.mod.pumpbt.core.HistoryRecord
+import tk.glucodata.mod.pumpbt.core.HistoryReferenceLocal
+import java.time.Instant
 import java.time.ZoneId
 import java.util.Locale
 
 /**
- * JugglucoNGmod, pump over Bluetooth (trial): pump history records as lines for the journal and the screen. Unlike
- * the core's HistoryTimeline it keeps records that come before any reference time (time unknown), so a short first
- * read still shows something.
+ * JugglucoNGmod, pump over Bluetooth (trial): pump history records as lines for the journal and the screen. The pump
+ * clock (local, no time zone) is turned into epoch ms here with the phone's time zone - the only place for that on
+ * the history path. Records before the first reference time of a read are dated back from the next one
+ * (core HistoryDating); records without any time are kept with time unknown, so a short first read still shows
+ * something.
  */
 internal object PumpBtHistory {
 
@@ -21,46 +26,65 @@ internal object PumpBtHistory {
         reference: Pair<Long, Long>?,
         zone: ZoneId = ZoneId.systemDefault(),
     ): Pair<List<PumpBtHistoryLine>, Pair<Long, Long>?> {
+        val stored = reference?.let { HistoryReferenceLocal(it.first, Instant.ofEpochMilli(it.second).atZone(zone).toLocalDateTime()) }
+        val times = HistoryDating.times(records, stored)
         var ref = reference
         val out = ArrayList<PumpBtHistoryLine>(records.size)
         for (r in records.sortedBy { it.sequence }) {
             val e = r.event
-            if (e is HistoryEvent.ReferenceTime) {
-                val ms = e.time.atZone(zone).toInstant().toEpochMilli()
-                ref = r.sequence to ms
-                out += PumpBtHistoryLine(r.sequence, ms, "Reference time", "")
-                continue
-            }
-            val time = ref?.takeIf { r.sequence > it.first }?.let { it.second + r.relativeOffset * 1000L }
+            val ms = times[r.sequence]?.atZone(zone)?.toInstant()?.toEpochMilli()
+            if (e is HistoryEvent.ReferenceTime && ms != null && (ref == null || r.sequence >= ref.first)) ref = r.sequence to ms
             val (kind, value) = describe(e)
-            out += PumpBtHistoryLine(r.sequence, time, kind, value)
+            out += PumpBtHistoryLine(r.sequence, ms, kind, value)
         }
         return out to ref
     }
 
-    /** Kind and value of an event, in English (journal words). */
+    /** Kind and value of an event, in English (journal words). Null numbers (special values) - "?". */
     fun describe(e: HistoryEvent): Pair<String, String> = when (e) {
         is HistoryEvent.ReferenceTime -> "Reference time" to e.time.toString()
-        is HistoryEvent.BolusDelivered -> "Bolus" to buildString {
-            append(u(e.fastUnits)).append(" U")
-            if (e.extendedUnits > 0) append(" + ").append(u(e.extendedUnits)).append(" U over ").append(e.durationMinutes).append(" min")
+        is HistoryEvent.BolusProgrammed -> "Bolus requested" to bolus(e.bolusType, e.fastUnits, e.extendedUnits, e.durationMinutes)
+        is HistoryEvent.BolusProgrammedDetails -> "Bolus request details" to "activation " + hex(e.activationType)
+        is HistoryEvent.BolusDelivered -> "Bolus delivered" to bolus(e.bolusType, e.fastUnits, e.extendedUnits, e.durationMinutes)
+        is HistoryEvent.BolusDeliveredDetails -> "Bolus details" to
+            "activation ${hex(e.activationType)}, end ${hex(e.endReason)}, started +${e.startOffsetSec} s"
+        is HistoryEvent.TherapyContext -> "Therapy context" to buildString {
+            append("flags 0x%02x".format(e.flags))
+            if (e.basalRate != null || e.flags and 0x02 != 0) append(", basal ").append(u(e.basalRate)).append(" U/h")
+            if (e.stopReason != null) append(", stopped ").append(hex(e.stopReason))
+            if (e.tempBasalType != null) {
+                append(", temp basal ").append(u(e.tempBasalValue)).append(if (e.tempBasalType == 0x3C) " %" else " U/h")
+            }
         }
-        is HistoryEvent.BolusDeliveredDetails -> "Bolus details" to "activation " + (e.activationType?.let { "0x%02x".format(it) } ?: "-")
         is HistoryEvent.AutoBasal -> "Auto basal" to "${u(e.units)} U"
-        is HistoryEvent.Meal -> "Meal" to "${e.grams.toInt()} g"
-        is HistoryEvent.BgReading -> "BG" to "${e.mgdl.toInt()} mg/dL"
-        is HistoryEvent.Calibration -> "Calibration" to "${e.mgdl.toInt()} mg/dL, " + if (e.accepted) "accepted" else "rejected"
+        is HistoryEvent.Meal -> "Meal" to "${e.grams?.toInt() ?: "?"} g"
+        is HistoryEvent.BgReading -> "BG" to "${e.mgdl?.toInt() ?: "?"} mg/dL"
+        is HistoryEvent.Calibration -> "Calibration" to "${e.mgdl?.toInt() ?: "?"} mg/dL, " + if (e.accepted) "accepted" else "rejected"
         is HistoryEvent.BasalRateChanged -> "Basal rate" to "${u(e.oldUnitsPerHour)} → ${u(e.newUnitsPerHour)} U/h"
         is HistoryEvent.DeliveryStopped -> "Delivery stopped" to "reason 0x%02x".format(e.reason)
         is HistoryEvent.DeliveryRestarted -> "Delivery restarted" to "reason 0x%02x".format(e.reason)
         is HistoryEvent.SensorGlucose -> "Sensor glucose" to (e.mgdl?.let { "$it mg/dL" } ?: "special state")
         is HistoryEvent.Annunciation -> "Alert" to "type 0x%03x, status 0x%02x".format(e.type, e.status)
         is HistoryEvent.Other -> "Event 0x%04x".format(e.type) to ""
+        is HistoryEvent.Unparsed -> "Not readable 0x%04x".format(e.type) to e.reason
     }
 
     /** Newest first, one line per record number, at most [max]. */
     fun merge(old: List<PumpBtHistoryLine>, new: List<PumpBtHistoryLine>, max: Int = 20): List<PumpBtHistoryLine> =
         (new + old).distinctBy { it.sequence }.sortedByDescending { it.sequence }.take(max)
 
-    private fun u(v: Double): String = String.format(Locale.US, "%.3f", v).trimEnd('0').trimEnd('.')
+    private fun bolus(type: Int, fast: Double?, ext: Double?, minutes: Int): String = buildString {
+        append(u(fast)).append(" U")
+        if (ext == null || ext > 0) append(" + ").append(u(ext)).append(" U over ").append(minutes).append(" min")
+        when (type) {
+            0x3C -> append(", square")
+            0xFF -> append(", dual")
+            0x33 -> {}
+            else -> append(", type ").append(hex(type))
+        }
+    }
+
+    private fun hex(v: Int?): String = v?.let { "0x%02x".format(it) } ?: "-"
+
+    private fun u(v: Double?): String = v?.let { String.format(Locale.US, "%.3f", it).trimEnd('0').trimEnd('.') } ?: "?"
 }

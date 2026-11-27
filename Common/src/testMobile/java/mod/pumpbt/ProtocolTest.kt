@@ -3,7 +3,7 @@
 // core/MiniMedKitKotlin/src/test/kotlin/de/sgitaize/minimedkit/ProtocolTest.kt, by Simon Gutjahr.
 // Parser vectors: OpenMinimed PythonPumpConnector (780G payloads, GPL-3.0).
 // Modified for JugglucoNGmod: package; JUnit asserts instead of kotlin.test; the Nightscout, JSON and Pebble cases
-// removed (those parts are not ported).
+// removed (those parts are not ported); IEEE-11073 special values (made-up bytes) added.
 package mod.pumpbt
 
 import org.junit.Assert.assertEquals
@@ -36,6 +36,20 @@ class ProtocolTest {
     fun medFloat() {
         assertEquals(-177.7, MedFloat.decode16(0xF90F), 0.0)
         assertEquals(0.025, MedFloat.decode32(0xF82625A0L), 0.0)
+    }
+
+    @Test
+    fun medFloatSpecialValuesAreNoValue() {
+        for (raw in listOf(0x007FFFFFL, 0x00800000L, 0x007FFFFEL, 0x00800002L, 0x00800001L)) {
+            assertNull("FLOAT 0x%08x".format(raw), MedFloat.decode32OrNull(raw))
+        }
+        for (raw in listOf(0x07FF, 0x0800, 0x07FE, 0x0802, 0x0801)) {
+            assertNull("SFLOAT 0x%04x".format(raw), MedFloat.decode16OrNull(raw))
+        }
+        assertEquals(0.025, MedFloat.decode32OrNull(0xF82625A0L)!!, 0.0)
+        assertEquals(-177.7, MedFloat.decode16OrNull(0xF90F)!!, 0.0)
+        // the same mantissa with another exponent is a number
+        assertEquals(838.8607, MedFloat.decode32OrNull(0xFC7FFFFFL)!!, 1e-9)
     }
 
     @Test
@@ -73,17 +87,22 @@ class ProtocolTest {
         val s = PumpStatus.parse(hex("5596e80d28fb010300"))
         assertEquals(PumpStatus.RUN, s.therapyControlState)
         assertEquals(PumpStatus.OPERATIONAL_READY, s.operationalState)
-        assertEquals(26.25, s.reservoirUnits, 0.0001) // 0xfb280de8 = 2625000e-5
+        assertEquals(26.25, s.reservoirUnits!!, 0.0001) // 0xfb280de8 = 2625000e-5
         assertTrue(s.reservoirAttached)
         assertTrue(s.sensorOn)
         assertFalse(s.isSuspended)
+
+        // reservoir: FLOAT NaN → no value
+        assertNull(PumpStatus.parse(hex("5596ffff7f00010300")).reservoirUnits)
     }
 
     @Test
     fun insulinOnBoard() {
         val iob = InsulinOnBoard.parse(hex("fc0300c05c15fa"))
-        assertEquals(1.4, iob.units, 0.0001)
+        assertEquals(1.4, iob.units!!, 0.0001)
         assertNull(iob.remainingDurationMinutes)
+
+        assertNull(InsulinOnBoard.parse(hex("fc0300ffff7f00")).units) // NaN
     }
 
     @Test
@@ -106,7 +125,13 @@ class ProtocolTest {
     fun activeBasal() {
         val b = ActiveBasalRate.parse(hex("6a03000200000000"))
         assertEquals(2, b.profileNumber)
-        assertEquals(0.0, b.unitsPerHour, 0.0)
+        assertEquals(0.0, b.unitsPerHour!!, 0.0)
         assertNull(b.tempBasalUnitsPerHour)
+
+        // rate NRes, temp basal (flag 0x01): type, rate NaN, programmed 60 min, 30 min left
+        val special = ActiveBasalRate.parse(hex("6a0301" + "02" + "00008000" + "33" + "ffff7f00" + "3c00" + "1e00"))
+        assertNull(special.unitsPerHour)
+        assertNull(special.tempBasalUnitsPerHour)
+        assertEquals(30, special.tempBasalRemainingMinutes)
     }
 }
