@@ -25,6 +25,13 @@
             android:exported="false"
             android:label="@string/mod_carelink_title"
             android:theme="@style/Theme.AppCompat.NoActionBar" />
+        <!-- Pump over Bluetooth (trial): the hidden trial window that reads the pump directly, read only. Not exported:
+             opened only from our CareLink window. BLUETOOTH_ADVERTISE and BLUETOOTH_CONNECT are in upstream's manifest. -->
+        <activity
+            android:name="tk.glucodata.mod.pumpbt.PumpBtActivity"
+            android:exported="false"
+            android:label="@string/mod_pumpbt_title"
+            android:theme="@style/Theme.AppCompat.NoActionBar" />
         <!-- CareLink poll alarm: only our own PendingIntent sends it -->
         <receiver
             android:name="tk.glucodata.mod.carelink.CareLinkAlarmReceiver"

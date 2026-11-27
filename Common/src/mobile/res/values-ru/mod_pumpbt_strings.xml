@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JugglucoNGmod, pump over Bluetooth (trial): Russian strings of the trial window and its row in the CareLink window. -->
+<resources>
+    <string name="mod_pumpbt_title">Помпа по Bluetooth (проба)</string>
+    <string name="mod_pumpbt_entry_section">Проба</string>
+    <string name="mod_pumpbt_entry_title">Помпа по Bluetooth (проба)</string>
+    <string name="mod_pumpbt_entry_hint">Читает помпу напрямую, без MiniMed Mobile. Только для пробы на 740G.</string>
+
+    <string name="mod_pumpbt_section_phone">Телефон</string>
+    <string name="mod_pumpbt_advertising_supported">Реклама Bluetooth поддерживается: %1$s</string>
+    <string name="mod_pumpbt_yes">да</string>
+    <string name="mod_pumpbt_no">нет</string>
+    <string name="mod_pumpbt_no_bluetooth">В телефоне нет Bluetooth</string>
+    <string name="mod_pumpbt_bluetooth_off">Bluetooth выключен — включи его в настройках телефона</string>
+    <string name="mod_pumpbt_no_permissions">Нет разрешений Bluetooth</string>
+    <string name="mod_pumpbt_allow">Разрешить</string>
+
+    <string name="mod_pumpbt_section_key">Ключ</string>
+    <string name="mod_pumpbt_key_not_loaded">Ключ: не загружен</string>
+    <string name="mod_pumpbt_key_loaded">Ключ: загружен, CRC %1$s, база Mobile Application ↔ Insulin Pump</string>
+    <string name="mod_pumpbt_key_loading">Загружаю ключ…</string>
+    <string name="mod_pumpbt_load_key">Загрузить ключ</string>
+    <string name="mod_pumpbt_load_key_hint">Нужен интернет, один раз</string>
+    <string name="mod_pumpbt_load_key_file">Загрузить ключ из файла</string>
+    <string name="mod_pumpbt_key_error_network">Нет интернета или страница не ответила</string>
+    <string name="mod_pumpbt_key_error_http">Страница ответила ошибкой %1$d</string>
+    <string name="mod_pumpbt_key_error_not_found">Нужной базы ключей не нашлось</string>
+    <string name="mod_pumpbt_key_error_crc">База ключей повреждена (CRC)</string>
+    <string name="mod_pumpbt_key_error_wrong_type">Не тот тип базы ключей</string>
+    <string name="mod_pumpbt_key_error_file">Файл не прочитан</string>
+
+    <string name="mod_pumpbt_section_pump">Помпа</string>
+    <string name="mod_pumpbt_stage">Этап: %1$s</string>
+    <string name="mod_pumpbt_stage_not_started">не начато</string>
+    <string name="mod_pumpbt_stage_advertising">телефон ждёт сопряжения — сопрягай на помпе</string>
+    <string name="mod_pumpbt_stage_waiting">ждём, когда помпа вернётся</string>
+    <string name="mod_pumpbt_stage_connected">помпа подключилась</string>
+    <string name="mod_pumpbt_stage_pairing">сопряжение</string>
+    <string name="mod_pumpbt_stage_handshake">рукопожатие</string>
+    <string name="mod_pumpbt_stage_reading">чтение</string>
+    <string name="mod_pumpbt_stage_data_read">связь есть, данные прочитаны</string>
+    <string name="mod_pumpbt_stage_lost">связь потеряна в %1$s</string>
+    <string name="mod_pumpbt_stage_error">ошибка: %1$s</string>
+    <string name="mod_pumpbt_stage_stopped">остановлено</string>
+    <string name="mod_pumpbt_name_on_pump">Имя на помпе: %1$s</string>
+    <string name="mod_pumpbt_lost_hint">На 780G сразу после первого сопряжения помпа часто отключается примерно на минуту и возвращается — подожди.</string>
+    <string name="mod_pumpbt_last_problem">Последняя проблема: %1$s</string>
+    <string name="mod_pumpbt_furthest_stage">Дальше всего дошли: %1$s</string>
+    <string name="mod_pumpbt_returns_title">Возвраты (последние 3):</string>
+    <string name="mod_pumpbt_returned">Пропала в %1$s, вернулась через %2$s</string>
+    <string name="mod_pumpbt_duration">%1$d мин %2$d с</string>
+    <string name="mod_pumpbt_variant_a">Вариант имени: A — данные производителя</string>
+    <string name="mod_pumpbt_variant_b">B — имя Bluetooth телефона (меняется на время пробы)</string>
+    <string name="mod_pumpbt_variant_hint">Если помпа не видит Mobile … или сопряжение сорвалось дважды — «Остановить» и попробуй B.</string>
+    <string name="mod_pumpbt_stop_minimed_hint">Перед сопряжением останови MiniMed Mobile: Настройки → Приложения → MiniMed Mobile → Остановить.</string>
+    <string name="mod_pumpbt_start_pairing">Начать сопряжение</string>
+    <string name="mod_pumpbt_start_pairing_hint">Держи этот экран открытым, телефон не блокируй. Когда телефон спросит о сопряжении с помпой — сразу подтверди.</string>
+    <string name="mod_pumpbt_wait">Ждать помпу</string>
+    <string name="mod_pumpbt_wait_hint">Держи этот экран открытым.</string>
+    <string name="mod_pumpbt_stop">Остановить</string>
+    <string name="mod_pumpbt_read_again">Прочитать ещё раз</string>
+    <string name="mod_pumpbt_need_key">Сначала загрузи ключ</string>
+
+    <string name="mod_pumpbt_section_values">Значения (прочитаны в %1$s)</string>
+    <string name="mod_pumpbt_model">Модель</string>
+    <string name="mod_pumpbt_firmware">Прошивка</string>
+    <string name="mod_pumpbt_serial">Серийный номер</string>
+    <string name="mod_pumpbt_iob">Активный инсулин</string>
+    <string name="mod_pumpbt_reservoir">Резервуар</string>
+    <string name="mod_pumpbt_battery">Батарейка</string>
+    <string name="mod_pumpbt_basal_now">Базал сейчас</string>
+    <string name="mod_pumpbt_temp_basal">Временный базал</string>
+    <string name="mod_pumpbt_history">Последние записи истории</string>
+    <string name="mod_pumpbt_units">%1$s ЕД</string>
+    <string name="mod_pumpbt_percent">%1$d %%</string>
+    <string name="mod_pumpbt_units_per_hour">%1$s ЕД/ч</string>
+    <string name="mod_pumpbt_temp_basal_value">%1$s, осталось %2$d мин</string>
+    <string name="mod_pumpbt_none">нет</string>
+    <string name="mod_pumpbt_not_read">—</string>
+
+    <string name="mod_pumpbt_section_journal">Журнал</string>
+    <string name="mod_pumpbt_share_journal">Поделиться журналом</string>
+    <string name="mod_pumpbt_clear_journal">Очистить журнал</string>
+    <string name="mod_pumpbt_journal_empty">Пусто</string>
+    <string name="mod_pumpbt_clear_title">Очистить журнал?</string>
+    <string name="mod_pumpbt_clear_text">Если журнал нужен, сначала поделись им — очистку не отменить.</string>
+    <string name="mod_pumpbt_clear_confirm">Очистить</string>
+    <string name="mod_pumpbt_cancel">Отмена</string>
+</resources>
