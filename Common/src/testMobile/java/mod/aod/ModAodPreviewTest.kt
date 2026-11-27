@@ -226,6 +226,45 @@ class ModAodPreviewTest {
     }
 
     @Test
+    fun theSmallLineShrinksIntoTheBlockAtALargeTextSize() {
+        // the AOD text size at 300 % (their slider goes from 50 to 600 %) and the longest small line
+        val numberSize = 22f * 2f * dm.density * 3f
+        val sub = "+0,9 · 17:01 · АИ 2,4 (16:40)"
+        val wide = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = numberSize * ModAodPainter.SUB_SHARE
+            typeface = Typeface.DEFAULT
+        }
+        assertTrue("the line must not fit unshrunk for this test", wide.measureText(sub) > dm.widthPixels)
+        val readings = listOf(ModAodPoint(now - 5 * min, 6f), ModAodPoint(now - min, 6.9f))
+        val plot = ModAodPlot.plot(readings, now, mmol.low, mmol.high, true, emptyList())
+        val bmp = ModAodPainter(dm.density, dm.scaledDensity).blockBitmap(
+            dm.widthPixels, numberSize, 0, ModAodPainter.Value("6,9", 0f, sub), plot, true, ModAodStyle.ON_BLACK,
+            zoneColor(mmol, ModAodStyle.ON_BLACK), zone, true, ru,
+        )
+        val margin = (ModAodStyle.SIDE_DP * dm.density / 2f).toInt()
+        val digits = android.graphics.Rect().also {
+            Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = numberSize; typeface = Typeface.DEFAULT }.getTextBounds("0", 0, 1, it)
+        }
+        val subTop = (ModAodPainter.BLOCK_TOP_DP * dm.density + digits.height()).toInt()
+        var left = Int.MAX_VALUE
+        var right = Int.MIN_VALUE
+        val row = IntArray(bmp.width)
+        for (y in 0 until bmp.height) {
+            bmp.getPixels(row, 0, bmp.width, 0, y, bmp.width, 1)
+            for (x in row.indices) {
+                if (Color.alpha(row[x]) == 0) continue
+                assertTrue("lit pixel in the side margin at $x,$y", x >= margin && x < bmp.width - margin)
+                if (y > subTop) {
+                    left = minOf(left, x)
+                    right = maxOf(right, x)
+                }
+            }
+        }
+        // the whole line is drawn, shrunk to about the block's width (not cut, not tiny)
+        assertTrue("small line spans $left..$right of ${bmp.width}", right - left > bmp.width * 0.6)
+    }
+
+    @Test
     fun pictures() {
         val dir = System.getenv("MOD_AOD_PREVIEW_DIR")?.takeIf { it.isNotBlank() }?.let { File(it) } ?: return
         dir.mkdirs()

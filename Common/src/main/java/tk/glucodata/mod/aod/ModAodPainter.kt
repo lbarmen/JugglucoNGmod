@@ -104,14 +104,7 @@ class ModAodPainter(private val density: Float, private val scaledDensity: Float
         if (value.stale != null || numberText.isNullOrEmpty()) {
             // no fresh value: the text in the number's place, smaller, grey; no arrow, change or age
             val s = value.stale ?: return
-            var size = subSize * STALE_SHARE
-            setText(size, palette.secondary)
-            val maxWidth = width - 2 * dp(ModAodStyle.SIDE_DP)
-            val w = text.measureText(s)
-            if (w > maxWidth && w > 0f) {
-                size *= maxWidth / w
-                setText(size, palette.secondary)
-            }
+            setFitted(s, subSize * STALE_SHARE, palette.secondary, width)
             text.getTextBounds(s, 0, s.length, bounds)
             canvas.drawText(s, cx - text.measureText(s) / 2f, topPad + digitsHeight / 2f - bounds.exactCenterY(), text)
             return
@@ -133,9 +126,18 @@ class ModAodPainter(private val density: Float, private val scaledDensity: Float
             drawArrow(canvas, arrowLeft, baseline - digitsHeight / 2f - arrowSize / 2f, arrowSize, value.rate, palette.value)
         }
         value.sub?.takeIf { it.isNotEmpty() }?.let { s ->
-            setText(subSize, palette.secondary)
+            // a large AOD text size makes "+0,9 · 17:01 · IOB 2,4 (16:40)" wider than the screen: shrunk, not cut
+            setFitted(s, subSize, palette.secondary, width)
             canvas.drawText(s, cx - text.measureText(s) / 2f, baseline + subGap + subHeight, text)
         }
+    }
+
+    /** The text paint at [size], shrunk so [s] fits the block's [width] inside the side margins. */
+    private fun setFitted(s: String, size: Float, color: Int, width: Int) {
+        setText(size, color)
+        val maxWidth = width - 2 * dp(ModAodStyle.SIDE_DP)
+        val w = text.measureText(s)
+        if (w > maxWidth && w > 0f && maxWidth > 0f) setText(size * maxWidth / w, color)
     }
 
     /**

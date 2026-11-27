@@ -17,6 +17,10 @@ Common/src/modTrial/
 # build and by both of their JVM test tasks; its tests next to theirs
 Common/src/main/java/tk/glucodata/mod/
 Common/src/test/java/mod/
+# phone always-on display (feature/aod): its code is in Common/src/main/java/tk/glucodata/mod/ (seen by the watch builds
+# too), so its strings with the mod_ prefix sit next to theirs in Common/src/main/res
+Common/src/main/res/values/mod_*
+Common/src/main/res/values-ru/mod_*
 # watch block: watch-only code (every watch build compiles it, components only in Common/src/wearMod/), its tests,
 # strings and drawables with the mod_ prefix next to theirs
 Common/src/wear/java/tk/glucodata/mod/

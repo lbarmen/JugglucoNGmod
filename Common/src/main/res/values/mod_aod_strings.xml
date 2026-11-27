@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JugglucoNGmod phone always-on display (tk.glucodata.mod.aod, code shared by every build): our strings, mod_aod_
+     prefix. Upstream's strings.xml is never edited. -->
+<resources>
+    <!-- before the pump's active insulin on the small line: "IOB 2.4" -->
+    <string name="mod_aod_iob">IOB</string>
+</resources>
