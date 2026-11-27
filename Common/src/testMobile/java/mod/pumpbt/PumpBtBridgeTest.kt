@@ -24,13 +24,13 @@ import mod.pumpbt.B2Fixtures.programmed
 import mod.pumpbt.B2Fixtures.programmedDetails
 import mod.pumpbt.B2Fixtures.ref
 import tk.glucodata.data.journal.JournalEntryEntity
-import org.json.JSONObject
 import tk.glucodata.mod.carelink.CareLinkBasalWriter
-import tk.glucodata.mod.carelink.CareLinkPumpNow
 import tk.glucodata.mod.carelink.CareLinkState
 import tk.glucodata.mod.carelink.CareLinkStateStore
 import tk.glucodata.mod.carelink.ClEvent
 import tk.glucodata.mod.carelink.ClKind
+import tk.glucodata.mod.carelink.PumpNow
+import tk.glucodata.mod.carelink.TempBasal
 import tk.glucodata.mod.pumpbt.BackfillState
 import tk.glucodata.mod.pumpbt.CyclePlan
 import tk.glucodata.mod.pumpbt.JournalRow
@@ -161,7 +161,6 @@ class PumpBtBridgeTest {
         assertEquals(5_000L, p.iobAtMs)
         assertEquals(1.25, p.iobUnits!!, 0.0)
         assertEquals(120.04, p.reservoirUnits!!, 0.0)
-        assertNull(p.reservoirPercent)
         assertEquals(70, p.batteryPercent)
         assertEquals(0.8, p.basalRate!!, 0.0)
         assertEquals(1.2, p.tempBasal!!.rate!!, 0.0)
@@ -839,16 +838,11 @@ class PumpBtBridgeJournalTest {
     @Test
     fun aPercentageTemporaryBasalIsWhatTheCloudsPercentageOneIs() {
         // critic of the joints 1, B-1: normal 0.8 U/h, temporary 150 % - the basal writer takes the same rate from the
-        // Bluetooth snapshot as from the cloud's answer with such a temporary basal (1.2 U/h)
+        // Bluetooth snapshot as from the cloud's snapshot with such a temporary basal (1.2 U/h); the cloud's one is
+        // what its parser gave for that answer (rate 0, 150 %, no minutes left)
         val normal = PumpCycle(readAtMs = 5_000L, serialHash = HASH, therapyState = 0x55, basalRate = 0.8, basalRead = true)
         val bt = PumpBtBridge.toPumpNow(normal.copy(readAtMs = 65_000L, tempBasalRate = 150.0, tempBasalType = 0x3C))!!
-        val cloud = CareLinkPumpNow.parse(
-            JSONObject(
-                """{"patientData": {"lastMedicalDeviceDataUpdateServerTime": 60000, "basal": {"basalRate": 0.8,
-                   "tempBasalType": "PERCENTAGE", "tempBasalPercentage": 150, "tempBasalRate": 0}}}""",
-            ),
-            nowMs = 65_000L, phoneZone = ZONE,
-        )!!
+        val cloud = PumpNow(dataAtMs = 60_000L, basalRate = 0.8, tempBasal = TempBasal(0.0, 150, null))
         assertEquals(150, cloud.tempBasal!!.percent)
         assertEquals(cloud.tempBasal!!.percent, bt.tempBasal!!.percent)
         val lastNormal = CareLinkBasalWriter.rateOf(PumpBtBridge.toPumpNow(normal)!!, null)

@@ -274,7 +274,6 @@ internal object PumpBtBridge {
             iobUnits = iob,
             iobAtMs = if (iob != null) cycle.readAtMs else null,
             reservoirUnits = reservoir,
-            reservoirPercent = null,
             batteryPercent = battery,
             basalRate = cycle.basalRate?.takeIf { it >= 0.0 }?.let(CareLinkMarkers::round3),
             tempBasal = temp,
