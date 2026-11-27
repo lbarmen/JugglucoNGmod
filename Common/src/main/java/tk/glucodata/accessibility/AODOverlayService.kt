@@ -673,6 +673,8 @@ class AODOverlayService : AccessibilityService(), SensorEventListener {
         } else {
             arrowImg?.visibility = View.GONE
         }
+        if (tk.glucodata.mod.aod.ModAodBlock.show(this, view, usesLightPalette, overlayChartPoints, chartPoints, resolvedDisplay, valStr, // MOD-HOOK:aod-block
+                displayRate, staleStatus, isMmol, viewMode, hasCalibration, activeSensorSerial, startT, endT)) { applyBurnInProtection(); return }
 
 // CHART VISIBILITY CHECK
         // prefs already defined above
