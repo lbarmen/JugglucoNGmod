@@ -16,15 +16,19 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import tk.glucodata.R
 import tk.glucodata.data.HistoryDatabase
+import tk.glucodata.data.journal.JournalEntryEntity
 import tk.glucodata.data.journal.JournalEntryType
 import tk.glucodata.drivers.api.ApiIobSnapshot
 import tk.glucodata.mod.carelink.CareLinkClock
 import tk.glucodata.mod.carelink.CareLinkNotifier
 import tk.glucodata.mod.carelink.CareLinkStateStore
+import tk.glucodata.mod.pumpbt.BackfillState
 import tk.glucodata.mod.pumpbt.PumpBtHistoryStore
 import tk.glucodata.mod.pumpbt.PumpBtSource
 import tk.glucodata.mod.pumpbt.PumpHistoryMemory
+import tk.glucodata.mod.pumpbt.PumpWarning
 import tk.glucodata.mod.pumpbt.ble.PumpLinkRules
 import tk.glucodata.mod.pumpbt.core.ActiveBasalRate
 import tk.glucodata.mod.pumpbt.core.HistoryRead
@@ -197,7 +201,7 @@ object PumpBtTrialEntry {
             "slow" -> {
                 val ms = (n(0, 15.0, 1) * 1000).roundToLong().coerceIn(0L, 60_000L)
                 slowNextSave(ms)
-                "slow: the next history memory save waits ${ms / 1000} s"
+                "slow: the save of the next \"Write\" waits ${ms / 1000} s"
             }
             "nodata" -> {
                 withContext(Dispatchers.IO) { CareLinkNotifier.checkNoData(app) }
@@ -210,14 +214,17 @@ object PumpBtTrialEntry {
     }
 
     /**
-     * `slow`: the next save of the history memory waits [ms] first (the first catch-up's "Write" stays unanswered that
-     * long: the window's waiting state can be watched across a turned screen), then the real save is back.
+     * `slow`: the save of the first catch-up's "Write" waits [ms] first (it stays unanswered that long: the window's
+     * waiting state can be watched across a turned screen), then the real save is back. Only that save: the memory to
+     * save is confirmed while the source still shows the card waiting (the state is published after the save) - other
+     * saves meanwhile (a cycle, a load) go through at once and do not use it up (critic P, N-4).
      */
     private fun slowNextSave(ms: Long) {
         val real = realSave ?: PumpBtSource.saveMemory.also { realSave = it }
         val armed = AtomicBoolean(true)
         PumpBtSource.saveMemory = { store, m ->
-            if (armed.getAndSet(false)) {
+            val confirmSave = m.backfill == BackfillState.CONFIRMED && PumpBtSource.state.value.backfill == BackfillState.WAITING
+            if (confirmSave && armed.getAndSet(false)) {
                 Log.println(Log.INFO, TAG, "slow: history memory save waits ${ms / 1000} s")
                 Thread.sleep(ms)
                 PumpBtSource.saveMemory = real
@@ -232,12 +239,19 @@ object PumpBtTrialEntry {
             ", history ${c.history.status.name.lowercase(Locale.ROOT)}"
     }
 
-    /** What the trial checks and prints: the source, the journal rows of the pump, the plate, "no data". */
+    /**
+     * What the trial checks and prints: the source, the journal rows of the pump (counts and values: the sum of the
+     * doses, the rate of the newest basal row, the newest stop note), the plate, "no data".
+     */
     private suspend fun facts(app: Context): LinkedHashMap<String, String> {
         val s = PumpBtSource.state.value
+        // oldest first (by time, then id): the newest row of a type is its last
         val rows = withContext(Dispatchers.IO) { HistoryDatabase.getInstance(app).journalDao().getEntries() }
             .filter { it.sourceRecordId?.startsWith("carelink:") == true }
         fun count(t: JournalEntryType) = rows.count { it.entryType == t.storageValue }.toString()
+        fun of(t: JournalEntryType) = rows.filter { it.entryType == t.storageValue }
+        val insulinSum = of(JournalEntryType.INSULIN).sumOf { (it.amount ?: 0f).toDouble() }
+        val basalLast = of(JournalEntryType.TEMP_BASAL).lastOrNull()?.amount
         // the plate reads upstream's snapshot with the phone's real clock
         val iob = ApiIobSnapshot.fresh(System.currentTimeMillis())?.iobUnits
         return linkedMapOf(
@@ -249,19 +263,41 @@ object PumpBtTrialEntry {
             "card" to (s.card?.toWrite?.size?.toString() ?: "none"),
             "warnings" to (s.warnings.joinToString("+") { it.name.lowercase(Locale.ROOT) }.ifEmpty { "-" }),
             "insulin" to count(JournalEntryType.INSULIN),
+            "insulin-sum" to "%.2f".format(Locale.ROOT, insulinSum),
             "carbs" to count(JournalEntryType.CARBS),
             "basal" to count(JournalEntryType.TEMP_BASAL),
+            "basal-last" to (basalLast?.let { "%.3f".format(Locale.ROOT, it.toDouble()) } ?: "none"),
             "notes" to count(JournalEntryType.NOTE),
+            "stop" to stopNote(app, of(JournalEntryType.NOTE)),
             "iob" to (iob?.let { "%.2f".format(Locale.ROOT, it) } ?: "none"),
             "nodata" to if (withContext(Dispatchers.IO) { CareLinkStateStore(app).noDataShown }) "1" else "0",
         )
+    }
+
+    /**
+     * The newest stop note of the basal writer (`carelink:stop:` key): `open` - its text is the writer's "Stop HH:MM–…",
+     * `closed` - "Stop HH:MM–HH:MM" (a date before the end on another day), `other` - neither (changed by hand), `none`.
+     * The patterns come from the writer's own strings, so the app's language does not matter.
+     */
+    private fun stopNote(app: Context, notes: List<JournalEntryEntity>): String {
+        val text = notes.lastOrNull { it.sourceRecordId?.startsWith("carelink:stop:") == true }?.note ?: return "none"
+        val time = "\\d\\d:\\d\\d"
+        fun pattern(s: String) = Regex(s.split('\u0001').joinToString(time) { start ->
+            start.split('\u0002').joinToString("(\\d\\d\\.\\d\\d )?$time") { Regex.escape(it) }
+        })
+        return when {
+            pattern(app.getString(R.string.mod_carelink_note_stop_open, "\u0001")).matches(text) -> "open"
+            pattern(app.getString(R.string.mod_carelink_note_stop, "\u0001", "\u0002")).matches(text) -> "closed"
+            else -> "other"
+        }
     }
 
     private suspend fun summary(app: Context): String = facts(app).entries.joinToString(" ") { (k, v) -> "$k=$v" }
 
     /**
      * `check insulin=2,carbs=1,basal-min=2,warning=clock_drift,nowarning=clock_drift`: `key=value` - equal (numbers as
-     * numbers), `key-min=value` - at least, `warning=` / `nowarning=` - among the warnings or not. The answer starts with
+     * numbers), `key-min=value` - at least, `warning=` / `nowarning=` - among the warnings or not (a name that is no
+     * warning fails). Value keys: `insulin-sum` (U), `basal-last` (U/h), `stop` (open / closed / other / none). The answer starts with
      * CHECK-OK or CHECK-FAILED (a scenario pipes `am broadcast` into `grep -F CHECK-OK`).
      */
     private suspend fun check(app: Context, arg: String): String {
@@ -269,10 +305,14 @@ object PumpBtTrialEntry {
         val wants = arg.split(Regex("[\\s,;]+")).filter { it.isNotEmpty() }
         if (wants.isEmpty()) throw IllegalArgumentException("check: key=value,... (${f.keys.joinToString()})")
         val warnings = f.getValue("warnings").split('+').toSet()
+        // a misspelt name would pass `nowarning=` always: an unknown one fails the check
+        val known = PumpWarning.entries.map { it.name.lowercase(Locale.ROOT) }
         val bad = ArrayList<String>()
         for (w in wants) {
             val (key, want) = w.split('=', limit = 2).takeIf { it.size == 2 } ?: throw IllegalArgumentException("check: '$w' is not key=value")
             when {
+                (key == "warning" || key == "nowarning") && want !in known ->
+                    bad += "unknown warning '$want' (${known.joinToString("/")})"
                 key == "warning" -> if (want !in warnings) bad += "no warning $want"
                 key == "nowarning" -> if (want in warnings) bad += "warning $want"
                 key.endsWith("-min") -> {
