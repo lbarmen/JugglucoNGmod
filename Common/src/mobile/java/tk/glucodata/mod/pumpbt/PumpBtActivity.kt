@@ -17,9 +17,10 @@ import tk.glucodata.ui.JugglucoTheme
 /**
  * JugglucoNGmod, pump over Bluetooth (trial): the hidden trial window "Pump over Bluetooth (trial)" - reads a Medtronic
  * pump over Bluetooth without MiniMed Mobile, read only, for the 740G trial. Opened from the bottom of our CareLink
- * window. The link lives in [PumpBtTrial] (one per process); this window only shows it and presses its buttons. Opening
- * asks nothing and starts nothing: permissions on Allow or on a start, the link on the buttons. The screen stays on
- * while the window is shown.
+ * window. The link lives in [PumpBtSource] (one per process; [PumpBtTrial] is the window's thin layer over it); this
+ * window only shows it and presses its buttons. Opening asks nothing: permissions on Allow, on a start or on turning
+ * permanent operation on; with permanent operation on the source keeps the link (opening does not start a new one).
+ * The screen stays on while the window is shown.
  *
  * Declared only in Common/src/mobileMod/AndroidManifest.xml (not exported); [intentIfDeclared] gives null in upstream's
  * builds and the CareLink row is not drawn. Closes at once while upstream's restricted mode is locked. The drawing is
@@ -30,11 +31,18 @@ class PumpBtActivity : ComponentActivity() {
     /** A start waiting for the permission answer: true - pairing, false - waiting for the pump. */
     private var startAfterPermission: Boolean? = null
 
+    /** Turning permanent operation on waits for the permission answer. */
+    private var enableAfterPermission = false
+
     private val askPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         PumpBtTrial.refreshChecks(this)
         val pending = startAfterPermission
+        val enable = enableAfterPermission
         startAfterPermission = null
-        if (pending != null && PumpBtTrial.hasPermissions(this)) startNow(pending)
+        enableAfterPermission = false
+        if (PumpBtTrial.hasPermissions(this)) {
+            if (enable) turnOnNow() else if (pending != null) startNow(pending)
+        }
     }
 
     private val pickKeyFile = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -58,6 +66,7 @@ class PumpBtActivity : ComponentActivity() {
             JugglucoTheme(themeMode = themeMode) {
                 PumpBtScreen(
                     stateFlow = PumpBtTrial.state,
+                    sourceFlow = PumpBtSource.state,
                     journalFlow = PumpBtJournal.tail,
                     actions = PumpBtScreenActions(
                         onBack = { finish() },
@@ -71,6 +80,10 @@ class PumpBtActivity : ComponentActivity() {
                         onVariant = PumpBtTrial::setVariant,
                         onShareJournal = ::shareJournal,
                         onClearJournal = { PumpBtTrial.clearJournal(this) },
+                        onPermanent = ::setPermanent,
+                        onWriteBackfill = { keys -> PumpBtSource.confirmBackfill(this, keys) },
+                        onDeclineBackfill = { PumpBtSource.declineBackfill(this) },
+                        onVerbose = { on -> PumpBtSource.setVerbose(this, on) },
                     ),
                 )
             }
@@ -113,6 +126,27 @@ class PumpBtActivity : ComponentActivity() {
 
     private fun startNow(pair: Boolean) {
         if (pair) PumpBtTrial.startPairing() else PumpBtTrial.waitForPump()
+    }
+
+    /** "Permanent operation" (the screen asked for the confirmation): on - permissions first; off - at once. */
+    private fun setPermanent(on: Boolean) {
+        if (!on) {
+            PumpBtSource.disable(this)
+            return
+        }
+        if (!PumpBtTrial.hasPermissions(this)) {
+            enableAfterPermission = true
+            askForPermissions()
+            return
+        }
+        turnOnNow()
+    }
+
+    /** Only with the key and Bluetooth there: a source on without them would stop the cloud and read nothing. */
+    private fun turnOnNow() {
+        PumpBtTrial.refreshChecks(this)
+        if (!PumpBtWindow.controls(PumpBtTrial.state.value, PumpBtSource.state.value).canTurnOn) return
+        PumpBtSource.enable(this)
     }
 
     private fun pickFile() {

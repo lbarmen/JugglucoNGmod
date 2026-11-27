@@ -71,6 +71,67 @@
     <string name="mod_pumpbt_stop">Stop</string>
     <string name="mod_pumpbt_read_again">Read again</string>
     <string name="mod_pumpbt_need_key">Load the key first</string>
+    <string name="mod_pumpbt_stop_by_switch">To stop the link, turn Permanent operation off.</string>
+    <!-- %1$s - duration (mod_pumpbt_duration) -->
+    <string name="mod_pumpbt_pair_wait">The phone is waiting for the pump: %1$s (usually up to a minute)</string>
+    <!-- %1$s - "Mobile NNNNNN" -->
+    <string name="mod_pumpbt_pairing_failed">Pairing did not finish. On the pump, choose Pair New Device again and pick %1$s. On the phone, confirm the pairing request (it may come as a notification). No request? Turn Bluetooth off and on; if that does not help, restart the phone. The phone keeps waiting by itself: connecting usually takes about half a minute, so do not stop it early.</string>
+
+    <string name="mod_pumpbt_section_permanent">Permanent operation</string>
+    <string name="mod_pumpbt_permanent">Permanent operation</string>
+    <string name="mod_pumpbt_permanent_off">Off: the pump is read only with the buttons below, nothing goes to the journal.</string>
+    <string name="mod_pumpbt_permanent_on">On: the phone stays linked to the pump in the background and writes its boluses, carbs and basal to the journal.</string>
+    <string name="mod_pumpbt_permanent_needs">To turn it on, load the key and turn Bluetooth on.</string>
+    <string name="mod_pumpbt_permanent_ask_title">Turn on permanent operation?</string>
+    <string name="mod_pumpbt_permanent_ask_text">The app will stay linked to the pump and write its boluses, carbs and basal to the journal. The CareLink cloud is not read while this is on. MiniMed Mobile must not be connected to the pump at the same time. The app only reads the pump and never changes anything on it. This is a trial, not a medical device: check doses on the pump.</string>
+    <string name="mod_pumpbt_permanent_ask_confirm">Turn on</string>
+    <string name="mod_pumpbt_sensor_bluetooth_off">Bluetooth for the sensor is off in this app. Then Android may close the app in the background and pump data will stop coming.</string>
+    <string name="mod_pumpbt_memory_load_failed">The saved pump history could not be read. It is being collected again.</string>
+    <string name="mod_pumpbt_bond_lost_title">The phone has forgotten the pump</string>
+    <!-- %1$s - "Mobile NNNNNN" -->
+    <string name="mod_pumpbt_bond_lost_text">The pump is marked as paired, but it is no longer in the phone\'s Bluetooth list, so no data can come. Press Pair again, then on the pump choose Pair New Device and pick %1$s, and confirm the request on the phone (it may come as a notification). No request? Turn Bluetooth off and on; if that does not help, restart the phone.</string>
+    <string name="mod_pumpbt_pair_again">Pair again</string>
+
+    <string name="mod_pumpbt_section_backfill">Pump history from before you turned it on</string>
+    <!-- %1$d - boluses, %2$d - meals -->
+    <string name="mod_pumpbt_backfill_found">Found before you turned it on: boluses %1$d, meals %2$d</string>
+    <string name="mod_pumpbt_backfill_in_journal">Already in the journal: %1$d</string>
+    <string name="mod_pumpbt_backfill_to_write">Will be written (%1$d):</string>
+    <string name="mod_pumpbt_backfill_nothing">Nothing to write</string>
+    <string name="mod_pumpbt_backfill_old_not_found">Older ones not in the journal, will not be written: %1$d</string>
+    <string name="mod_pumpbt_backfill_meals_not_written">Carbs that will not be written (carb writing is off, or their bolus is not written): %1$d</string>
+    <string name="mod_pumpbt_backfill_hint">New pump data is written in any case. This choice is only about the old records.</string>
+    <string name="mod_pumpbt_backfill_write">Write</string>
+    <string name="mod_pumpbt_backfill_decline">Do not write old ones</string>
+    <string name="mod_pumpbt_backfill_decline_title">Do not write the old records?</string>
+    <string name="mod_pumpbt_backfill_decline_text">The pump records from before you turned it on will not be written to the journal. New ones are written as usual. This cannot be undone in the app.</string>
+    <!-- %1$s - grams -->
+    <string name="mod_pumpbt_grams">%1$s g</string>
+
+    <string name="mod_pumpbt_section_data">Pump data in the journal</string>
+    <string name="mod_pumpbt_last_reading_none">Last reading: none yet</string>
+    <!-- %1$s - date and time -->
+    <string name="mod_pumpbt_last_reading">Last reading: %1$s</string>
+    <!-- %1$s - date and time, %2$s - one of the outcomes below -->
+    <string name="mod_pumpbt_last_reading_outcome">Last reading: %1$s, %2$s</string>
+    <string name="mod_pumpbt_outcome_written">written to the journal</string>
+    <string name="mod_pumpbt_outcome_skipped">nothing written</string>
+    <string name="mod_pumpbt_outcome_failed">not written, will try again</string>
+    <string name="mod_pumpbt_outcome_no_serial">the pump did not give its serial number, nothing kept</string>
+    <string name="mod_pumpbt_records_saved">Saved pump history records: %1$d</string>
+    <string name="mod_pumpbt_first_read_pending">The first full read of the pump history is not finished yet</string>
+    <string name="mod_pumpbt_count_unparsed">Records not understood: %1$d</string>
+    <string name="mod_pumpbt_count_gaps">Records missed (could not be read): %1$d</string>
+    <string name="mod_pumpbt_count_unpaired_meals">Carbs without a bolus: %1$d</string>
+    <string name="mod_pumpbt_count_no_result">Boluses without a final amount: %1$d</string>
+    <string name="mod_pumpbt_count_future">Records dated in the future: %1$d</string>
+    <string name="mod_pumpbt_count_held">Boluses waiting for the rest of their record: %1$d</string>
+    <string name="mod_pumpbt_count_undated">Records without a time: %1$d</string>
+    <string name="mod_pumpbt_warning_clock_drift">The pump\'s clock differs from the phone\'s. Times in the journal follow the pump: set the time on the pump.</string>
+    <string name="mod_pumpbt_warning_future">Some pump records are dated in the future. Check the date and time on the pump.</string>
+    <string name="mod_pumpbt_warning_no_result">The pump has not said how much of a bolus was actually given. Check that bolus on the pump and in the journal.</string>
+    <string name="mod_pumpbt_warning_held">A bolus is waiting for the rest of its record and is not in the journal yet.</string>
+    <string name="mod_pumpbt_warning_unpaired_meal">Carbs were found without a matching bolus. Check them in the journal.</string>
 
     <!-- %1$s - time of the last reading -->
     <string name="mod_pumpbt_section_values">Values (read at %1$s)</string>
@@ -92,6 +153,11 @@
     <string name="mod_pumpbt_not_read">—</string>
 
     <string name="mod_pumpbt_section_journal">Journal</string>
+    <string name="mod_pumpbt_verbose">Detailed journal</string>
+    <string name="mod_pumpbt_verbose_hint">Also writes the pump\'s serial number, doses and other values. For finding faults; usually off.</string>
+    <string name="mod_pumpbt_share_verbose_title">Share the detailed journal?</string>
+    <string name="mod_pumpbt_share_verbose_text">It contains the pump\'s serial number, your doses and other values. Share it only with someone you trust.</string>
+    <string name="mod_pumpbt_share_verbose_confirm">Share</string>
     <string name="mod_pumpbt_share_journal">Share journal</string>
     <string name="mod_pumpbt_clear_journal">Clear journal</string>
     <string name="mod_pumpbt_journal_empty">Empty</string>

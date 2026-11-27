@@ -35,14 +35,16 @@ internal object PumpBtTrial {
     fun onScreenOpened(context: Context) {
         val c = context.applicationContext
         app = c
-        PumpBtSource.init(c)
+        // with the source on, init puts a running link back to waiting: not while a pairing from this window runs
+        // (a turned screen makes the window again)
+        if (!PumpBtSource.state.value.link.pairMode) PumpBtSource.init(c)
         val s = PumpBtSource.store(c)
         journal("trial screen opened ${PumpBtJournal.fullDate()}, Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), ${Build.MANUFACTURER} ${Build.MODEL}")
-        PumpBtSource.onLinkState = { ls -> _state.update { it.copy(link = ls) } }
+        PumpBtSource.onLinkState = { ls -> _state.update { it.copy(link = ls, paired = s.paired) } }
         _state.update {
             it.copy(
                 link = PumpBtSource.state.value.link, variant = s.variant, advertisedName = s.advertisedName,
-                keyCrc = PumpBtSource.key(c)?.crc,
+                keyCrc = PumpBtSource.key(c)?.crc, paired = s.paired,
             )
         }
         refreshChecks(c)
