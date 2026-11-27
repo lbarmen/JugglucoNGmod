@@ -2,8 +2,12 @@ package tk.glucodata.mod.pumpbt
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
@@ -19,6 +23,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -29,7 +34,10 @@ import tk.glucodata.mod.carelink.CareLinkIntake
 import tk.glucodata.mod.carelink.CareLinkIob
 import tk.glucodata.mod.carelink.CareLinkScheduler
 import tk.glucodata.mod.carelink.CareLinkSettings
+import tk.glucodata.mod.carelink.ClEvent
 import tk.glucodata.mod.carelink.ClKind
+import tk.glucodata.mod.carelink.IntakeResult
+import tk.glucodata.mod.carelink.PumpNow
 import tk.glucodata.mod.carelink.IntakeOutcome
 import tk.glucodata.mod.carelink.IntakeSource
 import tk.glucodata.mod.carelink.PumpSourceSwitch
@@ -46,6 +54,7 @@ import tk.glucodata.mod.pumpbt.core.MealEvent
 import tk.glucodata.mod.pumpbt.core.PumpCycle
 import tk.glucodata.mod.pumpbt.core.PumpEvents
 import tk.glucodata.mod.pumpbt.core.PumpEventsResult
+import java.io.File
 import java.time.ZoneId
 
 /** What the source asks the notifier (part B2c) to tell the person. */
@@ -61,8 +70,13 @@ internal data class PumpBtSourceState(
     val link: PumpBtLinkState = PumpBtLinkState(),
     /** The pump's address is among the phone's bonded devices; null - not known (Bluetooth off, no permission, no address). */
     val pumpBonded: Boolean? = null,
-    /** "Paired" is set, but the phone no longer has the pump among its bonded devices: pair again (the window advises). */
+    /**
+     * "Paired" is set, but the phone no longer has the pump among its bonded devices: pair again (the window advises,
+     * by this mark only). Cleared by every complete handshake, checked again when a bond changes.
+     */
     val bondLost: Boolean = false,
+    /** The link journal file holds detailed lines (serial number, addresses, answers) - until it is cleared or made anew. */
+    val journalHasDetail: Boolean = false,
     /** The last cycle the source got (phone clock) and whether it lacked the serial number (then nothing was kept). */
     val lastCycleAtMs: Long? = null,
     val lastCycleNoSerial: Boolean = false,
@@ -122,13 +136,25 @@ internal object PumpBtSource {
     private val _state = MutableStateFlow(PumpBtSourceState())
     val state: StateFlow<PumpBtSourceState> = _state.asStateFlow()
 
-    /** Set by the notifier (part B2c); called off the main thread. */
+    /**
+     * Set by the notifier (part B2c) before [init]; called off the main thread. null - nobody to tell: nothing is
+     * marked as told (critic B2a, C-3).
+     */
     @Volatile
-    internal var alert: (Context, PumpBtAlert) -> Unit = { _, _ -> }
+    internal var alert: ((Context, PumpBtAlert) -> Unit)? = null
 
     /** Upstream's sensor Bluetooth switch; tests put their own (the native library is not there). */
     @Volatile
     internal var sensorBluetooth: () -> Boolean = { runCatching { Natives.getusebluetooth() }.getOrDefault(true) }
+
+    /** The journal intake; tests put one that throws (an exception from the intake itself). */
+    @Volatile
+    internal var intake: suspend (Context, List<ClEvent>, PumpNow?, Long) -> IntakeResult =
+        { c, e, p, n -> CareLinkIntake.accept(c, IntakeSource.BLUETOOTH, e, p, n) }
+
+    /** Saves the history memory; tests put one that fails. */
+    @Volatile
+    internal var saveMemory: (PumpBtHistoryStore, PumpHistoryMemory) -> Unit = { s, m -> s.save(m) }
 
     /** The phone's time zone for pump-local times; tests put their own. */
     @Volatile
@@ -150,6 +176,17 @@ internal object PumpBtSource {
     /** The memory as last saved (under [cycleLock]); null - not loaded yet. */
     @Volatile private var memory: PumpHistoryMemory? = null
 
+    /** The memory in [memory] is newer than its file (a mended enable moment whose save failed): saved again. */
+    @Volatile private var unsaved = false
+
+    /** The link's last published stage: a complete handshake clears the lost bond. */
+    @Volatile private var lastStage: PumpBtStage? = null
+
+    /** A complete handshake since the last time a bond of the pump went away (point 8). */
+    @Volatile private var bondTrusted = false
+
+    private var bondReceiver: BroadcastReceiver? = null
+
     /** [PumpHistoryRules.nextFrom] of the memory, after every save: what the link asks for. */
     @Volatile private var nextFrom: Long? = null
 
@@ -170,29 +207,52 @@ internal object PumpBtSource {
 
     /**
      * The process started (from the starter after Application.onCreate, part B2c) or the trial window opened:
-     * loads the memory and, with the source on, starts the link waiting for the paired pump. Again - nothing new. The
-     * job is for tests.
+     * loads the memory, checks the bond and, with the source on, starts the link waiting for the paired pump - only
+     * when it is not running: a running link (a pairing from the window, a turned screen) is not touched (critic B2a,
+     * C-1). Again - nothing new. The job is for tests.
      */
     fun init(context: Context): Job {
         val c = attach(context)
-        _state.update { it.copy(enabled = PumpSourceSwitch.bluetoothOn(c), sensorBluetooth = sensorBluetooth(), verbose = store(c).verbose) }
+        val s = store(c)
+        // a journal file made anew holds no detailed lines (the journal keeps its file at this path)
+        if (s.journalHasDetail && !s.verbose && !journalFile(c).exists()) s.journalHasDetail = false
+        if (s.verbose) s.journalHasDetail = true
+        _state.update {
+            it.copy(enabled = PumpSourceSwitch.bluetoothOn(c), sensorBluetooth = sensorBluetooth(), verbose = s.verbose, journalHasDetail = s.journalHasDetail)
+        }
+        watchBonds(c)
         return scope.launch {
             try {
                 cycleLock.withLock {
                     memoryLocked(c)
                     if (memory?.backfill == BackfillState.WAITING) refreshCardLocked(c)
+                    checkBondedLocked(c)
                 }
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 journal("source: history memory not loaded (${t.javaClass.simpleName})")
             }
             onMain {
+                if (link?.isRunning == true) return@onMain
                 // the phone's name of variant B, when the process died while it was changed
-                if (link?.isRunning != true) PumpBtAdapterName.restore(c, store(c)) { journal(PumpLinkRules.hideQuoted(it)) }
-                if (PumpSourceSwitch.bluetoothOn(c)) {
-                    checkBonded(c)
-                    startLinkNow(c, pair = false)
-                }
+                PumpBtAdapterName.restore(c, store(c)) { journal(PumpLinkRules.hideQuoted(it)) }
+                if (PumpSourceSwitch.bluetoothOn(c)) startLinkNow(c, pair = false)
+            }
+        }
+    }
+
+    /**
+     * "Paired" against the phone's bonded devices again (the window opened or came back; after every complete
+     * handshake): the "phone forgot the pump" mark goes as soon as the bond is there. The job is for tests.
+     */
+    fun recheckBond(context: Context): Job {
+        val c = attach(context)
+        return scope.launch {
+            try {
+                cycleLock.withLock { checkBondedLocked(c) }
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                journal("source: bond not checked (${t.javaClass.simpleName})")
             }
         }
     }
@@ -221,12 +281,13 @@ internal object PumpBtSource {
                     }
                     PumpSourceSwitch.set(c, true, now)
                     publishMemory()
+                    checkBondedLocked(c)
                 }
                 val on = PumpSourceSwitch.bluetoothOn(c)
                 _state.update { it.copy(enabled = on) }
+                // a quick "off" in between: the switch decides on the main thread (critic B2a, N-4)
                 if (on) onMain {
-                    checkBonded(c)
-                    startLinkNow(c, pair = false)
+                    if (PumpSourceSwitch.bluetoothOn(c) && link?.isRunning != true) startLinkNow(c, pair = false)
                 }
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
@@ -262,8 +323,9 @@ internal object PumpBtSource {
                     }
                 }
                 journal("source off: basal closed, active insulin off the plate")
-                _state.update { it.copy(enabled = false, card = null, warnings = emptySet()) }
-                onMain { link?.stop() }
+                _state.update { it.copy(enabled = PumpSourceSwitch.bluetoothOn(c), card = null, warnings = emptySet()) }
+                // a quick "on" in between keeps its link (critic B2a, N-4)
+                onMain { if (!PumpSourceSwitch.bluetoothOn(c)) link?.stop() }
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 journal("source: not turned off fully (${t.javaClass.simpleName})")
@@ -323,10 +385,23 @@ internal object PumpBtSource {
     /** The detailed link journal (decision 13), off by default. */
     fun setVerbose(context: Context, on: Boolean) {
         val c = attach(context)
-        store(c).verbose = on
+        val s = store(c)
+        s.verbose = on
+        if (on) s.journalHasDetail = true
         journal("detailed journal " + if (on) "on" else "off")
-        _state.update { it.copy(verbose = on) }
+        _state.update { it.copy(verbose = on, journalHasDetail = s.journalHasDetail) }
     }
+
+    /** The link journal file was emptied: no detailed lines in it any more (unless the detailed journal is on). */
+    fun journalCleared(context: Context) {
+        val c = attach(context)
+        val s = store(c)
+        s.journalHasDetail = s.verbose
+        _state.update { it.copy(journalHasDetail = s.journalHasDetail) }
+    }
+
+    /** The journal's file (PumpBtJournal keeps it here): missing - made anew. */
+    private fun journalFile(c: Context) = File(File(c.filesDir, PumpBtStore.DIR), "journal.txt")
 
     // MARK: - One cycle
 
@@ -399,7 +474,7 @@ internal object PumpBtSource {
         publishMemory()
 
         val result = try {
-            CareLinkIntake.accept(c, IntakeSource.BLUETOOTH, plan.toWriter, PumpBtBridge.toPumpNow(cycle), now)
+            intake(c, plan.toWriter, PumpBtBridge.toPumpNow(cycle), now)
         } catch (t: Throwable) {
             // the outcome is unknown, a cancellation too: nothing is let go, no markAccepted (contract 3.2, critic B1, N2)
             journal("source: journal intake ended with ${t.javaClass.simpleName} - the records stay")
@@ -465,7 +540,7 @@ internal object PumpBtSource {
         }.mapNotNull(::key).toSet()
         val s = store(c)
         val before = s.alerts
-        val (alerts, after) = PumpBtAlertRules.decide(
+        val (alerts, decided) = PumpBtAlertRules.decide(
             before,
             unknownTypes = events.unknownTypes,
             unparsedTypes = events.unparsed.map { it.type }.filter { it in DOSE_TYPES }.toSet(),
@@ -475,10 +550,11 @@ internal object PumpBtSource {
             drift = if (!applied.firstReadComplete || m.reference == null) null else PumpWarning.CLOCK_DRIFT in plan.warnings,
             nowMs = nowMs,
         )
-        if (after != before) s.alerts = after
         val unknownNew = alerts.filter { it.kind == PumpBtAlertKind.UNKNOWN_RECORD }.mapNotNull { it.recordType }
         if (unknownNew.isNotEmpty()) journal("source: unknown record types " + unknownNew.joinToString { "0x%04X".format(it) })
-        for (a in alerts) sendAlert(c, a)
+        val failed = alerts.filterNot { sendAlert(c, it) }
+        val after = PumpBtAlertRules.keepUndelivered(before, decided, failed)
+        if (after != before) s.alerts = after
         if (m.backfill == BackfillState.WAITING && applied.memory.backfill != BackfillState.WAITING) {
             sendAlert(c, PumpBtAlert(PumpBtAlertKind.CONFIRM_BACKFILL))
         }
@@ -598,7 +674,8 @@ internal object PumpBtSource {
                         try {
                             acceptCycle(c, cycle)
                         } catch (t: Throwable) {
-                            if (t is CancellationException) throw t
+                            // only the queue's own end stops it; a cancellation from inside one cycle does not (critic B2a, N-1)
+                            if (t is CancellationException && !isActive) throw t
                             journal("source: cycle not taken (${t.javaClass.simpleName})")
                         }
                     }
@@ -616,7 +693,10 @@ internal object PumpBtSource {
      * must not move at every start.
      */
     private suspend fun memoryLocked(c: Context): PumpHistoryMemory {
-        memory?.let { return it }
+        memory?.let { m ->
+            if (unsaved) saveLocked(c, m)
+            return memory ?: m
+        }
         val hs = historyStore ?: PumpBtHistoryStore(c).also { historyStore = it }
         var m = hs.load()
         val failed = hs.loadFailed
@@ -634,7 +714,13 @@ internal object PumpBtSource {
             }
             if (at != null) {
                 m = PumpHistoryRules.enable(m, at, PumpBtBridge.boundary(c, at))
-                if (saveLocked(c, m)) journal("source: enable moment set again to ${PumpBtJournal.fullDate(at)} (memory and switch were out of step)")
+                journal("source: enable moment set again to ${PumpBtJournal.fullDate(at)} (memory and switch were out of step)")
+                if (!saveLocked(c, m)) {
+                    // kept for this process all the same, saved with the next save (critic B2a, C-2)
+                    memory = m
+                    nextFrom = PumpHistoryRules.nextFrom(m)
+                    unsaved = true
+                }
             }
         }
         _state.update { it.copy(memoryLoadFailed = failed) }
@@ -646,9 +732,10 @@ internal object PumpBtSource {
     private fun saveLocked(c: Context, m: PumpHistoryMemory): Boolean {
         val hs = historyStore ?: PumpBtHistoryStore(c).also { historyStore = it }
         return try {
-            hs.save(m)
+            saveMemory(hs, m)
             memory = m
             nextFrom = PumpHistoryRules.nextFrom(m)
+            unsaved = false
             true
         } catch (t: Throwable) {
             journal("source: history memory not saved (${t.javaClass.simpleName}) - this cycle stops here")
@@ -676,8 +763,7 @@ internal object PumpBtSource {
 
     /** What the link asks at every history read. */
     private fun historyFrom(c: Context): Long? {
-        if (!PumpSourceSwitch.bluetoothOn(c)) return trialSeq?.plus(1)
-        val n = nextFrom
+        val n = if (PumpSourceSwitch.bluetoothOn(c)) nextFrom else trialSeq?.plus(1)
         lastIssuedNull = n == null
         return n
     }
@@ -701,6 +787,9 @@ internal object PumpBtSource {
             publish = { ls ->
                 _state.update { it.copy(link = ls) }
                 onLinkState?.invoke(ls)
+                val before = lastStage
+                lastStage = ls.stage
+                if (PumpBtAlertRules.handshakeDone(before, ls.stage)) handshakeDone(c)
             },
             historyFrom = { historyFrom(c) },
             onCycle = { cycle -> cycles?.trySend(cycle) },
@@ -714,34 +803,110 @@ internal object PumpBtSource {
     }
 
     /**
-     * "Paired" against the phone's bonded devices by the saved pump address (plan B2a, point 3; at [init] and
-     * [enable]): the flag is never cleared here; paired, but not bonded any more - [PumpBtSourceState.bondLost] and,
-     * once per such case, [PumpBtAlertKind.BOND_LOST]; bonded again - the mark goes ([PumpBtAlertRules.bond]). Nothing
-     * changes while it cannot be told (Bluetooth off, no permission, no address yet).
+     * "Paired" against the phone's bonded devices (plan B2a, point 3; at [init], [enable], [recheckBond]); under the
+     * source's mutex, like every write of what was told (critic B2a, N-3). The flag is never cleared here: paired, but
+     * not bonded - [PumpBtSourceState.bondLost] and, with the source on and once per such case, [PumpBtAlertKind.BOND_LOST];
+     * bonded again - the mark goes ([PumpBtAlertRules.bond]). Not found by the saved address counts as lost only when no
+     * bonded device looks like a pump (the saved address may be a random one; critic B2a, C-4). Nothing changes while it
+     * cannot be told (Bluetooth off, no permission, no address yet).
      */
     @SuppressLint("MissingPermission")
-    private fun checkBonded(c: Context) {
+    private fun checkBondedLocked(c: Context) {
         val s = store(c)
-        val address = s.pumpAddress
         val bonded: Boolean? = try {
             val adapter = (c.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
-            if (address.isEmpty() || adapter == null || !adapter.isEnabled) null
-            else adapter.bondedDevices?.any { it.address.equals(address, ignoreCase = true) }
+            if (adapter == null || !adapter.isEnabled) null
+            else PumpBtAlertRules.bondedFrom(s.pumpAddress, adapter.bondedDevices?.map { d ->
+                d.address to try {
+                    d.name
+                } catch (_: SecurityException) {
+                    null
+                }
+            } ?: emptyList())
         } catch (_: SecurityException) {
             null
         } catch (_: Exception) {
             null
         }
+        // since a complete handshake the bond is there, whatever the list says, until a bond of the pump goes away
+        applyBond(c, s.paired, PumpBtAlertRules.bondedAfterHandshake(bonded, bondTrusted))
+    }
+
+    /** [checkBondedLocked] after the phone was asked: [bonded] - null when it could not be told. */
+    private fun applyBond(c: Context, paired: Boolean, bonded: Boolean?) {
+        val s = store(c)
         val before = s.alerts
-        val check = PumpBtAlertRules.bond(s.paired, bonded, before.bondLostTold)
-        if (check.told != before.bondLostTold) s.alerts = before.copy(bondLostTold = check.told)
+        val check = PumpBtAlertRules.bond(paired, bonded, before.bondLostTold)
+        var told = check.told
         if (check.alert) {
             journal("the phone no longer has the paired pump among its bonded devices - pairing needed")
-            sendAlert(c, PumpBtAlert(PumpBtAlertKind.BOND_LOST))
+            if (!PumpSourceSwitch.bluetoothOn(c) || !sendAlert(c, PumpBtAlert(PumpBtAlertKind.BOND_LOST))) told = before.bondLostTold
         } else if (check.lost == false && before.bondLostTold) {
             journal("the paired pump is among the phone's bonded devices again")
         }
+        if (told != before.bondLostTold) s.alerts = before.copy(bondLostTold = told)
         _state.update { it.copy(pumpBonded = bonded, bondLost = check.lost ?: it.bondLost) }
+    }
+
+    internal suspend fun applyBondForTest(context: Context, paired: Boolean, bonded: Boolean?) {
+        val c = attach(context)
+        cycleLock.withLock { applyBond(c, paired, bonded) }
+    }
+
+    /**
+     * A complete handshake: the pump is paired - the "phone forgot the pump" mark goes at once, and until a bond of the
+     * pump goes away (bond state "none") a check that does not find it does not bring the mark back (point 8). The job
+     * is for tests.
+     */
+    internal fun handshakeDone(context: Context): Job {
+        val c = attach(context)
+        bondTrusted = true
+        return scope.launch {
+            try {
+                cycleLock.withLock { applyBond(c, store(c).paired, true) }
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                journal("source: bond not marked after the handshake (${t.javaClass.simpleName})")
+            }
+        }
+    }
+
+    /** A bond of the pump went away (bond state "none"): checks find the truth again. Tests. */
+    internal fun bondWentAway() {
+        bondTrusted = false
+    }
+
+    /** Bond changes of the phone: checked again (system action, registered like upstream's receivers). */
+    private fun watchBonds(c: Context) {
+        if (bondReceiver != null) return
+        val r = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action != BluetoothDevice.ACTION_BOND_STATE_CHANGED) return
+                val state = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR)
+                if (state == BluetoothDevice.BOND_NONE) {
+                    val device: BluetoothDevice? = try {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                    } catch (_: Throwable) {
+                        null
+                    }
+                    val name = try {
+                        device?.name
+                    } catch (_: SecurityException) {
+                        null
+                    }
+                    val address = store(c).pumpAddress
+                    if (device == null || device.address.equals(address, ignoreCase = true) || PumpLinkRules.pumpLikeName(name)) bondTrusted = false
+                }
+                if (state == BluetoothDevice.BOND_NONE || state == BluetoothDevice.BOND_BONDED) recheckBond(c)
+            }
+        }
+        try {
+            c.registerReceiver(r, IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED))
+            bondReceiver = r
+        } catch (t: Throwable) {
+            PumpBtLog.w("bond receiver not registered (${t.javaClass.simpleName})")
+        }
     }
 
     private fun writeCarbs(c: Context): Boolean = try {
@@ -750,11 +915,15 @@ internal object PumpBtSource {
         true
     }
 
-    private fun sendAlert(c: Context, a: PumpBtAlert) {
-        try {
-            alert(c, a)
+    /** true - handed to the notifier without an exception; false - no notifier, or it threw (then not marked as told). */
+    private fun sendAlert(c: Context, a: PumpBtAlert): Boolean {
+        val to = alert ?: return false
+        return try {
+            to(c, a)
+            true
         } catch (t: Throwable) {
             PumpBtLog.w("pump alert not shown (${t.javaClass.simpleName})")
+            false
         }
     }
 
@@ -789,21 +958,29 @@ internal object PumpBtSource {
 
     /** Back to the start (tests): the memory is read from its file again, as after the death of the process. */
     internal fun resetForTest() {
-        main.post { link?.stop() }
+        val l = link
+        main.post { l?.stop() }
         link = null
         key = null
         linkKeyHex = null
         memory = null
+        unsaved = false
         nextFrom = null
         trialSeq = null
         lastIssuedNull = true
         lastWarnings = emptySet()
         historyStore = null
+        store?.awaitWrites()
         store = null
         app = null
         cycles?.close()
         cycles = null
-        alert = { _, _ -> }
+        alert = null
+        intake = { c, e, p, n -> CareLinkIntake.accept(c, IntakeSource.BLUETOOTH, e, p, n) }
+        saveMemory = { st, m -> st.save(m) }
+        lastStage = null
+        bondTrusted = false
+        bondReceiver = null
         sensorBluetooth = { runCatching { Natives.getusebluetooth() }.getOrDefault(true) }
         zone = { ZoneId.systemDefault() }
         onLinkState = null
@@ -811,6 +988,12 @@ internal object PumpBtSource {
     }
 
     internal fun historyFromForTest(context: Context): Long? = historyFrom(attach(context))
+
+    /** A cycle through the link's queue (tests). */
+    internal fun offerCycleForTest(context: Context, cycle: PumpCycle) {
+        attach(context)
+        cycles?.trySend(cycle)
+    }
 }
 
 /**
@@ -822,8 +1005,6 @@ internal data class PumpBtAlertMemory(
     val unparsedTypes: Set<Int> = emptySet(),
     val noResultKeys: Set<String> = emptySet(),
     val driftAtMs: Long? = null,
-    /** The drift was gone (or never told) since [driftAtMs]: a new drift may be told. */
-    val driftArmed: Boolean = true,
     /** "The phone forgot the pump" was told for the current loss of the bond. */
     val bondLostTold: Boolean = false,
 )
@@ -840,13 +1021,49 @@ internal object PumpBtAlertRules {
     /**
      * The notifications of one cycle and the memory after it: a type once ([unknownTypes], [unparsedTypes]); a bolus
      * key once ([noResultKeys] - boluses running too long now; keys no longer among [bolusKeys] are forgotten); the
-     * drift ([drift]: true - there, false - gone, null - not known this cycle) when armed and a day after the last one.
+     * drift ([drift]: true - there, false - gone, null - not known this cycle) once a day while it is there.
      */
     /**
      * The bond against "paired": [bonded] - the saved address among the phone's bonded devices (null - not known).
      * Paired and not bonded - lost, told once per loss; bonded - not lost, the next loss is told again; never paired -
      * not lost.
      */
+    /**
+     * [after] ([decide]) without what was not delivered ([failed]): a type, a bolus or the drift not told stays untold,
+     * so the next cycle tries again (critic B2a, C-3).
+     */
+    fun keepUndelivered(before: PumpBtAlertMemory, after: PumpBtAlertMemory, failed: List<PumpBtAlert>): PumpBtAlertMemory {
+        if (failed.isEmpty()) return after
+        var m = after
+        for (a in failed) {
+            m = when (a.kind) {
+                PumpBtAlertKind.UNKNOWN_RECORD -> if (a.recordType in before.unknownTypes) m else m.copy(unknownTypes = m.unknownTypes - setOfNotNull(a.recordType))
+                PumpBtAlertKind.UNPARSED_BOLUS -> if (a.recordType in before.unparsedTypes) m else m.copy(unparsedTypes = m.unparsedTypes - setOfNotNull(a.recordType))
+                PumpBtAlertKind.NO_RESULT_BOLUS -> m.copy(noResultKeys = m.noResultKeys intersect before.noResultKeys)
+                PumpBtAlertKind.CLOCK_DRIFT -> m.copy(driftAtMs = before.driftAtMs)
+                else -> m
+            }
+        }
+        return m
+    }
+
+    /**
+     * Is the pump bonded: [address] (saved at the handshake) among [bonded] (address, name), or - not found by it - any
+     * bonded device with a pump-like name (the saved address may be a random one, the bond keeps the identity address;
+     * critic B2a, C-4). null - no address yet (cannot be told).
+     */
+    fun bondedFrom(address: String, bonded: List<Pair<String, String?>>): Boolean? {
+        if (address.isEmpty()) return null
+        return bonded.any { it.first.equals(address, ignoreCase = true) } || bonded.any { PumpLinkRules.pumpLikeName(it.second) }
+    }
+
+    /** A check of the bonded devices ([bonded]) after a complete handshake ([trusted]): "not found" counts as bonded. */
+    fun bondedAfterHandshake(bonded: Boolean?, trusted: Boolean): Boolean? = if (bonded == false && trusted) true else bonded
+
+    /** The link reached reading right after its handshake (from HANDSHAKE): a complete handshake. */
+    fun handshakeDone(before: PumpBtStage?, now: PumpBtStage): Boolean =
+        before == PumpBtStage.HANDSHAKE && (now == PumpBtStage.READING || now == PumpBtStage.DATA_READ)
+
     fun bond(paired: Boolean, bonded: Boolean?, told: Boolean): BondCheck = when {
         bonded == null -> BondCheck(lost = null, alert = false, told = told)
         bonded -> BondCheck(lost = false, alert = false, told = false)
@@ -863,22 +1080,16 @@ internal object PumpBtAlertRules {
         for (t in unparsedTypes.sorted()) if (t !in m.unparsedTypes) out += PumpBtAlert(PumpBtAlertKind.UNPARSED_BOLUS, t)
         if ((noResultKeys - m.noResultKeys).isNotEmpty()) out += PumpBtAlert(PumpBtAlertKind.NO_RESULT_BOLUS)
         var driftAt = m.driftAtMs
-        var armed = m.driftArmed
-        when (drift) {
-            true -> if (armed && (driftAt == null || nowMs - driftAt >= DRIFT_REPEAT_MS)) {
-                out += PumpBtAlert(PumpBtAlertKind.CLOCK_DRIFT)
-                driftAt = nowMs
-                armed = false
-            }
-            false -> armed = true
-            null -> {}
+        // once a day while it lasts (critic B2a, N-5)
+        if (drift == true && (driftAt == null || nowMs - driftAt >= DRIFT_REPEAT_MS)) {
+            out += PumpBtAlert(PumpBtAlertKind.CLOCK_DRIFT)
+            driftAt = nowMs
         }
         val after = PumpBtAlertMemory(
             unknownTypes = m.unknownTypes + unknownTypes,
             unparsedTypes = m.unparsedTypes + unparsedTypes,
             noResultKeys = (m.noResultKeys intersect bolusKeys) + noResultKeys,
             driftAtMs = driftAt,
-            driftArmed = armed,
             bondLostTold = m.bondLostTold,
         )
         return out to after

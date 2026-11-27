@@ -35,14 +35,15 @@ internal object PumpBtTrial {
     fun onScreenOpened(context: Context) {
         val c = context.applicationContext
         app = c
+        // init leaves a running link alone (a pairing from this window, a turned screen)
         PumpBtSource.init(c)
         val s = PumpBtSource.store(c)
         journal("trial screen opened ${PumpBtJournal.fullDate()}, Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), ${Build.MANUFACTURER} ${Build.MODEL}")
-        PumpBtSource.onLinkState = { ls -> _state.update { it.copy(link = ls) } }
+        PumpBtSource.onLinkState = { ls -> _state.update { it.copy(link = ls, paired = s.paired) } }
         _state.update {
             it.copy(
                 link = PumpBtSource.state.value.link, variant = s.variant, advertisedName = s.advertisedName,
-                keyCrc = PumpBtSource.key(c)?.crc,
+                keyCrc = PumpBtSource.key(c)?.crc, paired = s.paired,
             )
         }
         refreshChecks(c)
@@ -87,6 +88,8 @@ internal object PumpBtTrial {
             journal("start refused: ${blockers.joinToString { it.name.lowercase() }}")
             return
         }
+        // a pairing's wait time and its failures count from here (a running link keeps an older failure mark)
+        _state.update { it.copy(pairingStartedAtMs = if (pair) System.currentTimeMillis() else null) }
         PumpBtSource.startLink(c, pair)
     }
 
@@ -168,6 +171,7 @@ internal object PumpBtTrial {
     /** Empties the journal and deletes its shared copies (the screen asks first). */
     fun clearJournal(context: Context) {
         PumpBtJournal.clear(exportsDir(context))
+        PumpBtSource.journalCleared(context)
     }
 
     /**

@@ -31,6 +31,8 @@ internal data class PumpBtValues(
     /** true once the active basal answer came: then "Temp basal: none" is known, not just unread. */
     val basalRead: Boolean = false,
     val tempBasalUnitsPerHour: Double? = null,
+    /** A temp basal set in percent (filled by the link later; null - none or given in units per hour). */
+    val tempBasalPercent: Int? = null,
     val tempBasalRemainingMin: Int? = null,
     val history: List<PumpBtHistoryLine> = emptyList(),
 )
@@ -105,6 +107,13 @@ internal data class PumpBtUiState(
     val keyFailureCode: Int = 0,
     val variant: PumpBtNameVariant = PumpBtNameVariant.A,
     val advertisedName: String = "",
+    /** [PumpBtStore.paired]: the pump completed a pairing with this phone once (refreshed with every link state). */
+    val paired: Boolean = false,
+    /**
+     * When this window last started a pairing (process memory; only the window starts one): the wait time counts from
+     * it, and a failed pairing older than it is not this pairing's (a running link keeps its failure mark). null - none.
+     */
+    val pairingStartedAtMs: Long? = null,
 ) {
     val blockers: List<PumpBtBlocker>
         get() = PumpBtReadiness.blockers(hasBluetooth, bluetoothOn, permissionsGranted, advertisingSupported, keyCrc != null)
@@ -122,4 +131,211 @@ internal object PumpBtReadiness {
             if (hasBluetooth && on && advertising == false) add(PumpBtBlocker.NO_ADVERTISING)
             if (!key) add(PumpBtBlocker.NO_KEY)
         }
+}
+
+/** A counter of the history memory as the window lists it (plan B2b), in the window's order. */
+internal enum class PumpBtCount { UNPARSED, GAPS, UNPAIRED_MEALS, NO_RESULT, FUTURE, HELD, UNDATED }
+
+/** Why "Permanent operation" cannot be turned on now: the first thing to do ([PumpBtWindow.turnOnHint]). */
+internal enum class PumpBtTurnOnHint { NO_BLUETOOTH, BLUETOOTH_OFF, NO_ADVERTISING, NO_KEY, PAIRING }
+
+/** What became of the card's last answer ([PumpBtWindow.answer]). */
+internal enum class PumpBtAnswer {
+    /** Nothing pressed (or the answer was taken: the card is gone). */
+    NONE,
+    /** Pressed, the source has not answered yet: both buttons wait. */
+    WAITING,
+    /** "Write" was not taken: the source's list changed before it got there (it shows the card anew). */
+    REJECTED,
+    /** No answer within [PumpBtWindow.ANSWER_WAIT_MS] (a failed save, or the source busy): the buttons work again. */
+    NOT_TAKEN,
+}
+
+/** What the window lets the person press ([PumpBtWindow.controls]). */
+internal data class PumpBtControls(
+    /** The "Permanent operation" switch may be turned on (turning off is always possible). */
+    val canTurnOn: Boolean,
+    /** The trial's own buttons (start pairing, wait, stop) and the name variant are shown: only with the source off. */
+    val trialButtons: Boolean,
+    val canStart: Boolean,
+    val canStop: Boolean,
+    val canReadAgain: Boolean,
+    val variantEditable: Boolean,
+    /** With the source on: a pairing button (the pump never paired, or the phone forgot it). */
+    val pairOffered: Boolean,
+    /** The pairing button is pressable: everything there and no pairing going on. */
+    val canPair: Boolean,
+)
+
+/**
+ * JugglucoNGmod, pump over Bluetooth (series part 2, part B2b): what the trial window shows of [PumpBtSourceState] and
+ * which buttons it allows. Pure functions (tested without Android).
+ *
+ * With "Permanent operation" on, the trial's Start and Stop are not offered: Stop would end the link and the watchdog
+ * would start it again - the link stops only by turning permanent operation off.
+ */
+internal object PumpBtWindow {
+
+    /** How long the card's buttons wait for the source's answer before they work again (critic B2b, N2). */
+    const val ANSWER_WAIT_MS = 10_000L
+
+    /** Stages at which the pump is connected and the handshake went through: the bond works. */
+    private val LINK_UP = setOf(PumpBtStage.HANDSHAKE, PumpBtStage.READING, PumpBtStage.DATA_READ)
+
+    /**
+     * Stages that only a pairing has: a running link switched to pairing ("Pair again" with the source on) does not
+     * publish its pair mode, but its stage shows it (critic B2b, B1).
+     */
+    private val PAIRING_STAGES = setOf(PumpBtStage.ADVERTISING_PAIR, PumpBtStage.PAIRING)
+
+    /** Stages at which the phone waits for the pump to come for the pairing (the wait time is shown). */
+    private val PAIR_WAIT_STAGES = setOf(PumpBtStage.ADVERTISING_PAIR, PumpBtStage.WAITING)
+
+    private val WARNING_ORDER = listOf(
+        PumpWarning.CLOCK_DRIFT, PumpWarning.FUTURE_EVENT, PumpWarning.NO_RESULT_BOLUS, PumpWarning.HELD_BOLUS,
+        PumpWarning.UNPAIRED_MEAL,
+    )
+
+    fun linkUp(link: PumpBtLinkState): Boolean = link.running && link.stage in LINK_UP
+
+    /**
+     * A pairing is going on: the published pair mode (a link started for pairing) or a stage only a pairing has (a
+     * running link switched to pairing keeps `pairMode` false in its state). Everything in the window that depends on
+     * a pairing asks this.
+     */
+    fun pairing(link: PumpBtLinkState): Boolean = link.running && (link.pairMode || link.stage in PAIRING_STAGES)
+
+    /** Everything there for a start, or only the permissions missing (the press asks for them first). */
+    fun ready(ui: PumpBtUiState): Boolean = ui.blockers.all { it == PumpBtBlocker.NO_PERMISSION }
+
+    /**
+     * Why "Permanent operation" cannot be turned on now - the first thing to do; null - it can (or it is on). A pairing
+     * of the trial must end or be stopped first (critic B2b, C1): turning on would leave the phone waiting for a pump
+     * that is being paired.
+     */
+    fun turnOnHint(ui: PumpBtUiState, source: PumpBtSourceState): PumpBtTurnOnHint? {
+        if (source.enabled) return null
+        when (ui.blockers.firstOrNull { it != PumpBtBlocker.NO_PERMISSION }) {
+            PumpBtBlocker.NO_BLUETOOTH -> return PumpBtTurnOnHint.NO_BLUETOOTH
+            PumpBtBlocker.BLUETOOTH_OFF -> return PumpBtTurnOnHint.BLUETOOTH_OFF
+            PumpBtBlocker.NO_ADVERTISING -> return PumpBtTurnOnHint.NO_ADVERTISING
+            PumpBtBlocker.NO_KEY -> return PumpBtTurnOnHint.NO_KEY
+            PumpBtBlocker.NO_PERMISSION, null -> {}
+        }
+        return if (pairing(source.link)) PumpBtTurnOnHint.PAIRING else null
+    }
+
+    fun controls(ui: PumpBtUiState, source: PumpBtSourceState): PumpBtControls {
+        val on = source.enabled
+        val link = source.link
+        val ready = ready(ui)
+        // shown during a pairing too, but not pressable then
+        val pairOffered = on && (source.bondLost || (!ui.paired && !linkUp(link)))
+        return PumpBtControls(
+            canTurnOn = !on && turnOnHint(ui, source) == null,
+            trialButtons = !on,
+            canStart = !on && !link.running && ready,
+            canStop = !on && link.running,
+            canReadAgain = link.running,
+            variantEditable = !on && !link.running,
+            pairOffered = pairOffered,
+            canPair = pairOffered && ready && !pairing(link),
+        )
+    }
+
+    /**
+     * "The phone forgot the pump": with the source on, by the source's mark only (it is cleared by every complete
+     * handshake and checked again when the window comes back or a bond changes) - no guess from the link's stage.
+     */
+    fun bondAdvice(source: PumpBtSourceState): Boolean = source.enabled && source.bondLost
+
+    /**
+     * Decision 12: a pairing failed and the phone still advertises for pairing. A running link switched to pairing
+     * keeps the failure mark of an earlier pairing: only a failure since [pairingSinceMs] (when the window started
+     * this pairing) counts; without it, only with the published pair mode (a fresh start cleared the mark).
+     */
+    fun pairingAdvice(link: PumpBtLinkState, pairingSinceMs: Long?): Boolean {
+        if (!pairing(link)) return false
+        val failedAt = link.pairingFailedAtMs ?: return false
+        return if (pairingSinceMs != null) failedAt >= pairingSinceMs else link.pairMode
+    }
+
+    /** Decision 12: the phone waits for the pump to pair - the wait time is shown. */
+    fun pairWaitShown(link: PumpBtLinkState): Boolean = pairing(link) && link.stage in PAIR_WAIT_STAGES
+
+    /**
+     * The warning before "Share": while the journal file holds detailed lines (the source's mark, until the journal is
+     * cleared), not only while the detailed journal is on (critic B2b, C2).
+     */
+    fun shareWarning(source: PumpBtSourceState): Boolean = source.journalHasDetail || source.verbose
+
+    /** The first catch-up card: only with the source on (turning it on again starts a new catch-up; critic B2b, N1). */
+    fun card(source: PumpBtSourceState): BackfillCard? = source.card?.takeIf { source.enabled }
+
+    /** The non-zero counters, in the window's order. */
+    fun counts(c: PumpHistoryCounters): List<Pair<PumpBtCount, Long>> = listOf(
+        PumpBtCount.UNPARSED to c.unparsed.toLong(),
+        PumpBtCount.GAPS to c.gaps,
+        PumpBtCount.UNPAIRED_MEALS to c.unpairedMeals.toLong(),
+        PumpBtCount.NO_RESULT to c.noResultBoluses.toLong(),
+        PumpBtCount.FUTURE to c.futureEvents.toLong(),
+        PumpBtCount.HELD to c.heldBoluses.toLong(),
+        PumpBtCount.UNDATED to c.undated.toLong(),
+    ).filter { it.second > 0 }
+
+    /** The warnings in a fixed order. */
+    fun warnings(w: Set<PumpWarning>): List<PumpWarning> = WARNING_ORDER.filter { it in w }
+
+    /** The card's list as the window shows it: by time. */
+    fun cardItems(card: BackfillCard): List<BackfillItem> = card.toWrite.sortedWith(compareBy({ it.atMs }, { it.key }))
+
+    /** "Write" passes the keys of exactly the list shown (decision 5). */
+    fun shownKeys(items: List<BackfillItem>): List<String> = items.map { it.key }
+
+    /**
+     * The source's card no longer lists what the window shows: the window keeps the shown list until the person asks
+     * for the new one (critic B2b, C3).
+     */
+    fun listChanged(shown: List<BackfillItem>, current: List<BackfillItem>): Boolean = shown != current
+
+    /** "Write" is pressable: for the list shown only, while it is still the source's list, and no answer pending. */
+    fun canWrite(shown: List<BackfillItem>, current: List<BackfillItem>, answer: PumpBtAnswer): Boolean =
+        !listChanged(shown, current) && answer != PumpBtAnswer.WAITING
+
+    /**
+     * What became of the card's answer pressed at [pendingAtMs] (null - none pending): [writeKeys] - the keys "Write"
+     * passed (null - "Do not write old ones"). The source takes "Write" only for its own list; another list - it shows
+     * the card anew, so the card's keys differ from those passed: [PumpBtAnswer.REJECTED]. A taken answer ends the card
+     * (the window's card section is gone). No answer within [ANSWER_WAIT_MS] - [PumpBtAnswer.NOT_TAKEN].
+     */
+    fun answer(pendingAtMs: Long?, writeKeys: List<String>?, current: List<BackfillItem>, nowMs: Long): PumpBtAnswer {
+        if (pendingAtMs == null) return PumpBtAnswer.NONE
+        if (writeKeys != null && writeKeys.toSet() != shownKeys(current).toSet()) return PumpBtAnswer.REJECTED
+        return if (nowMs - pendingAtMs >= ANSWER_WAIT_MS) PumpBtAnswer.NOT_TAKEN else PumpBtAnswer.WAITING
+    }
+
+    /** The shown list in a form the window's saved state keeps (a turned screen): keys, times, doses, grams (NaN - none). */
+    fun packItems(items: List<BackfillItem>): List<Any> = listOf(
+        ArrayList(items.map { it.key }),
+        LongArray(items.size) { items[it].atMs },
+        DoubleArray(items.size) { items[it].units ?: Double.NaN },
+        DoubleArray(items.size) { items[it].grams ?: Double.NaN },
+    )
+
+    /** [packItems] back; anything else - null. */
+    fun unpackItems(packed: List<Any?>): List<BackfillItem>? {
+        if (packed.size != 4) return null
+        val keys = (packed[0] as? List<*>)?.map { it as? String ?: return null } ?: return null
+        val at = packed[1] as? LongArray ?: return null
+        val units = packed[2] as? DoubleArray ?: return null
+        val grams = packed[3] as? DoubleArray ?: return null
+        if (at.size != keys.size || units.size != keys.size || grams.size != keys.size) return null
+        return keys.indices.map { i ->
+            BackfillItem(keys[i], at[i], units[i].takeUnless { it.isNaN() }, grams[i].takeUnless { it.isNaN() })
+        }
+    }
+
+    /** The data section (last reading, memory, counters): with the source on, or while it holds anything. */
+    fun dataShown(source: PumpBtSourceState): Boolean =
+        source.enabled || source.records > 0 || source.card != null || source.lastCycleAtMs != null
 }
