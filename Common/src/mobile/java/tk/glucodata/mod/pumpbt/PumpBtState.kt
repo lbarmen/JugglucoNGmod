@@ -34,6 +34,11 @@ internal data class PumpBtValues(
     /** A temp basal set in percent (filled by the link later; null - none or given in units per hour). */
     val tempBasalPercent: Int? = null,
     val tempBasalRemainingMin: Int? = null,
+    /**
+     * A temporary basal runs, but the window cannot show its value: the IDD type when it is neither 0x33 (U/h) nor
+     * 0x3C (percent), or the value is special (no number); null - no temporary basal, or one shown in its unit.
+     */
+    val tempBasalType: Int? = null,
     val history: List<PumpBtHistoryLine> = emptyList(),
 )
 
@@ -90,8 +95,45 @@ internal object PumpBtProgress {
     fun addReturn(returns: List<PumpBtReturn>, new: PumpBtReturn): List<PumpBtReturn> = (listOf(new) + returns).take(MAX_RETURNS)
 }
 
-/** Why the trial cannot start. */
+/**
+ * Why the trial cannot start. [NO_KEY] no longer stops "Start pairing" (the press downloads the key first, series
+ * brief, decision 11; [PumpBtWindow.ready]); it still stops turning "Permanent operation" on ([PumpBtWindow.turnOnHint]).
+ */
 internal enum class PumpBtBlocker { NO_BLUETOOTH, BLUETOOTH_OFF, NO_PERMISSION, NO_ADVERTISING, NO_KEY }
+
+/** The pairing wizard's step ([PumpBtWindow.wizardStep]); the window shows the wizard above everything else. */
+internal enum class PumpBtWizardStep {
+    /** The warnings before the first pairing are not accepted yet (decision 14). */
+    WARNINGS,
+
+    /** The phone is not ready: permissions, no Bluetooth, Bluetooth off, or no advertising. */
+    PHONE,
+
+    /** Everything there: "Start pairing". */
+    START,
+
+    /** "Start pairing" was pressed without a key: the key database is downloading, or it did not come ("Load from file"). */
+    KEY,
+
+    /** A pairing goes on (a failed one - [PumpBtWindow.pairingAdvice]; variant B as a fallback - [PumpBtTrial.tryOtherName]). */
+    PAIRING,
+
+    /** Paired, the source is off: offer "Permanent operation". */
+    PAIRED,
+
+    /** The source is on: no wizard ("Pair again" lives in the lost-bond card and in the diagnostics). */
+    NONE,
+}
+
+/** What a press of "Start pairing" (or the trial's "Wait for the pump") does ([PumpBtWindow.startAction]). */
+internal enum class PumpBtStartAction {
+    /** The phone is not ready (permissions are asked before the press): nothing. */
+    REFUSE,
+
+    /** No key database: download it first ([PumpBtKey.downloadChain]), then start. */
+    LOAD_KEY,
+    START,
+}
 
 /** Everything the trial screen shows. */
 internal data class PumpBtUiState(
@@ -114,12 +156,28 @@ internal data class PumpBtUiState(
      * it, and a failed pairing older than it is not this pairing's (a running link keeps its failure mark). null - none.
      */
     val pairingStartedAtMs: Long? = null,
+    /**
+     * The person accepted the warnings before the first pairing ([PumpBtStore.warningsAccepted]), or the pump paired
+     * with this phone once ([PumpBtStore.paired]: an owner never sees them).
+     */
+    val warningsAccepted: Boolean = false,
+    /**
+     * A start pressed without a key database, waiting for it: true - a pairing, false - waiting for the pump; null -
+     * none. The start goes on once a key is in place (downloaded, or from a file).
+     */
+    val pendingStart: Boolean? = null,
 ) {
     val blockers: List<PumpBtBlocker>
         get() = PumpBtReadiness.blockers(hasBluetooth, bluetoothOn, permissionsGranted, advertisingSupported, keyCrc != null)
 
-    /** Start buttons: everything there, or only the permissions missing (the start asks for them first). */
+    /**
+     * The trial's old rule (a key needed to start). The window's buttons follow [PumpBtWindow.controls], where the key
+     * no longer stops a start (decision 11).
+     */
     val canStart: Boolean get() = !link.running && blockers.all { it == PumpBtBlocker.NO_PERMISSION }
+
+    /** The wizard's KEY step: a start waits for the key database ([pendingStart]). */
+    val keyStep: Boolean get() = pendingStart != null
 }
 
 internal object PumpBtReadiness {
@@ -211,8 +269,47 @@ internal object PumpBtWindow {
      */
     fun pairing(link: PumpBtLinkState): Boolean = link.running && (link.pairMode || link.stage in PAIRING_STAGES)
 
-    /** Everything there for a start, or only the permissions missing (the press asks for them first). */
-    fun ready(ui: PumpBtUiState): Boolean = ui.blockers.all { it == PumpBtBlocker.NO_PERMISSION }
+    /** What the phone lacks for a start: the blockers without the key (the press downloads it first, decision 11). */
+    fun phoneBlockers(ui: PumpBtUiState): List<PumpBtBlocker> = ui.blockers.filter { it != PumpBtBlocker.NO_KEY }
+
+    /**
+     * Everything there for a start, or only the permissions missing (the press asks for them first). The key is not
+     * needed: the press downloads it first (decision 11).
+     */
+    fun ready(ui: PumpBtUiState): Boolean = phoneBlockers(ui).all { it == PumpBtBlocker.NO_PERMISSION }
+
+    /** What a start does when pressed (the permissions were asked before): refused, the key first, or the start. */
+    fun startAction(ui: PumpBtUiState, hasKey: Boolean): PumpBtStartAction = when {
+        phoneBlockers(ui).isNotEmpty() -> PumpBtStartAction.REFUSE
+        !hasKey -> PumpBtStartAction.LOAD_KEY
+        else -> PumpBtStartAction.START
+    }
+
+    /**
+     * The pairing wizard's step. With the source on - none. The warnings first, unless accepted or the pump paired
+     * once (read from the store at once: an owner sees no wizard flashing while the source starts). Then a pairing
+     * going on, a start waiting for the key, paired (offer "Permanent operation"), the phone not ready, the start.
+     */
+    fun wizardStep(ui: PumpBtUiState, source: PumpBtSourceState): PumpBtWizardStep = when {
+        source.enabled -> PumpBtWizardStep.NONE
+        !ui.warningsAccepted && !ui.paired -> PumpBtWizardStep.WARNINGS
+        pairing(source.link) -> PumpBtWizardStep.PAIRING
+        ui.keyStep -> PumpBtWizardStep.KEY
+        ui.paired -> PumpBtWizardStep.PAIRED
+        phoneBlockers(ui).isNotEmpty() -> PumpBtWizardStep.PHONE
+        else -> PumpBtWizardStep.START
+    }
+
+    /**
+     * Name variant after a link state: B is only a fallback for one pairing (series brief, finding 11) - once the
+     * handshake went through, back to A.
+     */
+    fun variantAfter(variant: PumpBtNameVariant, link: PumpBtLinkState): PumpBtNameVariant =
+        if (variant == PumpBtNameVariant.B && linkUp(link)) PumpBtNameVariant.A else variant
+
+    /** The variant a pairing starts with: "Pair again" with the source on always uses A (finding 11). */
+    fun variantForStart(variant: PumpBtNameVariant, sourceOn: Boolean): PumpBtNameVariant =
+        if (sourceOn) PumpBtNameVariant.A else variant
 
     /**
      * Why "Permanent operation" cannot be turned on now - the first thing to do; null - it can (or it is on). A pairing

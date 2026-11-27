@@ -16,22 +16,50 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
 /**
- * JugglucoNGmod, pump over Bluetooth (trial window): a thin layer over [PumpBtSource], which owns the link, the history
+ * JugglucoNGmod, pump over Bluetooth (pump window): a thin layer over [PumpBtSource], which owns the link, the history
  * memory and its number (series part 2, part B2a). Here only what the window shows besides the source - Bluetooth and
- * permission checks, the key database loading, the name variant, the journal's copy and clearing; the buttons go to the
- * source. Closing the window or turning the screen off does not end the link. All calls on the main thread.
+ * permission checks, the pairing wizard's warnings, the key database (downloaded by "Start pairing" when there is none,
+ * series brief, decision 11), the name variant (B only as a fallback of one pairing, finding 11), the journal's copy
+ * and clearing; the buttons go to the source. Closing the window or turning the screen off does not end the link. All
+ * calls on the main thread; the network off it.
  */
 internal object PumpBtTrial {
 
-    private val main = Handler(Looper.getMainLooper())
+    private val main by lazy { Handler(Looper.getMainLooper()) }
     private val _state = MutableStateFlow(PumpBtUiState())
     val state: StateFlow<PumpBtUiState> = _state.asStateFlow()
 
     private var app: Context? = null
 
-    private val journal: (String) -> Unit = { PumpBtJournal.add(it) }
+    /**
+     * What the window's actions need from Android, the network and the source; tests give their own ([resetForTest]).
+     * [offMain] runs blocking work (the network, a file) off the main thread, [onMain] brings its result back.
+     */
+    internal class Env(
+        val checkPhone: () -> Unit = { app?.let { refreshChecks(it) } },
+        val hasKey: () -> Boolean = { app?.let { PumpBtSource.key(it) } != null },
+        val download: (String) -> PumpBtKey.Result = { PumpBtKey.download(it) },
+        val offMain: (String, () -> Unit) -> Unit = { name, block -> Thread(block, name).start() },
+        val onMain: (() -> Unit) -> Unit = { block -> main.post(block) },
+        /** Saves a key database (throws when it is not saved) and hands it to the source for the next link start. */
+        val saveKey: (PumpBtKey.Result.Ok) -> Unit = { ok ->
+            app?.let { PumpBtKey.save(it, ok) }
+            PumpBtSource.keyLoaded(ok)
+        },
+        val startLink: (Boolean) -> Unit = { pair -> app?.let { PumpBtSource.startLink(it, pair) } },
+        val stopLink: () -> Unit = { PumpBtSource.stopLink() },
+        val linkRunning: () -> Boolean = { PumpBtSource.linkRunning },
+        val sourceOn: () -> Boolean = { PumpBtSource.state.value.enabled },
+        val store: () -> PumpBtStore? = { app?.let { PumpBtSource.store(it) } },
+        val journal: (String) -> Unit = { PumpBtJournal.add(it) },
+        val now: () -> Long = { System.currentTimeMillis() },
+    )
 
-    /** The trial window opened: the source is set up (idempotent; it gives back a changed phone name), nothing started. */
+    private var env = Env()
+
+    private fun journal(line: String) = env.journal(line)
+
+    /** The window opened: the source is set up (idempotent; it gives back a changed phone name), nothing started. */
     fun onScreenOpened(context: Context) {
         val c = context.applicationContext
         app = c
@@ -39,14 +67,35 @@ internal object PumpBtTrial {
         PumpBtSource.init(c)
         val s = PumpBtSource.store(c)
         journal("trial screen opened ${PumpBtJournal.fullDate()}, Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), ${Build.MANUFACTURER} ${Build.MODEL}")
-        PumpBtSource.onLinkState = { ls -> _state.update { it.copy(link = ls, paired = s.paired) } }
+        PumpBtSource.onLinkState = ::onLink
         _state.update {
             it.copy(
                 link = PumpBtSource.state.value.link, variant = s.variant, advertisedName = s.advertisedName,
                 keyCrc = PumpBtSource.key(c)?.crc, paired = s.paired,
+                // read at once: an owner sees no wizard while the source starts
+                warningsAccepted = s.warningsAccepted || s.paired,
             )
         }
         refreshChecks(c)
+    }
+
+    /**
+     * A link state: "paired" refreshed; once the handshake went through, name variant B goes back to A (finding 11;
+     * the phone's name came back already - [PumpBtAdapterName.restore] in the link).
+     */
+    internal fun onLink(ls: PumpBtLinkState) {
+        val s = env.store()
+        if (s != null) {
+            val after = PumpBtWindow.variantAfter(s.variant, ls)
+            if (after != s.variant) {
+                s.variant = after
+                journal("name variant back to $after after the pairing")
+            }
+        }
+        val paired = s?.paired ?: false
+        _state.update {
+            it.copy(link = ls, paired = paired, variant = s?.variant ?: it.variant, warningsAccepted = it.warningsAccepted || paired)
+        }
     }
 
     /** Bluetooth there and on, permissions, advertising support. */
@@ -76,21 +125,80 @@ internal object PumpBtTrial {
 
     fun hasPermissions(context: Context): Boolean = PumpBtSource.hasPermissions(context)
 
+    /** The wizard's warnings (decision 14) accepted: kept in the link state file, they are not shown again. */
+    fun acceptWarnings(context: Context) {
+        acceptWarnings(PumpBtSource.store(context.applicationContext))
+    }
+
+    internal fun acceptWarnings(store: PumpBtStore) {
+        store.warningsAccepted = true
+        journal("pairing warnings accepted")
+        _state.update { it.copy(warningsAccepted = true) }
+    }
+
+    /** "Start pairing" (also "Pair again" with the source on): without a key database it is downloaded first. */
     fun startPairing() = start(pair = true)
 
     fun waitForPump() = start(pair = false)
 
-    private fun start(pair: Boolean) {
-        val c = app ?: return
-        refreshChecks(c)
-        val blockers = _state.value.blockers
-        if (PumpBtSource.key(c) == null || blockers.isNotEmpty()) {
-            journal("start refused: ${blockers.joinToString { it.name.lowercase() }}")
+    /**
+     * A start: the phone not ready - refused; no key database - the chain first ([loadKey]; the start goes on once a
+     * key is in place, by the download or from a file); else the link. [afterKey] - the start a key went on with: no
+     * key even then is refused, never downloaded again.
+     */
+    private fun start(pair: Boolean, afterKey: Boolean = false) {
+        env.checkPhone()
+        val action = PumpBtWindow.startAction(_state.value, env.hasKey())
+        if (action == PumpBtStartAction.REFUSE || (action == PumpBtStartAction.LOAD_KEY && afterKey)) {
+            val why = PumpBtWindow.phoneBlockers(_state.value).map { it.name.lowercase() }.ifEmpty { listOf("no_key") }
+            journal("start refused: ${why.joinToString()}")
+            _state.update { it.copy(pendingStart = null) }
             return
         }
+        if (action == PumpBtStartAction.LOAD_KEY) {
+            _state.update { it.copy(pendingStart = pair) }
+            loadKey()
+            return
+        }
+        if (pair) pairWithVariantA()
         // a pairing's wait time and its failures count from here (a running link keeps an older failure mark)
-        _state.update { it.copy(pairingStartedAtMs = if (pair) System.currentTimeMillis() else null) }
-        PumpBtSource.startLink(c, pair)
+        _state.update { it.copy(pendingStart = null, pairingStartedAtMs = if (pair) env.now() else null) }
+        env.startLink(pair)
+    }
+
+    /**
+     * "Pair again" with the source on always uses variant A (finding 11). A running link keeps the variant it started
+     * with: when that may have been B, it is stopped first, so the pairing starts anew with A.
+     */
+    private fun pairWithVariantA() {
+        if (!env.sourceOn()) return
+        val s = env.store() ?: return
+        val want = PumpBtWindow.variantForStart(s.variant, sourceOn = true)
+        if (s.variant == want) return
+        s.variant = want
+        _state.update { it.copy(variant = want) }
+        if (env.linkRunning()) env.stopLink()
+        journal("name variant set to $want for pairing again")
+    }
+
+    /**
+     * Variant B from the wizard's PAIRING step, after A failed: the pump does not see the phone - pair with the other
+     * name (the phone's Bluetooth name is changed for the pairing and comes back right after it). The pairing is
+     * stopped, B set, the pairing started again. Only with the source off ("Pair again" with it on stays on A).
+     */
+    fun tryOtherName() {
+        val s = env.store() ?: return
+        if (env.sourceOn()) {
+            journal("other name not tried: permanent operation is on (pairing again uses variant A)")
+            return
+        }
+        if (s.variant == PumpBtNameVariant.B) return
+        journal("pairing again with name variant B")
+        // setVariant leaves a running link alone: the pairing ends first
+        env.stopLink()
+        s.variant = PumpBtNameVariant.B
+        _state.update { it.copy(variant = PumpBtNameVariant.B) }
+        start(pair = true)
     }
 
     /** Stops the link; with the source on its watchdog starts it again, waiting for the pump. */
@@ -99,34 +207,56 @@ internal object PumpBtTrial {
     fun readAgain() = PumpBtSource.readNow()
 
     fun setVariant(v: PumpBtNameVariant) {
-        val c = app ?: return
-        val s = PumpBtSource.store(c)
-        if (PumpBtSource.linkRunning) return
+        val s = env.store() ?: return
+        if (env.linkRunning()) return
         s.variant = v
         journal("name variant set to $v")
         _state.update { it.copy(variant = v) }
     }
 
-    fun loadKeyFromInternet() {
+    /** The key database from OpenMinimed's page (the old window's "Load key"; the wizard downloads it by itself). */
+    fun loadKeyFromInternet() = loadKey()
+
+    /** The chain - the pinned page, then main - off the main thread; the outcome back on it ([applyKey]). */
+    private fun loadKey() {
         if (_state.value.keyLoading) return
-        _state.update { it.copy(keyLoading = true, keyFailure = null) }
-        journal("loading the key database from the OpenMinimed page")
-        Thread({
-            val result = try {
-                PumpBtKey.download()
-            } catch (t: Throwable) {
-                PumpBtKey.Result.Failed(PumpBtKey.Failure.NO_NETWORK)
+        _state.update { it.copy(keyLoading = true, keyFailure = null, keyFailureCode = 0) }
+        journal("loading the key database from the OpenMinimed page (pinned commit, then main)")
+        val download = env.download
+        val onMain = env.onMain
+        env.offMain("ModPumpBtKey") {
+            val attempts = try {
+                PumpBtKey.downloadChain(download)
+            } catch (_: Throwable) {
+                listOf(PumpBtKey.Attempt(PumpBtKey.MAIN_URL, PumpBtKey.Result.Failed(PumpBtKey.Failure.NO_NETWORK)))
             }
-            main.post { applyKey(result, "the OpenMinimed page") }
-        }, "ModPumpBtKey").start()
+            onMain {
+                for (a in attempts.dropLast(1)) journal("key database not loaded from ${pageName(a.url)}: ${failureText(a.result)}")
+                val last = attempts.last()
+                applyKey(last.result, pageName(last.url))
+            }
+        }
     }
 
+    private fun pageName(url: String): String = when (url) {
+        PumpBtKey.PINNED_URL -> "the OpenMinimed page (pinned commit)"
+        PumpBtKey.MAIN_URL -> "the OpenMinimed page (main)"
+        else -> "the OpenMinimed page"
+    }
+
+    private fun failureText(result: PumpBtKey.Result): String = when (result) {
+        is PumpBtKey.Result.Ok -> "ok"
+        is PumpBtKey.Result.Failed -> result.failure.name.lowercase() + if (result.code != 0) " ${result.code}" else ""
+    }
+
+    /** "Load from file" (also after a failed download: a start waiting for the key goes on with it). */
     fun loadKeyFromFile(context: Context, uri: Uri) {
         if (_state.value.keyLoading) return
         val c = context.applicationContext
-        _state.update { it.copy(keyLoading = true, keyFailure = null) }
+        _state.update { it.copy(keyLoading = true, keyFailure = null, keyFailureCode = 0) }
         journal("loading the key database from a chosen file")
-        Thread({
+        val onMain = env.onMain
+        env.offMain("ModPumpBtKeyFile") {
             val result = try {
                 val text = c.contentResolver.openInputStream(uri)?.use { input ->
                     // a key page is a few kB: read at most 1 MB
@@ -136,16 +266,19 @@ internal object PumpBtTrial {
             } catch (t: Throwable) {
                 PumpBtKey.Result.Failed(PumpBtKey.Failure.FILE_NOT_READ)
             }
-            main.post { applyKey(result, "a file") }
-        }, "ModPumpBtKeyFile").start()
+            onMain { applyKey(result, "a file") }
+        }
     }
 
-    private fun applyKey(result: PumpBtKey.Result, source: String) {
-        val c = app
+    /**
+     * A key database came (or did not): saved and handed to the source; a CRC other than the trial's one leaves a
+     * journal line, not a refusal. A start waiting for the key goes on; a failure leaves it waiting ("Load from file").
+     */
+    internal fun applyKey(result: PumpBtKey.Result, source: String) {
         when (result) {
             is PumpBtKey.Result.Ok -> {
                 val saved = try {
-                    if (c != null) PumpBtKey.save(c, result)
+                    env.saveKey(result)
                     true
                 } catch (t: Throwable) {
                     journal("key database not saved (${t.javaClass.simpleName})")
@@ -156,12 +289,14 @@ internal object PumpBtTrial {
                     return
                 }
                 // a new key reaches the link at its next start
-                PumpBtSource.keyLoaded(result)
                 journal("key database loaded from $source: CRC ${result.crc}, Mobile Application ↔ Insulin Pump")
-                _state.update { it.copy(keyLoading = false, keyCrc = result.crc, keyFailure = null) }
+                PumpBtKey.crcLine(result.crc)?.let { journal(it) }
+                val pending = _state.value.pendingStart
+                _state.update { it.copy(keyLoading = false, keyCrc = result.crc, keyFailure = null, keyFailureCode = 0) }
+                if (pending != null) start(pending, afterKey = true)
             }
             is PumpBtKey.Result.Failed -> {
-                journal("key database not loaded from $source: ${result.failure.name.lowercase()}" + if (result.code != 0) " ${result.code}" else "")
+                journal("key database not loaded from $source: ${failureText(result)}")
                 PumpBtLog.w("key not loaded (${result.failure.name.lowercase()})")
                 _state.update { it.copy(keyLoading = false, keyFailure = result.failure, keyFailureCode = result.code) }
             }
@@ -185,6 +320,12 @@ internal object PumpBtTrial {
     }
 
     private fun exportsDir(context: Context) = File(context.applicationContext.cacheDir, "exports")
+
+    /** Tests: another environment and a fresh window state (null - back to Android's). */
+    internal fun resetForTest(testEnv: Env?, ui: PumpBtUiState = PumpBtUiState()) {
+        env = testEnv ?: Env()
+        _state.value = ui
+    }
 
     private fun java.io.InputStream.readNBytesCompat(max: Int): ByteArray {
         val out = java.io.ByteArrayOutputStream()

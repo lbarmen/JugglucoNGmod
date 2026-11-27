@@ -203,7 +203,7 @@ class CareLinkStateStore(context: Context) {
  * secrets). [enabled] - polling on (a sign-in turns it on, a sign-out off; a file, see there); [intervalMin] - 5/10/15
  * min, default 5; [presetId] - insulin type of pump boluses, null - upstream's default for calculation (4d);
  * [writeCarbs] - record calculator carbs (on); [sendToNightscout] - pump records go to Nightscout (off; plan, decision 8);
- * [warnAfterMin] - "no pump data" and "pump records are not saved" come after this long: 5/10/15/30/60 min, default 30
+ * [warnAfterMin] - "no pump data" and "pump records are not saved" come after this long: 5/10/15/20/30/60 min, default 30
  * (the person's word 17.11: "I want 5 minutes to test it"; one threshold for both - decision of 4e).
  */
 class CareLinkSettings(context: Context) {
@@ -294,7 +294,20 @@ class CareLinkSettings(context: Context) {
         const val DEFAULT_INTERVAL_MIN = 5
         val INTERVALS_MIN = listOf(5, 10, 15)
         const val DEFAULT_WARN_MIN = 30
-        val WARN_AFTER_MIN = listOf(5, 10, 15, 30, 60)
+        /**
+         * What [warnAfterMin] stores: the pump window's [WARN_CHOICES] and the older 5/10/15, kept as they are (over
+         * Bluetooth at least 20 act - [CareLinkNotifier]); old values are not rewritten.
+         */
+        val WARN_AFTER_MIN = listOf(5, 10, 15, 20, 30, 60)
+        /** The thresholds the pump window offers (decisions for the window, 5). */
+        val WARN_CHOICES = listOf(20, 30, 60)
+
+        /** The window's choice for a stored threshold: 5/10/15 act as 20 over Bluetooth - 20; a choice as it is; else 30. */
+        fun shownWarnMin(stored: Int): Int = when (stored) {
+            in WARN_CHOICES -> stored
+            5, 10, 15 -> 20
+            else -> DEFAULT_WARN_MIN
+        }
         /** The polling flag in noBackupFilesDir/mod-carelink/ (the `enabled` preference of 4c builds is not read). */
         const val ENABLED_FILE = "enabled"
         private const val K_INTERVAL = "intervalMin"

@@ -13,14 +13,18 @@ internal enum class PumpBtNameVariant {
     /** Medtronic manufacturer data 0x01F9 `00 + "Mobile NNNNNN" + 00` (Android codes of OpenMinimed, Pebble). */
     A,
 
-    /** The phone's Bluetooth name, changed to "Mobile NNNNNN" during the trial (OpenMinimed description, Python). */
+    /**
+     * The phone's Bluetooth name, changed to "Mobile NNNNNN" during the pairing (OpenMinimed description, Python). Only
+     * a fallback of the wizard's pairing when the pump does not see the phone with A ([PumpBtTrial.tryOtherName]); the
+     * name comes back right after the pairing, and the variant goes back to A (series brief, finding 11).
+     */
     B,
 }
 
 /**
  * JugglucoNGmod, pump over Bluetooth: the small state of the link kept between runs - the 6 digits of the advertised
  * name (the pump knows the phone by them: new digits mean a new pairing), the name variant, "paired once", the pump's
- * address, the phone's own Bluetooth name while variant B has changed it, the reference time of the window's history
+ * address, the accepted warnings of the pairing wizard, the phone's own Bluetooth name while variant B has changed it, the reference time of the window's history
  * lines, the detailed journal switch (off by default) and what the source's notifications already told
  * ([PumpBtAlertMemory]). No key material, no session, no history: the history memory and its number are
  * [PumpBtHistoryStore]'s.
@@ -73,6 +77,14 @@ internal class PumpBtStore internal constructor(private val file: File, private 
     var pumpAddress: String
         get() = synchronized(lock) { values.optString(K_ADDRESS, "") }
         set(v) = synchronized(lock) { put(K_ADDRESS, v) }
+
+    /**
+     * The person accepted the warnings before the first pairing (series brief, decision 14). In this file, not a
+     * preference: upstream's settings import would clear it (critic B1, C1).
+     */
+    var warningsAccepted: Boolean
+        get() = synchronized(lock) { values.optBoolean(K_WARNINGS, false) }
+        set(v) = synchronized(lock) { put(K_WARNINGS, v) }
 
     /** Detailed link journal (serial number, values, decrypted answers, history records); off by default. */
     var verbose: Boolean
@@ -258,6 +270,7 @@ internal class PumpBtStore internal constructor(private val file: File, private 
         const val K_VERBOSE = "verbose"
         const val K_ALERTS = "alerts"
         const val K_JOURNAL_DETAIL = "journal_has_detail"
+        const val K_WARNINGS = "warnings_accepted"
 
         /** In the old preferences: their values were moved to the file. */
         const val K_MOVED = "moved_to_file"

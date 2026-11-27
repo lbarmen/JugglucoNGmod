@@ -1,24 +1,38 @@
 package mod.pumpbt
 
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import tk.glucodata.mod.carelink.CareLinkSettings
 import tk.glucodata.mod.pumpbt.BackfillCard
 import tk.glucodata.mod.pumpbt.BackfillItem
 import tk.glucodata.mod.pumpbt.PumpBtAnswer
 import tk.glucodata.mod.pumpbt.PumpBtCount
+import tk.glucodata.mod.pumpbt.PumpBtKey
 import tk.glucodata.mod.pumpbt.PumpBtLinkState
+import tk.glucodata.mod.pumpbt.PumpBtNameVariant
 import tk.glucodata.mod.pumpbt.PumpBtSourceState
 import tk.glucodata.mod.pumpbt.PumpBtStage
+import tk.glucodata.mod.pumpbt.PumpBtStartAction
+import tk.glucodata.mod.pumpbt.PumpBtStore
+import tk.glucodata.mod.pumpbt.PumpBtTrial
 import tk.glucodata.mod.pumpbt.PumpBtTurnOnHint
 import tk.glucodata.mod.pumpbt.PumpBtUiState
 import tk.glucodata.mod.pumpbt.PumpBtWindow
+import tk.glucodata.mod.pumpbt.PumpBtWizardStep
 import tk.glucodata.mod.pumpbt.PumpHistoryCounters
 import tk.glucodata.mod.pumpbt.PumpWarning
+import java.io.File
 
-/** JugglucoNGmod, pump over Bluetooth (series part 2, part B2b): what the trial window shows and allows. */
+/**
+ * JugglucoNGmod, pump over Bluetooth (series part 2, parts B2b and G1): what the pump window shows and allows, the
+ * pairing wizard's steps, the accepted warnings, name variant B as a fallback, the threshold choices.
+ */
 class PumpBtWindowTest {
 
     private val ready = PumpBtUiState(
@@ -132,10 +146,10 @@ class PumpBtWindowTest {
             assertFalse(during.canPair)
             assertFalse(PumpBtWindow.controls(ready.copy(paired = false), on.copy(link = link)).canPair)
         }
-        // no key: offered, not pressable
+        // no key: offered and pressable - the press downloads the key first (decision 11)
         val noKey = PumpBtWindow.controls(ready.copy(keyCrc = null), lost)
         assertTrue(noKey.pairOffered)
-        assertFalse(noKey.canPair)
+        assertTrue(noKey.canPair)
         // paired and bonded: nothing
         assertFalse(PumpBtWindow.controls(ready, on.copy(link = running)).pairOffered)
     }
@@ -296,5 +310,137 @@ class PumpBtWindowTest {
         assertTrue(PumpBtWindow.dataShown(on))
         assertTrue(PumpBtWindow.dataShown(off.copy(records = 3)))
         assertTrue(PumpBtWindow.dataShown(off.copy(lastCycleAtMs = 1L)))
+    }
+
+    // MARK: - The pairing wizard (series part 2, part G1)
+
+    @get:Rule
+    val tmp = TemporaryFolder()
+
+    @After
+    fun backToAndroid() = PumpBtTrial.resetForTest(null)
+
+    /** A newcomer: nothing paired, no key, warnings not accepted. */
+    private val newcomer = ready.copy(keyCrc = null, paired = false)
+    private val pairingLink = PumpBtLinkState(running = true, pairMode = true, stage = PumpBtStage.ADVERTISING_PAIR)
+
+    @Test
+    fun wizardStepsByState() {
+        assertEquals(PumpBtWizardStep.WARNINGS, PumpBtWindow.wizardStep(newcomer, off))
+        val accepted = newcomer.copy(warningsAccepted = true)
+        // the key does not stop the start: the press downloads it
+        assertEquals(PumpBtWizardStep.START, PumpBtWindow.wizardStep(accepted, off))
+        for (phone in listOf(
+            accepted.copy(permissionsGranted = false), accepted.copy(bluetoothOn = false), accepted.copy(hasBluetooth = false),
+            accepted.copy(advertisingSupported = false),
+        )) {
+            assertEquals(phone.toString(), PumpBtWizardStep.PHONE, PumpBtWindow.wizardStep(phone, off))
+        }
+        // pressed without a key: downloading, or it did not come
+        assertEquals(PumpBtWizardStep.KEY, PumpBtWindow.wizardStep(accepted.copy(pendingStart = true, keyLoading = true), off))
+        assertEquals(PumpBtWizardStep.KEY, PumpBtWindow.wizardStep(accepted.copy(pendingStart = true, keyFailure = PumpBtKey.Failure.HTTP), off))
+        // a pairing - by the published mode or by the stage only
+        assertEquals(PumpBtWizardStep.PAIRING, PumpBtWindow.wizardStep(accepted.copy(keyCrc = "01020304"), off.copy(link = pairingLink)))
+        assertEquals(PumpBtWizardStep.PAIRING, PumpBtWindow.wizardStep(accepted.copy(keyCrc = "01020304"), off.copy(link = switchedToPairing)))
+        // the handshake went through: paired, offer permanent operation
+        val paired = accepted.copy(keyCrc = "01020304", paired = true)
+        assertEquals(PumpBtWizardStep.PAIRED, PumpBtWindow.wizardStep(paired, off.copy(link = up)))
+        assertEquals(PumpBtWizardStep.PAIRED, PumpBtWindow.wizardStep(paired, off))
+        // the source on: no wizard, whatever else
+        assertEquals(PumpBtWizardStep.NONE, PumpBtWindow.wizardStep(newcomer, on))
+        assertEquals(PumpBtWizardStep.NONE, PumpBtWindow.wizardStep(accepted, on.copy(link = pairingLink)))
+    }
+
+    @Test
+    fun anOwnerNeverSeesTheWarnings() {
+        // paired once (read from the store at once) - not the warnings, even before "accepted" is known
+        assertEquals(PumpBtWizardStep.PAIRED, PumpBtWindow.wizardStep(newcomer.copy(paired = true), off))
+        assertEquals(PumpBtWizardStep.NONE, PumpBtWindow.wizardStep(newcomer.copy(paired = true), on))
+    }
+
+    @Test
+    fun startPressedWithoutAKeyLoadsItAndWithoutTheKeyPermanentOperationStaysOff() {
+        assertEquals(PumpBtStartAction.LOAD_KEY, PumpBtWindow.startAction(newcomer, hasKey = false))
+        assertEquals(PumpBtStartAction.START, PumpBtWindow.startAction(newcomer, hasKey = true))
+        assertEquals(PumpBtStartAction.REFUSE, PumpBtWindow.startAction(newcomer.copy(bluetoothOn = false), hasKey = false))
+        assertEquals(PumpBtStartAction.REFUSE, PumpBtWindow.startAction(newcomer.copy(advertisingSupported = false), hasKey = true))
+        assertTrue(PumpBtWindow.controls(newcomer, off).canStart)
+        // without the key the source would not get through the handshake: permanent operation is not turned on
+        assertFalse(PumpBtWindow.controls(newcomer.copy(paired = true), off).canTurnOn)
+        assertEquals(PumpBtTurnOnHint.NO_KEY, PumpBtWindow.turnOnHint(newcomer.copy(paired = true), off))
+    }
+
+    @Test
+    fun acceptedWarningsOutliveARestart() {
+        val dir = tmp.newFolder()
+        val t = FakeTrial(dir)
+        PumpBtTrial.resetForTest(t.env, newcomer)
+        PumpBtTrial.acceptWarnings(t.store)
+        assertTrue(PumpBtTrial.state.value.warningsAccepted)
+        assertEquals(PumpBtWizardStep.START, PumpBtWindow.wizardStep(PumpBtTrial.state.value, off))
+        t.store.awaitWrites()
+        // a new process reads the file
+        assertTrue(PumpBtStore(File(dir, PumpBtStore.FILE), null).warningsAccepted)
+        assertFalse(PumpBtStore(File(tmp.newFolder(), PumpBtStore.FILE), null).warningsAccepted)
+    }
+
+    @Test
+    fun otherNameStopsThePairingStartsItWithBAndThePairingEndsOnA() {
+        val t = FakeTrial(tmp.newFolder())
+        t.key = true
+        t.running = true
+        PumpBtTrial.resetForTest(t.env, newcomer.copy(warningsAccepted = true, keyCrc = "01020304", link = pairingLink))
+        PumpBtTrial.tryOtherName()
+        assertEquals("the pairing with A stopped first", 1, t.stops)
+        assertEquals(listOf(true to PumpBtNameVariant.B), t.starts)
+        assertEquals(PumpBtNameVariant.B, PumpBtTrial.state.value.variant)
+
+        // the handshake went through: back to A
+        t.store.paired = true
+        PumpBtTrial.onLink(up)
+        assertEquals(PumpBtNameVariant.A, t.store.variant)
+        assertEquals(PumpBtNameVariant.A, PumpBtTrial.state.value.variant)
+        assertTrue(PumpBtTrial.state.value.paired)
+        assertTrue(t.journal.toString(), t.journal.contains("name variant back to A after the pairing"))
+        // a pairing still going on keeps B
+        assertEquals(PumpBtNameVariant.B, PumpBtWindow.variantAfter(PumpBtNameVariant.B, pairingLink))
+    }
+
+    @Test
+    fun pairAgainWithTheSourceOnIsAlwaysA() {
+        val t = FakeTrial(tmp.newFolder())
+        t.key = true
+        t.sourceOn = true
+        t.running = true
+        t.store.variant = PumpBtNameVariant.B
+        PumpBtTrial.resetForTest(t.env, ready.copy(variant = PumpBtNameVariant.B))
+        PumpBtTrial.startPairing()
+        // the running link may have started with B: stopped, then the pairing anew with A
+        assertEquals(1, t.stops)
+        assertEquals(listOf(true to PumpBtNameVariant.A), t.starts)
+        assertEquals(PumpBtNameVariant.A, PumpBtTrial.state.value.variant)
+
+        // the other name is not tried with the source on
+        PumpBtTrial.tryOtherName()
+        assertEquals(1, t.starts.size)
+        assertEquals(PumpBtNameVariant.A, t.store.variant)
+        assertEquals(PumpBtNameVariant.A, PumpBtWindow.variantForStart(PumpBtNameVariant.B, sourceOn = true))
+        assertEquals(PumpBtNameVariant.B, PumpBtWindow.variantForStart(PumpBtNameVariant.B, sourceOn = false))
+    }
+
+    @Test
+    fun theWindowsThresholdChoices() {
+        assertEquals(listOf(20, 30, 60), CareLinkSettings.WARN_CHOICES)
+        // 5/10/15 act as 20 over Bluetooth: shown as 20, stored as they are
+        for (old in listOf(5, 10, 15)) {
+            assertEquals(20, CareLinkSettings.shownWarnMin(old))
+            assertTrue(old in CareLinkSettings.WARN_AFTER_MIN)
+        }
+        for (choice in listOf(20, 30, 60)) {
+            assertEquals(choice, CareLinkSettings.shownWarnMin(choice))
+            assertTrue("stored as it is", choice in CareLinkSettings.WARN_AFTER_MIN)
+        }
+        assertEquals(30, CareLinkSettings.shownWarnMin(45))
+        assertEquals(30, CareLinkSettings.shownWarnMin(0))
     }
 }

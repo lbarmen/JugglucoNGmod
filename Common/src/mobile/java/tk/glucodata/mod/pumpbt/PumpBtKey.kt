@@ -3,7 +3,7 @@
 // apps/android/app/src/main/java/de/sgitaize/openminipump/AppConfig.kt (object KeyImport), by Simon Gutjahr.
 // Modified for JugglucoNGmod: no bundled database (no assets branch); the hex is kept in noBackupFilesDir instead of
 // the preferences; failures are an enum for the screen instead of localised exceptions; reading a file chosen by the
-// user; only the CRC and the database type are shown or logged.
+// user; only the CRC and the database type are shown or logged; the page by a chain (a pinned commit, then main).
 package tk.glucodata.mod.pumpbt
 
 import android.content.Context
@@ -15,15 +15,29 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * JugglucoNGmod, pump over Bluetooth (trial): the SAKE key database "Mobile Application ↔ Insulin Pump". Not in the
- * repository and not in the app: the phone downloads OpenMinimed's public page on a button press (or reads a file the
- * user picked), checks the CRC and the database type and keeps the hex in `noBackupFilesDir/mod-pumpbt/keydb.hex`.
- * Shown and logged: only the CRC (the first 4 bytes of the database are its checksum, not key material) and the type.
+ * JugglucoNGmod, pump over Bluetooth: the SAKE key database "Mobile Application ↔ Insulin Pump". Not in the repository
+ * and not in the app: "Start pairing" without one downloads OpenMinimed's public page - the pinned commit first, its
+ * main branch when that gives none ([downloadChain]; series brief, decision 11) - or the user picks a file; the CRC and
+ * the database type are checked and the hex kept in `noBackupFilesDir/mod-pumpbt/keydb.hex`. Shown and logged: only
+ * the CRC (the first 4 bytes of the database are its checksum, not key material) and the type.
  */
 internal object PumpBtKey {
 
-    /** Public documentation of OpenMinimed that lists the dumped key databases. */
-    const val OPEN_MINIMED_URL = "https://raw.githubusercontent.com/OpenMinimed/Documentation/main/key_databases.md"
+    /** OpenMinimed's page of the dumped key databases at a pinned commit (the trial passed with its database). */
+    const val PINNED_URL =
+        "https://raw.githubusercontent.com/OpenMinimed/Documentation/37ac341f900a0f2afa8e331fefc32ec7741fcf95/key_databases.md"
+
+    /** The same page on the main branch: asked only when the pinned one gives no database. */
+    const val MAIN_URL = "https://raw.githubusercontent.com/OpenMinimed/Documentation/main/key_databases.md"
+
+    /** The order of [downloadChain]. */
+    val CHAIN = listOf(PINNED_URL, MAIN_URL)
+
+    /**
+     * The CRC of the database the trial passed with on a 740G (27.11). Another CRC is accepted (the database checks
+     * itself); it only leaves a journal line ([crcLine]).
+     */
+    const val KNOWN_CRC = "F75995E7"
 
     enum class Failure { NO_NETWORK, HTTP, NOT_FOUND, CRC, WRONG_TYPE, FILE_NOT_READ }
 
@@ -97,8 +111,33 @@ internal object PumpBtKey {
         }
     }
 
+    /** One address of the chain and what it gave. */
+    data class Attempt(val url: String, val result: Result)
+
+    /**
+     * The key database by the chain: [PINNED_URL], then [MAIN_URL] only when the pinned page gave none. Every attempt
+     * in order; the last one is the outcome (a failure - with main's reason). Blocking: call off the main thread.
+     */
+    fun downloadChain(fetch: (String) -> Result = ::download): List<Attempt> {
+        val attempts = mutableListOf<Attempt>()
+        for (url in CHAIN) {
+            val result = try {
+                fetch(url)
+            } catch (_: Throwable) {
+                Result.Failed(Failure.NO_NETWORK)
+            }
+            attempts += Attempt(url, result)
+            if (result is Result.Ok) break
+        }
+        return attempts
+    }
+
+    /** The journal line of a database whose CRC is not [KNOWN_CRC] (no key material); null - the known one. */
+    fun crcLine(crc: String): String? =
+        if (crc.equals(KNOWN_CRC, ignoreCase = true)) null else "key database CRC $crc, tested with $KNOWN_CRC"
+
     /** Downloads OpenMinimed's page and finds the database. Blocking: call off the main thread. */
-    fun download(url: String = OPEN_MINIMED_URL): Result {
+    fun download(url: String = MAIN_URL): Result {
         val conn = try {
             URL(url).openConnection() as HttpURLConnection
         } catch (_: IOException) {

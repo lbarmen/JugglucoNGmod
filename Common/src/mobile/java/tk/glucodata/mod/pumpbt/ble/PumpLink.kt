@@ -2208,15 +2208,19 @@ internal class PumpLink(
         /**
          * The trial window's values after an active basal answer: the temporary basal in its own unit - U/h only for
          * type 0x33, percent only for 0x3C (critic of the joints 1, P-N5: a percentage was shown as U/h); another type
-         * or a special value - neither.
+         * or a special value - neither, and its type goes to [PumpBtValues.tempBasalType] (the window tells "running"
+         * from "none").
          */
         fun withActiveBasal(values: PumpBtValues, v: ActiveBasalRate): PumpBtValues {
             val temp = v.tempBasalValue?.takeIf { it.isFinite() && it >= 0.0 }
+            val type = v.tempBasalType
+            val shown = temp != null && (type == ActiveBasalRate.TBR_ABSOLUTE || type == ActiveBasalRate.TBR_RELATIVE)
             return values.copy(
                 basalUnitsPerHour = v.unitsPerHour, basalRead = true,
-                tempBasalUnitsPerHour = temp.takeIf { v.tempBasalType == ActiveBasalRate.TBR_ABSOLUTE },
-                tempBasalPercent = temp.takeIf { v.tempBasalType == ActiveBasalRate.TBR_RELATIVE }?.let { Math.round(it).toInt() },
+                tempBasalUnitsPerHour = temp.takeIf { type == ActiveBasalRate.TBR_ABSOLUTE },
+                tempBasalPercent = temp.takeIf { type == ActiveBasalRate.TBR_RELATIVE }?.let { Math.round(it).toInt() },
                 tempBasalRemainingMin = v.tempBasalRemainingMinutes,
+                tempBasalType = type.takeIf { !shown },
             )
         }
 
