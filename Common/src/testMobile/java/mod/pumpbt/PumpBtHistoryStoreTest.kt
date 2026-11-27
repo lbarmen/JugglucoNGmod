@@ -296,17 +296,33 @@ class PumpBtHistoryStoreTest {
     }
 
     @Test
-    fun aRunningBolusIsNotAcceptedAMealIsAndFirstCatchUpKeysAreKept() {
+    fun aRunningBolusIsNotAcceptedAMealOnlyWithItsBolus() {
         val m = memory(100).copy(backfillShown = listOf("INSULIN|2026-10-15T09:00:00|0"))
-        val running = ClEvent(ClKind.BOLUS, "INSULIN|2026-10-15T10:00:00|0", 1L, programmedUnits = 2.0, completed = false)
-        val meal = ClEvent(ClKind.MEAL, "MEAL|2026-10-15T09:59:58|0", 1L, grams = 30.0)
-        val old = ClEvent(ClKind.BOLUS, "INSULIN|2026-10-15T09:00:00|0", 1L, programmedUnits = 1.0, deliveredUnits = 1.0, completed = true)
-        val a = PumpHistoryRules.markAccepted(m, listOf(running, meal, old), now)
-        assertEquals(setOf(meal.key, old.key), a.acceptedAt.keys)
+        val running = ClEvent(ClKind.BOLUS, "INSULIN|2026-10-15T10:00:00|0", B2Fixtures.ms(10, 0), programmedUnits = 2.0, completed = false)
+        val runningMeal = ClEvent(ClKind.MEAL, "MEAL|2026-10-15T09:59:58|0", B2Fixtures.ms(9, 59, 58), grams = 30.0)
+        val old = ClEvent(ClKind.BOLUS, "INSULIN|2026-10-15T09:00:00|0", B2Fixtures.ms(9, 0), programmedUnits = 1.0, deliveredUnits = 1.0, completed = true)
+        val oldMeal = ClEvent(ClKind.MEAL, "MEAL|2026-10-15T08:59:59|0", B2Fixtures.ms(8, 59, 59), grams = 10.0)
+        val lone = ClEvent(ClKind.MEAL, "MEAL|2026-10-15T11:00:00|0", B2Fixtures.ms(11, 0), grams = 5.0)
+        val a = PumpHistoryRules.markAccepted(m, listOf(runningMeal, running, oldMeal, old, lone), now)
+        // the running bolus and its meal wait; the finished one and its meal are accepted; a meal fed without a bolus is not
+        assertEquals(setOf(old.key, oldMeal.key), a.acceptedAt.keys)
         assertEquals(listOf("carelink:INSULIN:2026-10-15T09:00:00:0:insulin"), a.backfillWritten)
+        // the meal with its bolus accepted before: accepted
+        val b = PumpHistoryRules.markAccepted(m.copy(acceptedAt = mapOf(running.key to 1L)), listOf(runningMeal, running), now)
+        assertTrue(runningMeal.key in b.acceptedAt)
         // accepted again later: the first time stays
-        val b = PumpHistoryRules.markAccepted(a, listOf(meal), now + 99)
-        assertEquals(now, b.acceptedAt[meal.key])
+        assertEquals(now, PumpHistoryRules.markAccepted(a, listOf(oldMeal, old), now + 99).acceptedAt[oldMeal.key])
+    }
+
+    @Test
+    fun aHoleTheLinkDidNotAskForIsNoFailure() {
+        // critic B2, N3: the link's snapshot of the number was ahead - it asked from 105, past the hole at 103
+        val m = memory(102, sensors(101L..102L) + sensors(105L..106L))
+        val a = PumpHistoryRules.applyCycle(m, B2Fixtures.cycle(sensors(105L..107L), from = 105, contiguousTo = 107), now)
+        assertEquals(0, a.memory.stuckCount)
+        assertEquals(102L, a.memory.contiguousTo)
+        val asked = PumpHistoryRules.applyCycle(m, B2Fixtures.cycle(sensors(105L..107L), from = 103, contiguousTo = null), now)
+        assertEquals(1, asked.memory.stuckCount)
     }
 
     // --- prune ------------------------------------------------------------------------------------------------------
@@ -460,6 +476,8 @@ class PumpBtHistoryStoreTest {
         f.writeText("{\"v\":1,\"records\":[\"zz\"]")
         assertEquals(PumpHistoryMemory(), store.load())
         assertTrue(store.loadFailed)
+        // kept beside before the next save writes over it (critic B2, N6)
+        assertEquals("{\"v\":1,\"records\":[\"zz\"]", File(tmp.root, "history.json.broken").readText())
 
         // a record shorter than its header breaks the whole file, not just that record
         store.save(memory(109, dayRecords()))

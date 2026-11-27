@@ -14,6 +14,7 @@ import tk.glucodata.mod.pumpbt.core.PumpEventsResult
 import tk.glucodata.mod.pumpbt.core.RawHistoryRecord
 import tk.glucodata.mod.pumpbt.core.hexToBytes
 import tk.glucodata.mod.pumpbt.core.toHex
+import tk.glucodata.mod.carelink.CareLinkJournalWriter
 import tk.glucodata.mod.carelink.ClEvent
 import tk.glucodata.mod.carelink.ClKind
 import java.io.File
@@ -102,6 +103,12 @@ internal class PumpBtHistoryStore(private val file: File) {
         } catch (t: Throwable) {
             PumpBtLog.w("history memory not read (${t.javaClass.simpleName})")
             loadFailed = true
+            // kept beside, the last one only, before the next save writes over it (critic B2, N6)
+            try {
+                file.copyTo(File(file.parentFile, "$FILE$BROKEN"), overwrite = true)
+            } catch (c: Throwable) {
+                PumpBtLog.w("broken history memory not kept (${c.javaClass.simpleName})")
+            }
             PumpHistoryMemory()
         }
     }
@@ -122,6 +129,9 @@ internal class PumpBtHistoryStore(private val file: File) {
     companion object {
         const val DIR = "mod-pumpbt"
         const val FILE = "history.json"
+
+        /** Suffix of the copy of the last file that could not be read. */
+        const val BROKEN = ".broken"
         private const val VERSION = 1
 
         internal fun toJson(m: PumpHistoryMemory): JSONObject = JSONObject().apply {
@@ -300,9 +310,11 @@ internal object PumpHistoryRules {
             val hole = cur + 1
             if (hole != prevHole) stuck = 0
             val pastHeld = have.higherKey(hole)
+            // a failure on the hole only when the link asked for it (its snapshot of the number may be ahead; critic B2, N3)
+            val asked = h.requestedFrom != null && h.requestedFrom <= hole
             stuck = when {
                 pastHeld == null -> 0
-                cycle.records.any { it.sequence > hole } -> stuck + 1
+                asked && cycle.records.any { it.sequence > hole } -> stuck + 1
                 else -> stuck
             }
             if (stuck >= STUCK_CYCLES && pastHeld != null) {
@@ -342,13 +354,24 @@ internal object PumpHistoryRules {
 
     /**
      * After WRITTEN of the intake for [events] (the ClEvents just fed): each is accepted (its key is after aliases) -
-     * a bolus only once finished (a running one is not). Keys of the first catch-up go to [PumpHistoryMemory.backfillWritten].
+     * a bolus only once finished (a running one is not); a meal only when its bolus (at most 10 s after it, as the
+     * writer pairs them) was fed with it and is accepted now or was before - the writer writes carbs only with their
+     * bolus (critic B2, C1). Keys of the first catch-up go to [PumpHistoryMemory.backfillWritten].
      */
     fun markAccepted(m: PumpHistoryMemory, events: List<ClEvent>, nowMs: Long): PumpHistoryMemory {
         val accepted = LinkedHashMap(m.acceptedAt)
         val written = LinkedHashSet(m.backfillWritten)
+        val boluses = events.filter { it.kind == ClKind.BOLUS }
         for (e in events) {
-            if (e.kind == ClKind.BOLUS && e.completed != true) continue
+            val ok = when (e.kind) {
+                ClKind.BOLUS -> e.completed == true
+                ClKind.MEAL -> boluses
+                    .filter { b -> e.atMs in (b.atMs - CareLinkJournalWriter.PAIR_WINDOW_MS)..b.atMs }
+                    .minByOrNull { it.atMs }
+                    ?.let { b -> b.completed == true || b.key in m.acceptedAt } == true
+                else -> true
+            }
+            if (!ok) continue
             if (accepted.putIfAbsent(e.key, nowMs) == null && e.key in m.backfillShown) {
                 PumpBtBridge.journalKey(e.kind, e.key)?.let { written += it }
             }

@@ -236,21 +236,126 @@ class PumpBtBridgeTest {
     }
 
     @Test
-    fun anEventOlderThan48HoursWithARowIsAcceptedNotFed() {
-        val m = mem(oneOldBolus(), enabledAt = ms(12, 0, day = 13), boundaryMs = ms(11, 0, day = 13), backfill = BackfillState.CONFIRMED)
+    fun anEventOlderThan47HoursWithARowWaitsForAFullReadThenKeepsThePersonsEdit() {
+        // a stopped bolus: 2.5 U programmed, 1.2 U delivered; written as "running" (2.5 U) before a break of the link
+        val recs = listOf(ref(100, 3600, 10), programmed(101, 60, 1, 25), programmedDetails(102, 60),
+            B2Fixtures.delivered(103, 200, 1, 12), B2Fixtures.deliveredDetails(104, 200))
+        val m = mem(recs, enabledAt = ms(12, 0, day = 13), boundaryMs = ms(11, 0, day = 13), backfill = BackfillState.CONFIRMED)
         val nowMs = ms(12, 0, day = 17)
         // no row: a long break, it is fed
         assertEquals(listOf(k1), plan(m, nowMs = nowMs).toWriter.map { it.key })
-        // its row is there (the person may have edited it): not fed, accepted
+        // our "running" row, not changed by the person: the result goes in
+        val running = cloudRow(7, ms(10, 1), 2.5, "2026-10-15T10:01:00")
+        val fed = plan(m, listOf(running), nowMs = nowMs)
+        val result = fed.toWriter.single()
+        assertEquals(true, result.completed)
+        assertEquals(1.2, result.dose!!, 0.0)
+        assertTrue(fed.memory.acceptedAt.isEmpty())
+        // the history not read through: a decision waits - not fed, not accepted
+        val waits = plan(m, listOf(running), nowMs = nowMs, first = false)
+        assertTrue(waits.toWriter.isEmpty())
+        assertTrue(waits.memory.acceptedAt.isEmpty())
+        // the person changed the dose: not touched, accepted
+        val edited = plan(m, listOf(running.copy(amount = 2.0)), nowMs = nowMs)
+        assertTrue(edited.toWriter.isEmpty())
+        assertEquals(setOf(k1), edited.memory.acceptedAt.keys)
+        // 46 h old: still within the writer's memory, fed as usual
+        assertEquals(listOf(k1), plan(m, listOf(running.copy(amount = 2.0)), nowMs = ms(8, 1, day = 17)).toWriter.map { it.key })
+        // 47.5 h old: decided already (critic B2, C3: an hour short of the writer's 48 h)
+        assertTrue(plan(m, listOf(running.copy(amount = 2.0)), nowMs = ms(9, 31, day = 17)).toWriter.isEmpty())
+    }
+
+    @Test
+    fun programmedBeforeABreakAndDeliveredAfterItGetTheResult() {
+        // critic B2, B1: a break of more than 48 h; the catch-up stops between "programmed" and "delivered"
+        val part = listOf(ref(100, 3600, 10), programmed(101, 60, 1, 25), programmedDetails(102, 60))
+        val m1 = mem(part, enabledAt = ms(12, 0, day = 13), backfill = BackfillState.CONFIRMED)
+        val nowMs = ms(12, 0, day = 17)
+        val p1 = plan(m1, nowMs = nowMs, first = false)
+        val running = p1.toWriter.single() // no row yet: fed running, the programmed dose
+        assertEquals(false, running.completed)
+        assertTrue(PumpWarning.NO_RESULT_BOLUS in p1.warnings)
+        val a1 = PumpHistoryRules.markAccepted(p1.memory, p1.toWriter, nowMs)
+        assertTrue(a1.acceptedAt.isEmpty())
+        // the writer made the "running" row; the next cycle brings "delivered" and reads through
         val row = cloudRow(7, ms(10, 1), 2.5, "2026-10-15T10:01:00")
-        val p = plan(m, listOf(row), nowMs = nowMs)
-        assertTrue(p.toWriter.isEmpty())
-        assertEquals(setOf(k1), p.memory.acceptedAt.keys)
-        // a bolus still running after two days is not waited for
-        val running = mem(listOf(ref(100, 3600, 10), programmed(101, 60, 1, 25)), enabledAt = ms(12, 0, day = 13), backfill = BackfillState.CONFIRMED)
-        val pr = plan(running, nowMs = nowMs)
-        assertTrue(pr.toWriter.isEmpty())
-        assertEquals(setOf(k1), pr.memory.acceptedAt.keys)
+        val m2 = a1.copy(records = part + listOf(B2Fixtures.delivered(103, 200, 1, 25), B2Fixtures.deliveredDetails(104, 200)), contiguousTo = 104)
+        val p2 = plan(m2, listOf(row), nowMs = nowMs + 60_000)
+        val done = p2.toWriter.single()
+        assertEquals(k1, done.key)
+        assertEquals(true, done.completed)
+        assertEquals(2.5, done.deliveredUnits!!, 0.0)
+        assertEquals(setOf(k1), PumpHistoryRules.markAccepted(p2.memory, p2.toWriter, nowMs).acceptedAt.keys)
+    }
+
+    @Test
+    fun aMealGoesTheWayOfItsBolus() {
+        // critic B2, C1: a long break, the meal (2 s before its bolus) comes in one cycle, the bolus in the next
+        val withMeal = listOf(ref(100, 3600, 10), meal(101, 58, 40))
+        val m1 = mem(withMeal, enabledAt = ms(12, 0, day = 13), backfill = BackfillState.CONFIRMED)
+        val nowMs = ms(12, 0, day = 16)
+        val p1 = plan(m1, nowMs = nowMs, first = false)
+        assertEquals(listOf("MEAL|2026-10-15T10:00:58|0"), p1.toWriter.map { it.key })
+        val a1 = PumpHistoryRules.markAccepted(p1.memory, p1.toWriter, nowMs)
+        assertTrue(a1.acceptedAt.isEmpty()) // its bolus was not fed with it
+        val m2 = a1.copy(records = withMeal + bolus(102, 60, id = 1, tenths = 25), contiguousTo = 105)
+        val p2 = plan(m2, nowMs = nowMs)
+        assertEquals(listOf("MEAL|2026-10-15T10:00:58|0", k1), p2.toWriter.map { it.key })
+        assertEquals(setOf("MEAL|2026-10-15T10:00:58|0", k1), PumpHistoryRules.markAccepted(p2.memory, p2.toWriter, nowMs).acceptedAt.keys)
+
+        // its bolus accepted earlier and no longer fed: the meal is accepted with it, not fed alone
+        val p3 = plan(m2.copy(acceptedAt = mapOf(k1 to 1L)), nowMs = nowMs)
+        assertTrue(p3.toWriter.isEmpty())
+        assertTrue("MEAL|2026-10-15T10:00:58|0" in p3.memory.acceptedAt)
+
+        // no bolus at all: accepted on a history read through, not before
+        val alone = mem(listOf(ref(100, 3600, 10), meal(101, 1800, 20)), enabledAt = ms(9, 0), backfill = BackfillState.CONFIRMED)
+        assertTrue(plan(alone, nowMs = ms(10, 35), first = false).memory.acceptedAt.isEmpty())
+        assertTrue(plan(alone, nowMs = ms(10, 35)).memory.acceptedAt.isEmpty()) // 5 min: its bolus may still come
+        assertEquals(setOf("MEAL|2026-10-15T10:30:00|0"), plan(alone, nowMs = ms(10, 45)).memory.acceptedAt.keys)
+    }
+
+    @Test
+    fun theCardDoesNotPromiseAMealWhoseBolusIsThePersons() {
+        val recs = listOf(ref(100, 3600, 10), meal(101, 58, 40)) + bolus(102, 60, id = 1, tenths = 25)
+        val person = JournalRow(8, ClKind.BOLUS, ms(10, 1, 20), 2.5, null)
+        val p = plan(mem(recs), listOf(person))
+        assertTrue(p.card!!.toWrite.isEmpty())
+        assertEquals(2, p.card!!.alreadyInJournal) // the bolus and its meal
+        // the bolus listed: the meal is listed with it
+        assertEquals(listOf("MEAL|2026-10-15T10:00:58|0", k1), plan(mem(recs)).card!!.toWrite.map { it.key })
+        // the bolus at the boundary (not later): neither is written
+        val before = plan(mem(recs, boundaryMs = ms(10, 1)))
+        assertTrue(before.card!!.toWrite.isEmpty())
+        assertEquals(2, before.card!!.oldNotFound)
+    }
+
+    @Test
+    fun aBolusTimedByDeliveryFindsTheCloudRowAtItsRequest() {
+        // critic B2, C4: "programmed" (101) lost; "delivered" at 10:06:40 dated back from the reference at 11:00
+        val recs = listOf(ref(100, 3600, 10), B2Fixtures.delivered(102, 400, 1, 25), ref(103, 3600, 11))
+        val m = mem(recs, cur = 103)
+        val b = B2Fixtures.build(m).events.filterIsInstance<BolusEvent>().single()
+        assertTrue(b.timeFromDelivery)
+        val row = cloudRow(7, ms(10, 1), 2.5, "2026-10-15T10:01:00") // the cloud wrote it at the request
+        val p = plan(m, listOf(row))
+        assertEquals(1, p.matchedByTime)
+        assertTrue(p.card!!.toWrite.isEmpty())
+        assertEquals(mapOf("INSULIN|2026-10-15T10:06:40|0" to k1), p.memory.aliases)
+        // far before the delivery minus 10 min: not the same bolus
+        assertEquals(1, plan(m, listOf(row.copy(atMs = ms(9, 56)))).card!!.toWrite.size)
+    }
+
+    @Test
+    fun aCardWithAKeyGoneIsMadeAgain() {
+        // critic B2, N1: the card listed a key no event has now
+        val m = mem(oneOldBolus(), backfill = BackfillState.WAITING, shown = listOf("INSULIN|2026-10-15T10:00:59|0"))
+        val p = plan(m)
+        assertEquals(BackfillState.WAITING, p.memory.backfill)
+        assertEquals(listOf(k1), p.memory.backfillShown)
+        assertEquals(listOf(k1), p.card!!.toWrite.map { it.key })
+        assertNull(PumpBtBridge.confirmBackfill(p.memory, listOf("INSULIN|2026-10-15T10:00:59|0")))
+        assertEquals(BackfillState.CONFIRMED, PumpBtBridge.confirmBackfill(p.memory, listOf(k1))!!.backfill)
     }
 
     @Test
