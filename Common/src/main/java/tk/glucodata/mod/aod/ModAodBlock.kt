@@ -39,7 +39,8 @@ import tk.glucodata.UiRefreshBus
  * Samsung's always-on display keeps the screen in DOZE_SUSPEND and takes a new frame only when the system wakes it for
  * a moment (probe on a Galaxy S24 Ultra, One UI 6.1, 26.11: about 2 s every one to a few minutes). So the small line
  * shows the reading's clock time, not its age - a frozen frame must not claim to be fresh - and a refresh that would
- * draw the same picture is skipped ([sameDrawing]): most of them never reach the screen anyway.
+ * draw the same picture is skipped ([sameDrawing]). A changed block, while the screen dozes, also puts upstream's
+ * window up again at most once a minute ([ModAodWindow]): a window added anew is what Samsung shows (as for xDrip+).
  */
 object ModAodBlock {
 
@@ -144,6 +145,7 @@ object ModAodBlock {
             textRow?.visibility = View.GONE
             lastKey = key
             lastBitmap = WeakReference(bitmap)
+            ModAodWindow.reattachIfDozing(context, view)
             true
         } catch (t: Throwable) {
             Log.stack(TAG, "block failed, upstream's look", t)
