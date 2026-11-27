@@ -32,6 +32,7 @@ import tk.glucodata.Natives
 import tk.glucodata.mod.carelink.CareLinkClock
 import tk.glucodata.mod.carelink.CareLinkIntake
 import tk.glucodata.mod.carelink.CareLinkIob
+import tk.glucodata.mod.carelink.CareLinkNotifier
 import tk.glucodata.mod.carelink.CareLinkSettings
 import tk.glucodata.mod.carelink.ClEvent
 import tk.glucodata.mod.carelink.ClKind
@@ -314,8 +315,8 @@ internal object PumpBtSource {
     /**
      * Turns the source off (critic B1, N4): under the source's mutex and in it the intake's lock (the order of every
      * caller: a cycle holds the mutex while the intake takes its lock - critic of the joints 1, C-2) - the switch off,
-     * the open basal segment closed at its last data, the pump's active insulin off the plate; then the link stops. The
-     * history memory stays. The job is for tests.
+     * the open basal segment closed at its last data, the pump's active insulin off the plate, "no data" and "not
+     * saved" with their marks and clock away; then the link stops. The history memory stays. The job is for tests.
      */
     fun disable(context: Context): Job {
         val c = attach(context)
@@ -331,6 +332,9 @@ internal object PumpBtSource {
                                 journal("source off: basal not closed (${t.javaClass.simpleName})")
                             } finally {
                                 CareLinkIob.clear()
+                                // "no data" and "not saved" with their marks and clock: the next "on" warns afresh
+                                // (joint review 3, C-1)
+                                CareLinkNotifier.cancelAll(c)
                             }
                         }
                     }

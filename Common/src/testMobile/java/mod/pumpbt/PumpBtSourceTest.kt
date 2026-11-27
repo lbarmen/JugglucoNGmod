@@ -34,6 +34,8 @@ import tk.glucodata.drivers.api.ApiIobSnapshot
 import tk.glucodata.mod.carelink.CareLinkClock
 import tk.glucodata.mod.carelink.CareLinkIntake
 import tk.glucodata.mod.carelink.CareLinkIob
+import tk.glucodata.mod.carelink.CareLinkNotifier
+import tk.glucodata.mod.carelink.CareLinkStateStore
 import tk.glucodata.mod.carelink.ClEvent
 import tk.glucodata.mod.carelink.ClKind
 import tk.glucodata.mod.carelink.IntakeOutcome
@@ -290,6 +292,30 @@ class PumpBtSourceTest {
         assertEquals(ms(13, 0), onDisk().enabledAtMs)
         assertEquals(ms(13, 0) - 24 * 3_600_000L, onDisk().boundaryMs) // no cloud row: enable minus 24 h
         assertEquals(BackfillState.NOT_READY, onDisk().backfill)
+    }
+
+    @Test
+    fun offTakesTheNoDataAndNotSavedMarksAwaySoTheNextOnWarnsAgain() {
+        // joint review 3, C-1: a "no data" swiped away must not keep the first one after "on" again back
+        val nm = app.getSystemService(android.app.NotificationManager::class.java)
+        fun noDataShown() = nm.activeNotifications.any { it.id == 1_947_002 }
+        enable(ms(12, 0))
+        val store = CareLinkStateStore(app)
+        CareLinkNotifier.checkNoData(app, store.read(), ms(12, 41))
+        assertTrue(noDataShown())
+        nm.cancel(1_947_002) // swiped away: the mark stays
+        store.writeFailShown = true
+        store.writeFailSinceMs = ms(12, 5)
+        assertTrue(store.noDataShown)
+
+        runBlocking { PumpBtSource.disable(app).join() }
+
+        assertFalse(store.noDataShown)
+        assertFalse(store.writeFailShown)
+        assertNull(store.writeFailSinceMs)
+        enable(ms(13, 0))
+        CareLinkNotifier.checkNoData(app, store.read(), ms(13, 41))
+        assertTrue("warned again after on", noDataShown())
     }
 
     @Test

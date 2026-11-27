@@ -3,27 +3,16 @@
      (English; Russian in values-ru). Not an overlay of upstream's strings: every name starts with mod_pumpbt_. -->
 <resources>
     <string name="mod_pumpbt_title">Pump</string>
-    <string name="mod_pumpbt_entry_section">Pump</string>
-    <string name="mod_pumpbt_entry_title">Pump</string>
-    <string name="mod_pumpbt_entry_hint">Reads a MiniMed 7xx pump over Bluetooth, without MiniMed Mobile.</string>
 
-    <string name="mod_pumpbt_section_phone">Phone</string>
-    <!-- %1$s - yes / no -->
-    <string name="mod_pumpbt_advertising_supported">Bluetooth advertising supported: %1$s</string>
-    <string name="mod_pumpbt_yes">yes</string>
-    <string name="mod_pumpbt_no">no</string>
     <string name="mod_pumpbt_no_bluetooth">This phone has no Bluetooth</string>
     <string name="mod_pumpbt_bluetooth_off">Bluetooth is off — turn it on in the phone settings</string>
     <string name="mod_pumpbt_no_permissions">Bluetooth permissions not given</string>
     <string name="mod_pumpbt_allow">Allow</string>
 
-    <string name="mod_pumpbt_section_key">Key</string>
     <string name="mod_pumpbt_key_not_loaded">Key database: not loaded</string>
     <!-- %1$s - CRC of the key database (8 hex digits) -->
     <string name="mod_pumpbt_key_loaded">Key database: loaded, CRC %1$s, Mobile Application ↔ Insulin Pump</string>
     <string name="mod_pumpbt_key_loading">Downloading the pump\'s key database…</string>
-    <string name="mod_pumpbt_load_key">Load key</string>
-    <string name="mod_pumpbt_load_key_hint">Needs internet, once</string>
     <string name="mod_pumpbt_load_key_file">Load key database from file</string>
     <string name="mod_pumpbt_key_error_network">No internet or the page did not answer</string>
     <!-- %1$d - HTTP status code -->
@@ -60,26 +49,21 @@
     <!-- %1$s - time, %2$s - duration -->
     <string name="mod_pumpbt_returned">Lost at %1$s, back after %2$s</string>
     <string name="mod_pumpbt_duration">%1$d min %2$d s</string>
-    <string name="mod_pumpbt_variant_a">Name variant A: manufacturer data</string>
     <string name="mod_pumpbt_variant_b">Pairing with the other name: the phone\'s Bluetooth name is changed while the pairing goes on, then it comes back.</string>
     <string name="mod_pumpbt_variant_hint">The pump does not list the phone? Try another name: for the pairing the phone\'s Bluetooth name is changed for a while, and it comes back right after.</string>
     <string name="mod_pumpbt_stop_minimed_hint">Stop MiniMed Mobile on this phone: Settings → Apps → MiniMed Mobile → Force stop (two \"Mobile\" apps get in each other\'s way).</string>
     <string name="mod_pumpbt_start_pairing">Start pairing</string>
-    <string name="mod_pumpbt_start_pairing_hint">Keep this screen open and the phone unlocked. When the phone asks to pair with the pump, confirm at once.</string>
     <string name="mod_pumpbt_wait">Wait for the pump</string>
     <string name="mod_pumpbt_wait_hint">The phone waits for the already paired pump (no pairing). Keep this screen open.</string>
     <string name="mod_pumpbt_stop">Stop</string>
     <string name="mod_pumpbt_read_again">Read again</string>
-    <string name="mod_pumpbt_need_key">Load the key first</string>
     <string name="mod_pumpbt_stop_by_switch">To stop the link, turn Permanent operation off.</string>
     <!-- %1$s - duration (mod_pumpbt_duration) -->
     <string name="mod_pumpbt_pair_wait">The phone is waiting for the pump: %1$s (usually up to a minute — do not stop earlier)</string>
     <!-- %1$s - "Mobile NNNNNN" -->
     <string name="mod_pumpbt_pairing_failed">Pairing did not finish. On the pump, open Options → Device Options → Managed Devices → Pair Device again and pick %1$s. On the phone, confirm the pairing request (it may come as a notification). No request? Turn Bluetooth off and on; if that does not help, restart the phone. The phone keeps waiting by itself: connecting usually takes up to a minute, so do not stop it early.</string>
 
-    <string name="mod_pumpbt_section_permanent">Permanent operation</string>
     <string name="mod_pumpbt_permanent">Permanent operation</string>
-    <string name="mod_pumpbt_permanent_off">Off: pump data over Bluetooth is not written to the journal.</string>
     <string name="mod_pumpbt_permanent_needs_bluetooth">This phone has no Bluetooth LE: permanent operation is not possible.</string>
     <string name="mod_pumpbt_permanent_needs_bluetooth_on">To turn it on, turn Bluetooth on (quick settings at the top of the screen).</string>
     <string name="mod_pumpbt_permanent_needs_advertising">This phone cannot advertise over Bluetooth LE, so the pump cannot connect to it: permanent operation is not possible.</string>

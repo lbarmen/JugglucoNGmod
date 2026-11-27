@@ -2,25 +2,15 @@
 <!-- JugglucoNGmod, pump over Bluetooth: Russian strings of the pump window (formal "vy", as upstream's Russian interface). -->
 <resources>
     <string name="mod_pumpbt_title">Помпа</string>
-    <string name="mod_pumpbt_entry_section">Помпа</string>
-    <string name="mod_pumpbt_entry_title">Помпа</string>
-    <string name="mod_pumpbt_entry_hint">Читает помпу MiniMed 7xx по Bluetooth, без MiniMed Mobile.</string>
 
-    <string name="mod_pumpbt_section_phone">Телефон</string>
-    <string name="mod_pumpbt_advertising_supported">Реклама Bluetooth поддерживается: %1$s</string>
-    <string name="mod_pumpbt_yes">да</string>
-    <string name="mod_pumpbt_no">нет</string>
     <string name="mod_pumpbt_no_bluetooth">В телефоне нет Bluetooth</string>
     <string name="mod_pumpbt_bluetooth_off">Bluetooth выключен — включите его в настройках телефона</string>
     <string name="mod_pumpbt_no_permissions">Нет разрешений Bluetooth</string>
     <string name="mod_pumpbt_allow">Разрешить</string>
 
-    <string name="mod_pumpbt_section_key">Ключ</string>
     <string name="mod_pumpbt_key_not_loaded">База ключей: не загружена</string>
     <string name="mod_pumpbt_key_loaded">База ключей: загружена, CRC %1$s, Mobile Application ↔ Insulin Pump</string>
     <string name="mod_pumpbt_key_loading">Скачиваю базу ключей помпы…</string>
-    <string name="mod_pumpbt_load_key">Загрузить ключ</string>
-    <string name="mod_pumpbt_load_key_hint">Нужен интернет, один раз</string>
     <string name="mod_pumpbt_load_key_file">Загрузить базу ключей из файла</string>
     <string name="mod_pumpbt_key_error_network">Нет интернета или страница не ответила</string>
     <string name="mod_pumpbt_key_error_http">Страница ответила ошибкой %1$d</string>
@@ -49,24 +39,19 @@
     <string name="mod_pumpbt_returns_title">Возвраты (последние 3):</string>
     <string name="mod_pumpbt_returned">Пропала в %1$s, вернулась через %2$s</string>
     <string name="mod_pumpbt_duration">%1$d мин %2$d с</string>
-    <string name="mod_pumpbt_variant_a">Вариант имени A: данные производителя</string>
     <string name="mod_pumpbt_variant_b">Сопряжение с другим именем: имя Bluetooth телефона изменено, пока идёт сопряжение, потом вернётся.</string>
     <string name="mod_pumpbt_variant_hint">Помпа не видит телефон? Попробуйте другое имя: на время сопряжения меняется имя Bluetooth телефона, сразу после оно возвращается.</string>
     <string name="mod_pumpbt_stop_minimed_hint">Остановите MiniMed Mobile на этом телефоне: Настройки → Приложения → MiniMed Mobile → Остановить (два приложения «Mobile» мешают друг другу).</string>
     <string name="mod_pumpbt_start_pairing">Начать сопряжение</string>
-    <string name="mod_pumpbt_start_pairing_hint">Держите этот экран открытым, телефон не блокируйте. Когда телефон спросит о сопряжении с помпой — сразу подтвердите.</string>
     <string name="mod_pumpbt_wait">Ждать помпу</string>
     <string name="mod_pumpbt_wait_hint">Телефон ждёт уже сопряжённую помпу (без сопряжения). Держите этот экран открытым.</string>
     <string name="mod_pumpbt_stop">Остановить</string>
     <string name="mod_pumpbt_read_again">Прочитать ещё раз</string>
-    <string name="mod_pumpbt_need_key">Сначала загрузите ключ</string>
     <string name="mod_pumpbt_stop_by_switch">Чтобы остановить связь, выключите «Постоянную работу».</string>
     <string name="mod_pumpbt_pair_wait">Телефон ждёт помпу: %1$s (обычно до минуты — не останавливайте раньше)</string>
     <string name="mod_pumpbt_pairing_failed">Сопряжение не завершилось. На помпе снова откройте «Дополнительно» → «Опции устройства» → «Управление устройствами» → «Подсоединить устройство» и выберите «%1$s». На телефоне подтвердите запрос на сопряжение (он может прийти уведомлением в шторке). Запроса нет — выключите и включите Bluetooth; не помогло — перезагрузите телефон. Телефон продолжает ждать сам: подключение обычно занимает до минуты, не останавливайте раньше.</string>
 
-    <string name="mod_pumpbt_section_permanent">Постоянная работа</string>
     <string name="mod_pumpbt_permanent">Постоянная работа</string>
-    <string name="mod_pumpbt_permanent_off">Выключена: данные помпы по Bluetooth в журнал не пишутся.</string>
     <string name="mod_pumpbt_permanent_needs_bluetooth">В телефоне нет Bluetooth LE: постоянная работа невозможна.</string>
     <string name="mod_pumpbt_permanent_needs_bluetooth_on">Чтобы включить, включите Bluetooth (быстрые настройки вверху экрана).</string>
     <string name="mod_pumpbt_permanent_needs_advertising">Телефон не умеет рекламу Bluetooth LE, и помпа не сможет к нему подключиться: постоянная работа невозможна.</string>

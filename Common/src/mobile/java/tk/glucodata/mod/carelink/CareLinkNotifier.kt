@@ -42,6 +42,12 @@ object CareLinkNotifier {
     internal const val BLUETOOTH_MIN_WARN_MIN = 20
 
     /**
+     * The threshold in force for "no data" and "not saved": the stored one, at least [BLUETOOTH_MIN_WARN_MIN] - a stored
+     * 5/10/15 acts as 20, as the pump window shows it (joint review 3, N-1).
+     */
+    internal fun warnMinInForce(settings: CareLinkSettings): Int = maxOf(settings.warnAfterMin, BLUETOOTH_MIN_WARN_MIN)
+
+    /**
      * After a pump cycle: check the writes and the data age. Each step on its own (critic 4d2, N2): a failure in the
      * write check must not skip the "no data" check.
      */
@@ -77,7 +83,7 @@ object CareLinkNotifier {
             state.status == CareLinkStatus.ERROR && state.lastError?.kind == CareLinkErrorKind.WRITE -> {
                 val since = store.writeFailSinceMs ?: nowMs.also { store.writeFailSinceMs = it }
                 val minutes = ((nowMs - since) / 60_000L).toInt()
-                if (nowMs - since < CareLinkSettings(app).warnAfterMs) return
+                if (nowMs - since < warnMinInForce(CareLinkSettings(app)) * 60_000L) return
                 if (store.writeFailShown && !blocked(app)) return
                 val posted = post(app, ID_WRITE_FAIL, app.getString(R.string.mod_carelink_write_fail_title),
                     app.getString(R.string.mod_carelink_write_fail_text, minutes))
@@ -104,7 +110,7 @@ object CareLinkNotifier {
             val live = PumpSourceSwitch.bluetoothOn(app)
             val last = if (!live) null else
                 listOfNotNull(state.lastDataAtMs, PumpSourceSwitch.onSinceMs(app)?.plus(FIRST_DATA_MARGIN_MS)).maxOrNull()
-            val warnMin = maxOf(settings.warnAfterMin, BLUETOOTH_MIN_WARN_MIN)
+            val warnMin = warnMinInForce(settings)
             val stale = live && last != null && nowMs - last >= warnMin * 60_000L
             if (stale) {
                 if (store.noDataShown && !blocked(app)) return
@@ -205,10 +211,14 @@ object CareLinkNotifier {
     internal fun ensureChannel(context: Context) {
         val app = context.applicationContext
         val nm = app.getSystemService(NotificationManager::class.java) ?: return
-        if (nm.getNotificationChannel(CHANNEL) != null) return
+        val name = app.getString(R.string.mod_carelink_channel_name)
+        val description = app.getString(R.string.mod_carelink_channel_description)
+        val existing = nm.getNotificationChannel(CHANNEL)
+        // a channel made by an older build keeps the cloud's name and text: made again with the same id, Android takes
+        // the new name and description and keeps the person's importance and sound (joint review 3, N-2)
+        if (existing != null && existing.name?.toString() == name && existing.description == description) return
         nm.createNotificationChannel(
-            NotificationChannel(CHANNEL, app.getString(R.string.mod_carelink_channel_name), NotificationManager.IMPORTANCE_DEFAULT)
-                .apply { description = app.getString(R.string.mod_carelink_channel_description) },
+            NotificationChannel(CHANNEL, name, NotificationManager.IMPORTANCE_DEFAULT).apply { this.description = description },
         )
     }
 }

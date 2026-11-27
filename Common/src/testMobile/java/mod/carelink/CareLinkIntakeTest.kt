@@ -415,6 +415,21 @@ class CareLinkIntakeTest {
     }
 
     @Test
+    fun aChannelMadeByAnOlderBuildGetsTheNewNameAndTextAndKeepsThePersonsImportance() {
+        // joint review 3, N-2: the channel of build 15 and older was "CareLink" with a sign-in text
+        nm.createNotificationChannel(android.app.NotificationChannel(CareLinkNotifier.CHANNEL, "CareLink",
+            NotificationManager.IMPORTANCE_LOW).apply { description = "Sign in to CareLink again" })
+
+        CareLinkNotifier.ensureChannel(app)
+
+        val ch = nm.getNotificationChannel(CareLinkNotifier.CHANNEL)
+        assertEquals(app.getString(tk.glucodata.R.string.mod_carelink_channel_name), ch.name.toString())
+        assertEquals(app.getString(tk.glucodata.R.string.mod_carelink_channel_description), ch.description)
+        assertEquals(NotificationManager.IMPORTANCE_LOW, ch.importance)
+        assertEquals(1, nm.notificationChannels.size)
+    }
+
+    @Test
     fun aFailedJournalWriteIsFailedAndWarnsWhileTheSourceIsOn() {
         // CareLink signed out: "pump records are not saved" lives for the Bluetooth source
         CareLinkSettings(app).warnAfterMin = 5
@@ -431,9 +446,16 @@ class CareLinkIntakeTest {
         assertEquals(1, iob.size)
         assertEquals(now, store.writeFailSinceMs)
         assertNull(shown(CareLinkNotifier.ID_WRITE_FAIL))
+        // a stored 5 min acts as 20 over Bluetooth, as for "no data" (joint review 3, N-1)
         now += 5 * 60_000L
         accept(pump = pump(now - 60_000L))
-        assertNotNull(shown(CareLinkNotifier.ID_WRITE_FAIL))
+        assertNull("5 min stored: not yet", shown(CareLinkNotifier.ID_WRITE_FAIL))
+        now += 14 * 60_000L
+        accept(pump = pump(now - 60_000L))
+        assertNull("19 min", shown(CareLinkNotifier.ID_WRITE_FAIL))
+        now += 60_000L
+        accept(pump = pump(now - 60_000L))
+        assertNotNull("20 min", shown(CareLinkNotifier.ID_WRITE_FAIL))
         // a good write takes it away
         CareLinkIntake.writeJournal = { _, e, _ -> journal += e }
         now += 60_000L
