@@ -40,7 +40,10 @@ internal data class PumpCycle(
     val basalRate: Double? = null,
     /** The "active basal" answer came. */
     val basalRead: Boolean = false,
+    /** The temporary basal's value: U/h or percent - by [tempBasalType]. */
     val tempBasalRate: Double? = null,
+    /** IDD TBR type: 0x33 - U/h, 0x3C - percent (critic of the joints 1, B-1). */
+    val tempBasalType: Int? = null,
     val tempBasalMinutesLeft: Int? = null,
     val batteryPercent: Int? = null,
     /** By sequence number, no repeats; there may be gaps. */
@@ -115,7 +118,7 @@ internal data class PumpEventsResult(
 /** Pump-local times of history records from the reference times (0xF00E). */
 internal object HistoryDating {
 
-    private class Ref(val sequence: Long, val time: LocalDateTime, val offset: Int)
+    private class Ref(val sequence: Long, val time: LocalDateTime, val offset: Int, val periodic: Boolean)
 
     /**
      * Time of each record in [records], by sequence number (records without a time are missing):
@@ -130,9 +133,16 @@ internal object HistoryDating {
      * way) only if no record number between them is missing ([requireNoGaps]) and no record between them is an
      * unreadable reference time: a lost reference would shift the time by up to an hour. If the first way is not
      * clean, the other one is tried; if neither is - no time.
+     * Back from a reference of another reason than periodic (time set, time lost, undetermined) only once every record
+     * before the record came or is marked lost ([contiguousTo] ≥ its number − 1): across a clock change the two ways
+     * differ by the change, and a time once given must not move when a gap before the record closes (a fed bolus would
+     * get a second key; critic of the joints 1, N-2). Until then the record waits undated; the memory gets past a gap
+     * (three failures), so it does not wait for ever.
      * [requireNoGaps] = false is for the trial screen only, which dates one read at a time.
      */
-    fun times(records: List<HistoryRecord>, stored: HistoryReferenceLocal?, requireNoGaps: Boolean = true): Map<Long, LocalDateTime> {
+    fun times(
+        records: List<HistoryRecord>, stored: HistoryReferenceLocal?, requireNoGaps: Boolean = true, contiguousTo: Long? = null,
+    ): Map<Long, LocalDateTime> {
         val sorted = records.sortedBy { it.sequence }.distinctBy { it.sequence }
         val seqs = LongArray(sorted.size) { sorted[it].sequence }
         // brokenBefore[i]: unreadable reference times among sorted[0 until i]
@@ -148,7 +158,11 @@ internal object HistoryDating {
             return (!requireNoGaps || (to - from).toLong() == b - a - 1) && brokenBefore[to] == brokenBefore[from]
         }
 
-        val refs = sorted.mapNotNull { r -> (r.event as? HistoryEvent.ReferenceTime)?.let { Ref(r.sequence, it.time, r.relativeOffset) } }
+        val refs = sorted.mapNotNull { r ->
+            (r.event as? HistoryEvent.ReferenceTime)?.let {
+                Ref(r.sequence, it.time, r.relativeOffset, it.reason == null || it.reason == HistoryEvent.ReferenceTime.PERIODIC)
+            }
+        }
         val out = HashMap<Long, LocalDateTime>(sorted.size * 2)
         for (r in sorted) {
             val e = r.event
@@ -165,7 +179,9 @@ internal object HistoryDating {
                 else -> null
             }
             val forward = forwardBase?.takeIf { clean(it.first, r.sequence) }?.second?.plusSeconds(offset)
+            val settledBefore = contiguousTo != null && contiguousTo >= r.sequence - 1
             val back = next?.takeIf { r.relativeOffset <= it.offset && clean(r.sequence, it.sequence) }
+                ?.takeIf { !requireNoGaps || it.periodic || settledBefore }
                 ?.let { it.time.minusSeconds(it.offset.toLong()).plusSeconds(offset) }
             // after a reference in the records: forward first; before the first one: back first, then the stored one
             val time = if (prev != null) forward ?: back else back ?: forward
@@ -237,7 +253,7 @@ internal object PumpEvents {
     fun build(records: List<RawHistoryRecord>, stored: HistoryReferenceLocal?, contiguousTo: Long?): PumpEventsResult {
         val parsed = records.sortedBy { it.sequence }.distinctBy { it.sequence }.map { checked(it.parse()) }
         val bySeq = parsed.associateBy { it.sequence }
-        val times = HistoryDating.times(parsed, stored)
+        val times = HistoryDating.times(parsed, stored, contiguousTo = contiguousTo)
 
         val events = ArrayList<PumpEvent>()
         val unparsed = ArrayList<UnparsedRecord>()

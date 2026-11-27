@@ -223,6 +223,7 @@ internal class PumpLink(
         var basalRate: Double? = null
         var basalRead = false
         var tempBasalRate: Double? = null
+        var tempBasalType: Int? = null
         var tempBasalMinutesLeft: Int? = null
         var batteryPercent: Int? = null
         /** A status value came in this cycle (IDD Status, a Status Reader answer, battery). */
@@ -1526,6 +1527,7 @@ internal class PumpLink(
             basalRate = c.basalRate,
             basalRead = c.basalRead,
             tempBasalRate = c.tempBasalRate,
+            tempBasalType = c.tempBasalType,
             tempBasalMinutesLeft = c.tempBasalMinutesLeft,
             batteryPercent = c.batteryPercent,
             records = records,
@@ -1811,21 +1813,27 @@ internal class PumpLink(
                 }
                 StatusReaderOpcode.GET_ACTIVE_BASAL_RATE_DELIVERY.responseOpcode -> {
                     val v = ActiveBasalRate.parse(plain)
-                    journal("active basal read, temp basal " + if (v.tempBasalUnitsPerHour != null) "running" else "none")
+                    journal("active basal read, temp basal " + if (v.tempBasalValue != null) "running" else "none")
                     detail {
+                        val unit = when (v.tempBasalType) {
+                            ActiveBasalRate.TBR_ABSOLUTE -> "U/h"
+                            ActiveBasalRate.TBR_RELATIVE -> "%"
+                            else -> "(type ${v.tempBasalType ?: "-"})"
+                        }
                         "active basal: profile ${v.profileNumber}, ${v.unitsPerHour} U/h, temp basal " +
-                            (v.tempBasalUnitsPerHour?.let { "$it U/h, ${v.tempBasalRemainingMinutes ?: "-"} min left" } ?: "none")
+                            (v.tempBasalValue?.let { "$it $unit, ${v.tempBasalRemainingMinutes ?: "-"} min left" } ?: "none")
                     }
                     cycle?.let {
                         it.basalRate = v.unitsPerHour
                         it.basalRead = true
-                        it.tempBasalRate = v.tempBasalUnitsPerHour
+                        it.tempBasalRate = v.tempBasalValue
+                        it.tempBasalType = v.tempBasalType
                         it.tempBasalMinutesLeft = v.tempBasalRemainingMinutes
                     }
                     updateValues {
                         it.copy(
                             basalUnitsPerHour = v.unitsPerHour, basalRead = true,
-                            tempBasalUnitsPerHour = v.tempBasalUnitsPerHour, tempBasalRemainingMin = v.tempBasalRemainingMinutes,
+                            tempBasalUnitsPerHour = v.tempBasalValue, tempBasalRemainingMin = v.tempBasalRemainingMinutes,
                         )
                     }
                 }

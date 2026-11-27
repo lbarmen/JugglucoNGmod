@@ -404,7 +404,7 @@ internal object PumpHistoryRules {
         if (raw.isEmpty()) return m.copy(reference = reference)
         val parsed = raw.map { it.parse() }
         val bySeq = parsed.associateBy { it.sequence }
-        val times = HistoryDating.times(parsed, m.reference)
+        val times = HistoryDating.times(parsed, m.reference, contiguousTo = m.contiguousTo) // as PumpEvents.build dates
         val limit = nowMs - KEEP_MS
         fun ms(t: LocalDateTime): Long = t.atZone(zone).toInstant().toEpochMilli()
         val newestOldDated = parsed.filter { r -> times[r.sequence]?.let { ms(it) < limit } == true }.maxOfOrNull { it.sequence }
