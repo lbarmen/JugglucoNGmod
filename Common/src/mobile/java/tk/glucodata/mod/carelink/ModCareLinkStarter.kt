@@ -79,12 +79,13 @@ class ModCareLinkStarter : ContentProvider() {
         internal const val SHORTCUT_ID = "mod-carelink"
 
         /**
-         * The "CareLink" shortcut on a long press of the launcher icon, opening the CareLink window. Only where the
-         * window is declared (the `mod` build); pushed, not set - other dynamic shortcuts of the app stay. Never throws.
+         * The pump shortcut on a long press of the launcher icon (id [SHORTCUT_ID] kept), opening the pump window. Only
+         * where the window is declared (the `mod` build); pushed, not set - other dynamic shortcuts of the app stay.
+         * Never throws.
          */
         internal fun installShortcut(app: Context) {
             try {
-                val intent = CareLinkActivity.intentIfDeclared(app) ?: return
+                val intent = tk.glucodata.mod.pumpbt.PumpBtActivity.intentIfDeclared(app) ?: return
                 val shortcut = ShortcutInfoCompat.Builder(app, SHORTCUT_ID)
                     .setShortLabel(app.getString(R.string.mod_carelink_shortcut_short))
                     .setLongLabel(app.getString(R.string.mod_carelink_shortcut_long))

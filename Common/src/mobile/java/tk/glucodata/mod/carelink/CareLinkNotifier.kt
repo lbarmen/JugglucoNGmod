@@ -285,9 +285,9 @@ object CareLinkNotifier {
         }
     }
 
-    /** The CareLink window when this build has it (the `mod` manifest), else the app's main window. */
+    /** The pump window when this build has it (the `mod` manifest), else the app's main window. */
     internal fun tapIntent(app: Context): Intent? =
-        CareLinkActivity.intentIfDeclared(app)?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        tk.glucodata.mod.pumpbt.PumpBtActivity.intentIfDeclared(app)?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             ?: app.packageManager.getLaunchIntentForPackage(app.packageName)
 
     /**

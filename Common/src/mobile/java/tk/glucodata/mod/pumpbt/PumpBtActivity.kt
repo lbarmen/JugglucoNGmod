@@ -1,34 +1,54 @@
 package tk.glucodata.mod.pumpbt
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.core.content.FileProvider
+import tk.glucodata.mod.carelink.CareLinkNotifier
+import tk.glucodata.mod.carelink.CareLinkSettings
 import tk.glucodata.mod.carelink.CareLinkTheme
 import tk.glucodata.ui.JugglucoTheme
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
- * JugglucoNGmod, pump over Bluetooth (trial): the hidden trial window "Pump over Bluetooth (trial)" - reads a Medtronic
- * pump over Bluetooth without MiniMed Mobile, read only, for the 740G trial. Opened from the bottom of our CareLink
- * window. The link lives in [PumpBtSource] (one per process; [PumpBtTrial] is the window's thin layer over it); this
- * window only shows it and presses its buttons. Opening asks nothing: permissions on Allow, on a start or on turning
+ * JugglucoNGmod, pump over Bluetooth: the one pump window - reads a Medtronic pump over Bluetooth without MiniMed
+ * Mobile, read only. Opened from our row in upstream's settings ([tk.glucodata.mod.carelink.ModCareLinkEntry], hook
+ * `carelink-settings`), the launcher shortcut, our notifications and the old CareLink window
+ * ([tk.glucodata.mod.carelink.CareLinkActivity] only forwards here, for pinned shortcuts and old pending intents).
+ * The link lives in [PumpBtSource] (one per process; [PumpBtTrial] is the window's thin layer over it); this window
+ * only shows it and presses its buttons. Opening asks nothing: permissions on Allow, on a start or on turning
  * permanent operation on; with permanent operation on the source keeps the link (opening does not start a new one).
+ * The window's settings (threshold, insulin type, carbs, Nightscout, the phone checks) are [PumpBtSettingsModel];
+ * the phone actions (battery optimization, notifications, our channel's system screen) are here.
  * The screen stays on while the window is shown.
  *
  * Declared only in Common/src/mobileMod/AndroidManifest.xml (not exported); [intentIfDeclared] gives null in upstream's
- * builds and the CareLink row is not drawn. Closes at once while upstream's restricted mode is locked. The drawing is
+ * builds and the settings row is not drawn. Closes at once while upstream's restricted mode is locked. The drawing is
  * in PumpBtScreen.kt (no preferences there: upstream's ArchitectureGateTests).
  */
 class PumpBtActivity : ComponentActivity() {
+
+    /** The window's settings and phone checks; read again on every onResume (the system screens come back there). */
+    internal val settings: PumpBtSettingsModel by viewModels()
+
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        settings.refresh()
+    }
 
     /** A start waiting for the permission answer: true - pairing, false - waiting for the pump. */
     private var startAfterPermission: Boolean? = null
@@ -123,6 +143,7 @@ class PumpBtActivity : ComponentActivity() {
         }
         PumpBtTrial.refreshChecks(this)
         PumpBtSource.recheckBond(this)
+        settings.refresh()
     }
 
     private fun restricted(): Boolean = try {
@@ -185,6 +206,65 @@ class PumpBtActivity : ComponentActivity() {
                 PumpBtLog.w("detailed journal not switched (${t.javaClass.simpleName})")
             }
         }
+    }
+
+    /**
+     * "Phone": our app freed from battery optimization (upstream's manifest has REQUEST_IGNORE_BATTERY_OPTIMIZATIONS); a
+     * phone without that screen - the general list.
+     */
+    @SuppressLint("BatteryLife")
+    internal fun askBatteryExemption() {
+        val direct = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))
+        if (!launch { startActivity(direct) }) launch { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+    }
+
+    /**
+     * "Phone", notifications. Android 13+: the system question once ever (kept in the settings, not for the window's
+     * life: after two refusals Android refuses silently and the first tap of every new window did nothing); refused
+     * before (or older Android) - the app's notification screen.
+     */
+    internal fun askNotifications() {
+        val stored = CareLinkSettings(this)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            !shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS) &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
+            !stored.notificationsAsked
+        ) {
+            stored.notificationsAsked = true
+            if (launch { notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS) }) return
+        }
+        launch {
+            startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+        }
+    }
+
+    /** "Phone": the system screen of our channel (sound, vibration); the channel made first. */
+    internal fun openChannelSettings() {
+        try {
+            CareLinkNotifier.ensureChannel(this)
+        } catch (t: Throwable) {
+            PumpBtLog.w("channel not created (${t.javaClass.simpleName})")
+        }
+        val channel = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+            .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+            .putExtra(Settings.EXTRA_CHANNEL_ID, CareLinkNotifier.CHANNEL)
+        if (!launch { startActivity(channel) }) {
+            launch {
+                startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+            }
+        }
+    }
+
+    /** A system screen the phone may not have: false instead of a crash. */
+    private inline fun launch(block: () -> Unit): Boolean = try {
+        block()
+        true
+    } catch (e: ActivityNotFoundException) {
+        PumpBtLog.w("screen not available (${e.javaClass.simpleName})")
+        false
+    } catch (e: SecurityException) {
+        PumpBtLog.w("screen not allowed (${e.javaClass.simpleName})")
+        false
     }
 
     private fun pickFile() {

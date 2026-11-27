@@ -18,15 +18,16 @@
             android:theme="@style/Theme.AppCompat.NoActionBar"
             android:windowSoftInputMode="adjustResize"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|uiMode|density" />
-        <!-- The CareLink window: sign-in, state, settings. Not exported: opened from upstream's settings (our row), our
-             launcher shortcut and our notifications - all of this app. -->
+        <!-- The old CareLink window: only forwards to the pump window and finishes, nothing drawn (translucent). Kept for
+             a launcher shortcut pinned before and pending intents of an older build. Not exported. -->
         <activity
             android:name="tk.glucodata.mod.carelink.CareLinkActivity"
             android:exported="false"
             android:label="@string/mod_carelink_title"
-            android:theme="@style/Theme.AppCompat.NoActionBar" />
-        <!-- Pump over Bluetooth (trial): the hidden trial window that reads the pump directly, read only. Not exported:
-             opened only from our CareLink window. BLUETOOTH_ADVERTISE and BLUETOOTH_CONNECT are in upstream's manifest. -->
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <!-- The pump window: reads the pump over Bluetooth directly, read only; pairing, state, settings. Not exported:
+             opened from upstream's settings (our row), our launcher shortcut and our notifications - all of this app.
+             BLUETOOTH_ADVERTISE and BLUETOOTH_CONNECT are in upstream's manifest. -->
         <activity
             android:name="tk.glucodata.mod.pumpbt.PumpBtActivity"
             android:exported="false"

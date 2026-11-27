@@ -13,25 +13,25 @@ import tk.glucodata.ui.symbols.Symbols
 /**
  * JugglucoNGmod, CareLink (stage 4e): the "CareLink" row in upstream's settings, sharing section - one line there
  * (hook `carelink-settings` in ExpressiveSettingsScreen.kt, between rows shown always). Draws their own [SettingsItem]
- * like its neighbours and opens [CareLinkActivity]. In a build without that window (upstream's own builds: it is
- * declared only in the `mod` manifest) nothing is drawn. Upstream's restricted mode does not reach this section (their
- * settings return early), and the window closes itself while locked.
+ * like its neighbours and opens the pump window ([tk.glucodata.mod.pumpbt.PumpBtActivity]). In a build without that
+ * window (upstream's own builds: it is declared only in the `mod` manifest) nothing is drawn. Upstream's restricted
+ * mode does not reach this section (their settings return early), and the window closes itself while locked.
  */
 @Composable
 fun ModCareLinkEntry(sharingColor: Color) {
     val context = LocalContext.current
-    val intent = remember(context) { CareLinkActivity.intentIfDeclared(context) } ?: return
+    val intent = remember(context) { tk.glucodata.mod.pumpbt.PumpBtActivity.intentIfDeclared(context) } ?: return
     SettingsItem(
         title = stringResource(R.string.mod_carelink_title),
         subtitle = stringResource(R.string.mod_carelink_entry_subtitle),
-        icon = Symbols.CloudDownloadFilled,
+        icon = Symbols.BluetoothFilled,
         iconTint = sharingColor,
         position = CardPosition.MIDDLE,
         onClick = {
             try {
                 context.startActivity(intent)
             } catch (t: Throwable) {
-                CareLinkLog.w("CareLink window not opened (${t.javaClass.simpleName})")
+                CareLinkLog.w("pump window not opened (${t.javaClass.simpleName})")
             }
         },
     )
