@@ -10,7 +10,8 @@ Run from the repository root after `bash mod/gradlew-mod.sh ... assembleMobileMo
 --manifest P    update-manifest.json must describe the phone APK (required with --mode release)
 
   python3 mod/check-apk.py --trial-absent PHONE_APK
-                only: a phone APK built with -PmodRelease=N (N >= 1) has no CareLink trial (marker strings)
+                only: a phone APK built with -PmodRelease=N (N >= 1) has no CareLink trial and no made-up
+                Bluetooth pump (marker strings, the pump's class descriptor)
 """
 import argparse
 import fnmatch
@@ -441,38 +442,54 @@ MOD_CARELINK_COMPONENTS = [MOD_STARTER, 'tk.glucodata.mod.carelink.CareLinkLogin
                            'tk.glucodata.mod.carelink.CareLinkActivity',
                            'tk.glucodata.mod.carelink.CareLinkAlarmReceiver',
                            'tk.glucodata.mod.carelink.CareLinkBootReceiver']
+# Every pump-over-Bluetooth component of the same manifest (series part 2, part B2c): without the starter the link does
+# not start with the process, without the watchdog nothing brings a stuck link back, without the update receiver the
+# link waits for the next process start after an update - the pump data would stop quietly.
+MOD_PUMPBT_STARTER = 'tk.glucodata.mod.pumpbt.ModPumpStarter'
+MOD_PUMPBT_COMPONENTS = [MOD_PUMPBT_STARTER, 'tk.glucodata.mod.pumpbt.PumpBtActivity',
+                         'tk.glucodata.mod.pumpbt.PumpBtWatchdogReceiver',
+                         'tk.glucodata.mod.pumpbt.PumpBtUpdateReceiver']
+NOT_EXPORTED = r'exported\([^)]*\)=(?:false|\(type 0x12\)0x0)\b'
 # Strings that only the CareLink trial code has (part 4p; Common/src/modTrial and .../mod/carelink/trial): the command
 # action, the log tag, the address of the trial session. Release builds rename classes (R8, no -dontobfuscate), so the
 # trial is found by these, not by class names.
 TRIAL_MARKERS = [b'tk.glucodata.ng.mod.CARELINK_TRIAL', b'ModCareLinkTrial', b'trial.invalid']
+# The made-up pump over Bluetooth (series part 2, part P; Common/src/modTrial/.../mod/pumpbt/trial): the class itself -
+# its type descriptor, which only a defined or referenced class puts into the dex (mod/proguard-mod-trial.pro keeps its
+# name in a test build) - and the strings only its code has (command action, log tag). Not the class name in dotted
+# form: ModPumpStarter.TRIAL_ENTRY holds it as a string constant and a candidate keeps it (critic B2c, N10).
+PUMP_TRIAL_MARKERS = [b'Ltk/glucodata/mod/pumpbt/trial/PumpBtTrialEntry;', b'tk.glucodata.ng.mod.PUMPBT_TRIAL',
+                      b'ModPumpBtTrial']
+TRIALS = [('CareLink trial', TRIAL_MARKERS), ('made-up Bluetooth pump', PUMP_TRIAL_MARKERS)]
 
 
-def dex_marker_hits(apk):
-    """Which trial markers occur in the raw dex files of [apk] (the string pool holds them whole)."""
+def dex_marker_hits(apk, markers=TRIAL_MARKERS):
+    """Which of [markers] occur in the raw dex files of [apk] (the string pool holds them whole)."""
     found = set()
     with zipfile.ZipFile(apk) as z:
         dexes = [n for n in z.namelist() if re.fullmatch(r'classes\d*\.dex', n)]
         for n in dexes:
             raw = z.read(n)
-            found.update(m.decode() for m in TRIAL_MARKERS if m in raw)
+            found.update(m.decode() for m in markers if m in raw)
     return dexes, found
 
 
 def check_trial(phone, release):
-    """Test build (N = 0): every trial marker is in the phone dex - otherwise the trial vanished silently.
-    Candidate (N >= 1): none of them, in the dex or in the manifest."""
-    dexes, found = dex_marker_hits(phone)
-    names = [m.decode() for m in TRIAL_MARKERS]
-    if release == 0:
-        missing = sorted(set(names) - found)
-        check(dexes and not missing, f'phone dex (test build): CareLink trial markers present {sorted(found)}'
-              + (f' (missing: {missing})' if missing else ''))
-    else:
-        tree = manifest_tree(phone)
-        in_manifest = [m for m in names if m in tree]
-        check(dexes and not found and not in_manifest,
-              f'phone (candidate -mod{release}): no CareLink trial marker in {len(dexes)} dex file(s) or the manifest'
-              + (f' (found: {sorted(found) + in_manifest})' if found or in_manifest else ''))
+    """Test build (N = 0): every marker of each trial (CareLink, the made-up Bluetooth pump) is in the phone dex -
+    otherwise a trial vanished silently. Candidate (N >= 1): none of them, in the dex or in the manifest."""
+    tree = manifest_tree(phone) if release != 0 else ''
+    for what, markers in TRIALS:
+        dexes, found = dex_marker_hits(phone, markers)
+        names = [m.decode() for m in markers]
+        if release == 0:
+            missing = sorted(set(names) - found)
+            check(dexes and not missing, f'phone dex (test build): {what} markers present {sorted(found)}'
+                  + (f' (missing: {missing})' if missing else ''))
+        else:
+            in_manifest = [m for m in names if m in tree]
+            check(dexes and not found and not in_manifest,
+                  f'phone (candidate -mod{release}): no {what} marker in {len(dexes)} dex file(s) or the manifest'
+                  + (f' (found: {sorted(found) + in_manifest})' if found or in_manifest else ''))
 
 
 def manifest_tree(apk):
@@ -485,8 +502,8 @@ def check_mod_components(phone, wear, release):
     watch gets none of our phone-only code: no CareLink class (tk.glucodata.mod.carelink) and none of the phone
     components of the watch block. Our watch classes (tk.glucodata.mod.watch, .health; check_wear_components) do belong
     there - joint branch, critic of part 6, V6-1: the former 'no tk.glucodata.mod.* in the watch' predates the watch
-    block. Searched with the dot / slash after `mod`: the package itself is tk.glucodata.ng.mod. The CareLink trial: in
-    a test build, not in a candidate (check_trial)."""
+    block. Searched with the dot / slash after `mod`: the package itself is tk.glucodata.ng.mod. The CareLink trial and
+    the made-up Bluetooth pump: in a test build, not in a candidate (check_trial)."""
     check_trial(phone, release)
     tree = manifest_tree(phone)
     blocks = component_blocks(tree)
@@ -497,11 +514,20 @@ def check_mod_components(phone, wear, release):
     boot = blocks.get('tk.glucodata.mod.carelink.CareLinkBootReceiver', '')
     check('android.intent.action.BOOT_COMPLETED' in boot and 'android.intent.action.MY_PACKAGE_REPLACED' in boot,
           'CareLink boot receiver: BOOT_COMPLETED and MY_PACKAGE_REPLACED')
+    missing = [c for c in MOD_PUMPBT_COMPONENTS if c not in blocks]
+    check(not missing and f'{PACKAGE}.mod-pumpbt' in tree,
+          f'phone manifest: our {len(MOD_PUMPBT_COMPONENTS)} pump-over-Bluetooth components (authority {PACKAGE}.mod-pumpbt)'
+          + (f' (missing: {missing})' if missing else ''))
+    update = blocks.get('tk.glucodata.mod.pumpbt.PumpBtUpdateReceiver', '')
+    check('android.intent.action.MY_PACKAGE_REPLACED' in update, 'pump update receiver: MY_PACKAGE_REPLACED')
+    private = [c for c in (MOD_PUMPBT_STARTER, 'tk.glucodata.mod.pumpbt.PumpBtWatchdogReceiver')
+               if re.search(NOT_EXPORTED, blocks.get(c, '')) is None]
+    check(not private, 'pump starter and watchdog receiver: not exported' + (f' (exported: {private})' if private else ''))
     wtree = manifest_tree(wear)
-    bad = sorted(set(re.findall(r'tk\.glucodata\.mod\.carelink[\w.$]*', wtree))
+    bad = sorted(set(re.findall(r'tk\.glucodata\.mod\.(?:carelink|pumpbt)[\w.$]*', wtree))
                  | {c for c in MOD_PHONE_COMPONENTS if c in wtree})
-    check(not bad and 'mod-carelink' not in wtree,
-          'wear manifest: none of our phone components (CareLink, watch block phone side)'
+    check(not bad and 'mod-carelink' not in wtree and 'mod-pumpbt' not in wtree,
+          'wear manifest: none of our phone components (CareLink, pump over Bluetooth, watch block phone side)'
           + (f' (found: {bad[:10]})' if bad else ''))
     phone_only = [c.replace('.', '/') for c in MOD_PHONE_COMPONENTS]
     hits = set()
@@ -552,7 +578,7 @@ def check_manifest(path, phone, phone_code):
 
 def trial_absent(phone):
     """--trial-absent: a phone APK built like a candidate (-PmodRelease=1, one-time key) inside the test build job has
-    no CareLink trial. Only that - no wear, signature or update manifest checks."""
+    no CareLink trial and no made-up Bluetooth pump. Only that - no wear, signature or update manifest checks."""
     pkg, code, name, _ = badging(phone)
     m = re.search(r'-mod(\d+)$', name)
     release = int(m.group(1)) if m else 0
@@ -566,7 +592,7 @@ def trial_absent(phone):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--trial-absent', metavar='PHONE_APK',
-                    help='only: the CareLink trial is not in this candidate-like phone APK (part 4p)')
+                    help='only: the CareLink trial and the made-up Bluetooth pump are not in this candidate-like phone APK')
     ap.add_argument('--phone')
     ap.add_argument('--wear')
     ap.add_argument('--release', type=int)

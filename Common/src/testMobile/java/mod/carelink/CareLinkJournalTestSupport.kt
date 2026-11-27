@@ -13,6 +13,7 @@ import tk.glucodata.data.HistoryDatabase
 import tk.glucodata.data.journal.JournalDao
 import tk.glucodata.data.journal.JournalEntryEntity
 import tk.glucodata.mod.carelink.CareLinkAuth
+import tk.glucodata.mod.carelink.CareLinkClock
 import tk.glucodata.mod.carelink.CareLinkBasalWriter
 import tk.glucodata.mod.carelink.CareLinkSeenStore
 import tk.glucodata.mod.carelink.CareLinkSettings
@@ -50,7 +51,7 @@ internal object CareLinkJournalTestEnv {
         // of the test JVM, and their later tests go red (MOD sync 44164852207: 88). Loaded here, while the context lives.
         Class.forName("tk.glucodata.Notify", true, Applic::class.java.classLoader)
         CareLinkAuth.resetForTest()
-        CareLinkAuth.clock = now
+        CareLinkClock.now = now
         CareLinkBasalWriter.zone = { java.time.ZoneOffset.UTC }
         runBlocking {
             withContext(Dispatchers.IO) { HistoryDatabase.getInstance(app).clearAllTables() }

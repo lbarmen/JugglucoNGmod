@@ -249,6 +249,22 @@ class CareLinkBasalWriterTest {
     }
 
     @Test
+    fun runningAgainWithoutTheBasalAnswerEndsTheStop() {
+        // pump over Bluetooth, critic of the joints 1 (P-N1): "delivery runs" without the basal answer closes the stop
+        // note with this cycle; the next segment starts only with a basal answer
+        write(at(0, rate = null, suspended = true))
+        write(at(5, rate = null, suspended = true))
+        runBlocking { CareLinkBasalWriter.endStop(app, PumpNow(t0 + 10 * min, suspended = false, basalKnown = false), now) }
+        assertEquals("Stop ${hhmm(0)}–${hhmm(10)}", notes().single().note)
+        assertEquals("0 U/h closed at its last data", 5, basal().single().durationMinutes)
+        write(at(15))
+        assertEquals(15L, basal().last().startMin())
+        // nothing open: nothing written
+        runBlocking { CareLinkBasalWriter.endStop(app, PumpNow(t0 + 20 * min, suspended = false, basalKnown = false), now) }
+        assertEquals(2, basal().size)
+    }
+
+    @Test
     fun stopNoteEndingOnAnotherDayHasTheDate() {
         // t0 is 05:00 UTC: 23:55 to 00:05 of the next day
         write(at(1135, rate = null, suspended = true))

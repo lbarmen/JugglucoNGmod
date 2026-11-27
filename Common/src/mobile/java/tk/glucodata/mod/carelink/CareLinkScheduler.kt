@@ -25,7 +25,8 @@ import java.util.concurrent.TimeUnit
  * [CareLinkWorker] in WorkManager. Safety net - a unique periodic [CareLinkWorker] every 15 min (network required), as
  * upstream's LumiflexCloudSyncWorker; it also restores a broken chain.
  *
- * Nothing is scheduled without a session ([CareLinkAuth.hasSession], by the file) or with polling off. Cheap and
+ * Nothing is scheduled without a session ([CareLinkAuth.hasSession], by the file), with polling off or while the
+ * Bluetooth pump source is on ([PumpSourceSwitch.bluetoothOn]; its own watchdog is not here). Cheap and
  * repeatable: the starter calls [arm] on every process start; an app that never signed in to CareLink touches neither
  * AlarmManager nor WorkManager.
  */
@@ -61,7 +62,8 @@ object CareLinkScheduler {
         val app = context.applicationContext
         val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val settings = CareLinkSettings(app)
-        if (!settings.enabled || !CareLinkAuth.hasSession(app)) {
+        // the Bluetooth pump source is on: the cloud is silent, its alarms and work go (series brief, decision 17)
+        if (!settings.enabled || !CareLinkAuth.hasSession(app) || PumpSourceSwitch.bluetoothOn(app)) {
             // off with a live session: the 15-min safety work must not wake the app for nothing even when the "armed"
             // mark is gone (upstream's settings import clears it; critic of the joints, B1)
             if (prefs.getBoolean(K_ARMED, false) || CareLinkAuth.hasSession(app)) disarm(app)
@@ -117,11 +119,11 @@ object CareLinkScheduler {
 
     /**
      * A one-time poll in WorkManager (network required). Alarm - kept if one is already waiting; sign-in and the
-     * button replace a waiting one of their own. null - off or no session: nothing queued.
+     * button replace a waiting one of their own. null - off, no session or the Bluetooth pump source on: nothing queued.
      */
     fun enqueuePoll(context: Context, reason: PollReason, firstPoll: Boolean = false): Operation? {
         val app = context.applicationContext
-        if (!CareLinkSettings(app).enabled || !CareLinkAuth.hasSession(app)) return null
+        if (!CareLinkSettings(app).enabled || !CareLinkAuth.hasSession(app) || PumpSourceSwitch.bluetoothOn(app)) return null
         return work.enqueue(app, reason, firstPoll)
     }
 

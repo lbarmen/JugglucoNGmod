@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JugglucoNGmod, pump over Bluetooth (series part 2, part B2c): Russian notifications of the Bluetooth pump source. -->
+<resources>
+    <string name="mod_pumpbt_notify_unknown_title">Помпа: неизвестная запись</string>
+    <string name="mod_pumpbt_notify_unknown_text">В истории помпы есть записи, которые приложение не знает (вид %1$s). В журнале могут не хватать доз: проверьте историю на помпе и поделитесь журналом связи с помпой.</string>
+    <string name="mod_pumpbt_notify_unparsed_title">Помпа: болюс или еда не прочитаны</string>
+    <string name="mod_pumpbt_notify_unparsed_text">Не удалось прочитать запись болюса или еды вида %1$s. Проверьте историю на помпе и, если дозы нет в журнале, добавьте её вручную.</string>
+    <string name="mod_pumpbt_notify_backfill_title">Помпа: найдены прежние дозы</string>
+    <string name="mod_pumpbt_notify_backfill_text">Найдены болюсы и еда до включения чтения помпы. Откройте окно помпы и решите, записывать ли их в журнал.</string>
+    <string name="mod_pumpbt_notify_no_result_title">Помпа: итог болюса не получен</string>
+    <string name="mod_pumpbt_notify_no_result_text">Помпа не сообщила, сколько болюса введено. Посмотрите введённую дозу на помпе.</string>
+    <string name="mod_pumpbt_notify_drift_title">Часы помпы и телефона расходятся</string>
+    <string name="mod_pumpbt_notify_drift_text">Время на помпе отличается от времени телефона. Поставьте время на помпе, иначе время записей в журнале может быть неверным.</string>
+    <string name="mod_pumpbt_notify_bond_lost_title">Телефон забыл помпу</string>
+    <string name="mod_pumpbt_notify_bond_lost_text">Помпы больше нет среди сопряжённых устройств Bluetooth телефона, данные с неё не придут. Откройте окно помпы и сопрягите её заново.</string>
+</resources>

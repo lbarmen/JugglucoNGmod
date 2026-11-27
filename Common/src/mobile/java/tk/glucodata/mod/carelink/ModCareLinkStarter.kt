@@ -121,6 +121,10 @@ class ModCareLinkStarter : ContentProvider() {
          * written (critic 4c, C1). The last snapshot and data time go: they may be of another account, and an old data
          * time would show "no data for 2000 min" at once (critic 4c, N4). A sign-out that came between the session write
          * and this call leaves nothing to turn on (critic of the joints, N3).
+         *
+         * With the Bluetooth pump source on (series brief, decision 17) the cloud stays silent: polling is marked on
+         * and its first poll pending (for when the source is turned off), "sign in again" goes; the snapshot, the data
+         * time and the write clock are the source's and stay, and nothing is armed or queued.
          */
         internal fun afterLogin(context: Context) {
             val app = context.applicationContext
@@ -128,6 +132,11 @@ class ModCareLinkStarter : ContentProvider() {
             CareLinkSettings(app).enabled = true
             val store = CareLinkStateStore(app)
             store.firstPollPending = true
+            if (PumpSourceSwitch.bluetoothOn(app)) {
+                CareLinkNotifier.cancelNeedLogin(app)
+                CareLinkScheduler.arm(app, force = true) // removes whatever is armed while the source is on
+                return
+            }
             store.update { it.copy(status = CareLinkStatus.OK, lastError = null, lastDataAtMs = null, pumpNow = null) }
             CareLinkNotifier.loggedIn(app)
             CareLinkScheduler.arm(app, force = true)
@@ -138,11 +147,19 @@ class ModCareLinkStarter : ContentProvider() {
          * After a sign-out (may be the main thread; file and preference work only): polling off, state cleared, the
          * pump's IoB off the plate; the open basal segment and stop note are closed at their last data in the
          * background (the journal is not for the main thread; critic of the joints, C2).
+         *
+         * With the Bluetooth pump source on (series brief, decision 17) a sign-out touches nothing of the pump data:
+         * the basal segment, the IoB plate, the data time, the snapshot, "no data" and "not saved" are the source's.
+         * Only polling goes off, the cloud's alarms go and "sign in again" goes.
          */
         internal fun afterSignOut(context: Context) {
             val app = context.applicationContext
             CareLinkSettings(app).enabled = false
             CareLinkScheduler.disarm(app)
+            if (PumpSourceSwitch.bluetoothOn(app)) {
+                CareLinkNotifier.cancelNeedLogin(app)
+                return
+            }
             CareLinkStateStore(app).clear()
             CareLinkNotifier.cancelAll(app)
             CareLinkIob.clear()

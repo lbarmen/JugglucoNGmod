@@ -20,7 +20,7 @@ class CareLinkAlarmReceiver : BroadcastReceiver() {
                 pending.finish()
                 return
             }
-            val prevAlarm = CareLinkScheduler.markAlarm(context, CareLinkAuth.clock())
+            val prevAlarm = CareLinkScheduler.markAlarm(context, CareLinkClock.now())
             val op = CareLinkScheduler.enqueuePoll(context, PollReason.ALARM)
             CareLinkNotifier.checkNoDataOnAlarm(context, pollQueued = op != null, prevAlarmAtMs = prevAlarm)
             if (op == null) pending.finish() else op.result.addListener({ pending.finish() }, { it.run() })

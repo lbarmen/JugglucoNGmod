@@ -144,7 +144,7 @@ class CareLinkViewModel(application: Application) : AndroidViewModel(application
         val settings = CareLinkSettings(app)
         val s = CareLinkStateStore(app).read()
         val hasSession = CareLinkAuth.hasSession(app)
-        val now = CareLinkAuth.clock()
+        val now = CareLinkClock.now()
         val view = viewOf(hasSession, settings.enabled, s, now, settings.warnAfterMs, settings.enabledSinceMs)
         val choices = try {
             CareLinkInsulin.choices(app).map { CareLinkInsulinChoice(it.id, it.displayName) }

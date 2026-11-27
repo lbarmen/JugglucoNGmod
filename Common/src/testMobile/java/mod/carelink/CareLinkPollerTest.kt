@@ -30,6 +30,7 @@ import mod.carelink.CareLinkTestData.ok
 import mod.carelink.CareLinkTestData.status
 import tk.glucodata.mod.carelink.AesGcmSessionCipher
 import tk.glucodata.mod.carelink.CareLinkAuth
+import tk.glucodata.mod.carelink.CareLinkClock
 import tk.glucodata.mod.carelink.CareLinkError
 import tk.glucodata.mod.carelink.CareLinkErrorKind
 import tk.glucodata.mod.carelink.CareLinkNotifier
@@ -102,7 +103,7 @@ class CareLinkPollerTest {
         CareLinkPoller.resetForTest()
         CareLinkScheduler.resetForTest()
         CareLinkAuth.http = net
-        CareLinkAuth.clock = { now }
+        CareLinkClock.now = { now }
         CareLinkScheduler.work = work
         CareLinkPoller.zone = { ZoneOffset.ofHours(5) }
         CareLinkPoller.writeJournal = { _, e, first -> journal += e to first }

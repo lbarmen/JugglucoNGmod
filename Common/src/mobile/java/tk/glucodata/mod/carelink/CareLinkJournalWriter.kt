@@ -72,7 +72,7 @@ object CareLinkJournalWriter {
         if (boluses.isEmpty()) return
         withContext(Dispatchers.IO) {
             val app = context.applicationContext
-            val now = CareLinkAuth.clock()
+            val now = CareLinkClock.now()
             val seen = CareLinkSeenStore.load(app, now)
             val run = Run(app, seen, journal(app))
             try {

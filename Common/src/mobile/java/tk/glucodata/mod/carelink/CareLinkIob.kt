@@ -20,7 +20,7 @@ object CareLinkIob {
     fun publish(pumpNow: PumpNow?) {
         val p = pumpNow ?: return
         val units = p.iobUnits?.takeIf { it.isFinite() && it >= 0.0 } ?: return
-        val now = CareLinkAuth.clock()
+        val now = CareLinkClock.now()
         val at = p.iobAtMs ?: p.dataAtMs
         if (at > now + CareLinkPumpNow.IOB_FUTURE_MS) return
         val remote = ApiIobSnapshot.RemoteIob(units.toFloat(), Float.NaN, Float.NaN, minOf(at, now))
@@ -38,7 +38,7 @@ object CareLinkIob {
     fun clear() {
         val ours = published ?: return
         published = null
-        if (ApiIobSnapshot.fresh(CareLinkAuth.clock()) === ours) {
+        if (ApiIobSnapshot.fresh(CareLinkClock.now()) === ours) {
             ApiIobSnapshot.clear()
             JournalSnapshotAccess.invalidateBroadcastIobCache()
         }

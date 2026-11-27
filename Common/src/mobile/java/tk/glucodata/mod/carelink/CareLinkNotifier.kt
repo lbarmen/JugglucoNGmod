@@ -21,6 +21,8 @@ import tk.glucodata.R
  * A tap opens the CareLink window (4e; in a build without it - the app). Nothing personal in the text. With the app's
  * notifications or our channel turned off nothing is posted and nothing is marked shown (critic 4d, N6): the next
  * check posts once they are on again.
+ * Part B1 (pump over Bluetooth): while the Bluetooth pump source is on, "no data" and "not saved" are alive for it
+ * (whatever the CareLink session) and "sign in again" is never shown ([PumpSourceSwitch]).
  */
 object CareLinkNotifier {
 
@@ -35,10 +37,22 @@ object CareLinkNotifier {
     /** No data ever since polling was turned on: "no data" comes this much later than the threshold. */
     internal const val FIRST_DATA_MARGIN_MS = 10 * 60_000L
 
-    /** The sign-in is gone: show "sign in again" once; "no data" and "not saved" are replaced by it. */
+    /**
+     * The lowest "no data" threshold while the Bluetooth pump source is on (critic B2c, C2): the pump brings data about
+     * every 8 min (journal of the trial, 27.11) and the watchdog checks every 5 min, so 20 min means two reads missed in
+     * a row; a lower threshold chosen for the cloud would warn and take it back cycle after cycle. A higher one is kept.
+     */
+    internal const val BLUETOOTH_MIN_WARN_MIN = 20
+
+    /**
+     * The sign-in is gone: show "sign in again" once; "no data" and "not saved" are replaced by it. Not while the
+     * Bluetooth pump source is on (series brief, decision 17): the cloud asks for nothing then, and "no data" and "not
+     * saved" are the source's.
+     */
     fun needLogin(context: Context) {
         val app = context.applicationContext
         try {
+            if (PumpSourceSwitch.bluetoothOn(app)) return
             val store = CareLinkStateStore(app)
             cancel(app, ID_NO_DATA)
             store.noDataShown = false
@@ -88,11 +102,12 @@ object CareLinkNotifier {
      * cloud) leave the clock as it is - nothing was tried to be written; so does an older answer, which keeps the write
      * error in the state while the clock runs (critic 4d, N1; 4d2, N1). Signed out meanwhile - nothing (critic 4d, N2:
      * a clock started after the sign-out's clear would give the next sign-in's first failure the whole pause). Marked
-     * shown while the notifications are off - the mark goes (critic 4d2, N4, see [blocked]).
+     * shown while the notifications are off - the mark goes (critic 4d2, N4, see [blocked]). Alive while polling is on
+     * or the Bluetooth pump source is on (part B1: signed out of CareLink, the source still writes).
      */
     internal fun checkWrites(context: Context, state: CareLinkState, nowMs: Long) {
         val app = context.applicationContext
-        if (!CareLinkSettings(app).enabled) return
+        if (!CareLinkSettings(app).enabled && !PumpSourceSwitch.bluetoothOn(app)) return
         val store = CareLinkStateStore(app)
         when {
             state.status == CareLinkStatus.OK -> {
@@ -120,22 +135,34 @@ object CareLinkNotifier {
      * poll that reached the cloud or failed on the way, by the alarm when no poll runs ([checkNoDataOnAlarm]) and by
      * the CareLink window when the threshold changes. No data ever since the sign-in - counted from it, 10 min later
      * ([FIRST_DATA_MARGIN_MS]). The threshold is read each time.
+     *
+     * While the Bluetooth pump source is on (part B1) it is alive whatever the cloud's session and status, and its
+     * watchdog calls this without a poll; the base is then the newest data or, when none has come since the source was
+     * turned on, that moment ([PumpSourceSwitch.onSinceMs]) with the same margin - data the cloud brought before does
+     * not make the source's first minutes "no data". The threshold is then at least [BLUETOOTH_MIN_WARN_MIN] (the title
+     * names the threshold in force).
      */
     fun checkNoData(context: Context, state: CareLinkState = CareLinkStateStore(context).read(),
-                    nowMs: Long = CareLinkAuth.clock()) {
+                    nowMs: Long = CareLinkClock.now()) {
         val app = context.applicationContext
         try {
             val store = CareLinkStateStore(app)
             val settings = CareLinkSettings(app)
-            val live = settings.enabled && CareLinkAuth.hasSession(app) &&
+            val bluetooth = PumpSourceSwitch.bluetoothOn(app)
+            val live = bluetooth || settings.enabled && CareLinkAuth.hasSession(app) &&
                 (state.status == CareLinkStatus.OK || state.status == CareLinkStatus.ERROR)
             // no pump data at all since polling was turned on: counted from then, with a margin for the first polls
             // (critic of the joints 4e, N4: a cloud giving only empty answers after a sign-in must not stay silent)
-            val last = state.lastDataAtMs ?: settings.enabledSinceMs?.plus(FIRST_DATA_MARGIN_MS)
-            val stale = live && last != null && nowMs - last >= settings.warnAfterMs
+            val last = if (bluetooth) {
+                listOfNotNull(state.lastDataAtMs, PumpSourceSwitch.onSinceMs(app)?.plus(FIRST_DATA_MARGIN_MS)).maxOrNull()
+            } else {
+                state.lastDataAtMs ?: settings.enabledSinceMs?.plus(FIRST_DATA_MARGIN_MS)
+            }
+            val warnMin = if (bluetooth) maxOf(settings.warnAfterMin, BLUETOOTH_MIN_WARN_MIN) else settings.warnAfterMin
+            val stale = live && last != null && nowMs - last >= warnMin * 60_000L
             if (stale) {
                 if (store.noDataShown && !blocked(app)) return
-                val posted = post(app, ID_NO_DATA, app.getString(R.string.mod_carelink_no_data_title, settings.warnAfterMin),
+                val posted = post(app, ID_NO_DATA, app.getString(R.string.mod_carelink_no_data_title, warnMin),
                     app.getString(R.string.mod_carelink_no_data_text))
                 if (posted != store.noDataShown) store.noDataShown = posted
             } else if (store.noDataShown) {
@@ -159,7 +186,7 @@ object CareLinkNotifier {
      */
     internal fun checkNoDataOnAlarm(context: Context, pollQueued: Boolean, prevAlarmAtMs: Long? = null,
                                     state: CareLinkState = CareLinkStateStore(context).read(),
-                                    nowMs: Long = CareLinkAuth.clock()) {
+                                    nowMs: Long = CareLinkClock.now()) {
         val app = context.applicationContext
         try {
             val last = state.lastPollAtMs
@@ -187,6 +214,20 @@ object CareLinkNotifier {
                 writeFailShown = false
                 writeFailSinceMs = null
             }
+        } catch (t: Throwable) {
+            CareLinkLog.w("notification not removed (${t.javaClass.simpleName})")
+        }
+    }
+
+    /**
+     * Only "sign in again" goes (a sign-in or sign-out of CareLink while the Bluetooth pump source is on): "no data" and
+     * "not saved", with their marks and clock, are the source's then (part B1).
+     */
+    internal fun cancelNeedLogin(context: Context) {
+        val app = context.applicationContext
+        try {
+            cancel(app, ID_NEED_LOGIN)
+            CareLinkStateStore(app).needLoginShown = false
         } catch (t: Throwable) {
             CareLinkLog.w("notification not removed (${t.javaClass.simpleName})")
         }

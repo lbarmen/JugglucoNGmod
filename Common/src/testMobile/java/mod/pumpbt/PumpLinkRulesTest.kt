@@ -16,7 +16,12 @@ import tk.glucodata.mod.pumpbt.PumpBtStage
 import tk.glucodata.mod.pumpbt.PumpBtUiState
 import tk.glucodata.mod.pumpbt.ble.PumpLinkRules
 import tk.glucodata.mod.pumpbt.ble.PumpLinkRules.ServerEvent
+import tk.glucodata.mod.pumpbt.core.HistoryReadStatus
 import tk.glucodata.mod.pumpbt.core.PumpUuid
+import tk.glucodata.mod.pumpbt.core.RawHistoryRecord
+import tk.glucodata.mod.pumpbt.core.ReadOnlyPolicy
+import tk.glucodata.mod.pumpbt.core.StatusReaderOpcode
+import tk.glucodata.mod.pumpbt.core.bytesOf
 import java.util.UUID
 
 /** JugglucoNGmod, pump over Bluetooth (trial): the link's decisions without an Android device. */
@@ -78,16 +83,337 @@ class PumpLinkRulesTest {
     }
 
     @Test
-    fun historyRanges() {
-        // first time: the last 50
-        assertEquals(951L..1000L, PumpLinkRules.historyRange(1000, null))
-        assertEquals(0L..10L, PumpLinkRules.historyRange(10, null))
-        // later: what is new, at most 200 (the newest)
-        assertEquals(991L..1000L, PumpLinkRules.historyRange(1000, 990))
-        assertEquals(801L..1000L, PumpLinkRules.historyRange(1000, 100))
-        assertNull(PumpLinkRules.historyRange(1000, 1000))
-        assertNull(PumpLinkRules.historyRange(1000, 1200))
-        assertNull(PumpLinkRules.historyRange(-1, null))
+    fun historyPagesFromTheOldestRecordWithoutCap() {
+        // no number yet: from the oldest record on the pump
+        assertEquals(900L, PumpLinkRules.historyStart(from = null, oldest = 900, newest = 1234))
+        val pages = PumpLinkRules.historyPages(900, 1234)
+        assertEquals(listOf(900L..999L, 1000L..1099L, 1100L..1199L, 1200L..1234L), pages.map { it.from..it.to })
+        // no cap of 200: a long gap is read to the newest, page by page, without overlaps or holes
+        val long = PumpLinkRules.historyPages(0, 4_999)
+        assertEquals(50, long.size)
+        assertEquals(5_000L, long.sumOf { it.to - it.from + 1 })
+        assertTrue(long.zipWithNext().all { (a, b) -> b.from == a.to + 1 })
+        assertTrue(long.all { it.to - it.from + 1 <= PumpLinkRules.HISTORY_PAGE })
+        assertEquals(listOf(7L..7L), PumpLinkRules.historyPages(7, 7).map { it.from..it.to })
+        assertTrue(PumpLinkRules.historyPages(8, 7).isEmpty())
+    }
+
+    @Test
+    fun historyFromOlderThanTheOldestRecordStartsAtTheOldest() {
+        assertEquals(900L, PumpLinkRules.historyStart(from = 100, oldest = 900, newest = 1234))
+        assertEquals(1000L, PumpLinkRules.historyStart(from = 1000, oldest = 900, newest = 1234))
+        // no answer to "first record": the number given is used as it is
+        assertEquals(100L, PumpLinkRules.historyStart(from = 100, oldest = null, newest = 1234))
+    }
+
+    @Test
+    fun newestBelowHistoryFromReadsNothing() {
+        // nothing new
+        assertNull(PumpLinkRules.historyStart(from = 1235, oldest = 900, newest = 1234))
+        // the pump's counter is below the number (another pump): nothing read, the memory sees newestOnPump
+        assertNull(PumpLinkRules.historyStart(from = 5000, oldest = 900, newest = 1234))
+        // no newest record
+        assertNull(PumpLinkRules.historyStart(from = 10, oldest = null, newest = null))
+        assertEquals(1234L, PumpLinkRules.historyStart(from = 1234, oldest = 900, newest = 1234))
+        // neither a number nor the oldest record: the last 3000 numbers (not below 0)
+        assertEquals(0L, PumpLinkRules.historyStart(from = null, oldest = null, newest = 1234))
+        assertEquals(7_000L, PumpLinkRules.historyStart(from = null, oldest = null, newest = 10_000))
+    }
+
+    @Test
+    fun historyDoesNotDependOnFirstRecord() {
+        val ok = PumpLinkRules.EndAnswer.SUCCESS
+        val bad = PumpLinkRules.EndAnswer.FAILED
+        val none = PumpLinkRules.EndAnswer.NO_RECORDS
+        val plan = PumpLinkRules::historyPlan
+        // both answered
+        assertEquals(PumpLinkRules.HistoryPlan.Read(900, 1234, 900, 1234, fallback = false), plan(null, ok, 900, ok, 1234))
+        assertEquals(PumpLinkRules.HistoryPlan.Read(1000, 1234, 900, 1234, fallback = false), plan(1000, ok, 900, ok, 1234))
+        // "first record" refused, failed, timed out or "no records": oldest unknown, the read goes on
+        for (first in listOf(bad, none)) {
+            assertEquals(PumpLinkRules.HistoryPlan.Read(1000, 1234, null, 1234, fallback = false), plan(1000, first, 900, ok, 1234))
+            assertEquals(PumpLinkRules.HistoryPlan.Read(0, 1234, null, 1234, fallback = true), plan(null, first, null, ok, 1234))
+        }
+        assertEquals(PumpLinkRules.HistoryPlan.Read(7_000, 10_000, null, 10_000, fallback = true), plan(null, bad, null, ok, 10_000))
+        // a number seen during "first record" counts only with its success answer
+        assertEquals(PumpLinkRules.HistoryPlan.Read(7_000, 10_000, null, 10_000, fallback = true), plan(null, bad, 9_990, ok, 10_000))
+        // oldest above newest (a late record): not trusted
+        assertEquals(PumpLinkRules.HistoryPlan.Read(1000, 1234, null, 1234, fallback = false), plan(1000, ok, 5000, ok, 1234))
+        // only "last record" decides failure
+        assertEquals(PumpLinkRules.HistoryPlan.Failed(900), plan(1000, ok, 900, bad, 1234))
+        assertEquals(PumpLinkRules.HistoryPlan.Failed(900), plan(1000, ok, 900, ok, null))
+        assertNull(PumpLinkRules.HistoryPlan.Failed(900).newest)
+        // no records at all, nothing new
+        assertEquals(PumpLinkRules.HistoryPlan.NothingToRead(null, null), plan(1000, bad, null, none, null))
+        assertEquals(PumpLinkRules.HistoryPlan.NothingToRead(900, 1234), plan(1235, ok, 900, ok, 1234))
+    }
+
+    @Test
+    fun lateFirstRecordAnswerIsNotTakenForTheNewest() {
+        val ok = PumpLinkRules.EndAnswer.SUCCESS
+        val bad = PumpLinkRules.EndAnswer.FAILED
+        val plan = PumpLinkRules::historyPlan
+        // "first record" went wrong and the "newest" is below the memory's number: failed, no newestOnPump
+        val late = plan(1000, bad, null, ok, 900)
+        assertEquals(PumpLinkRules.HistoryPlan.Failed(null), late)
+        assertNull(late.newest)
+        val outcome = PumpLinkRules.historyOutcome(PumpLinkRules.HistoryEnding.FAILED, null, null, late.oldest, late.newest, emptyList())
+        assertEquals(HistoryReadStatus.FAILED, outcome.status)
+        assertNull(outcome.newestOnPump)
+        // just nothing new (newest = number - 1) is not that case
+        assertEquals(PumpLinkRules.HistoryPlan.NothingToRead(null, 999), plan(1000, bad, null, ok, 999))
+        // with a successful "first record" a smaller newest is given out (the memory decides "new pump")
+        assertEquals(PumpLinkRules.HistoryPlan.NothingToRead(10, 900), plan(1000, ok, 10, ok, 900))
+        // the pause before "last record" after a timeout sends nothing
+        assertNull(PumpLinkRules.LinkOp.HistoryQuiet.write())
+        assertTrue(PumpLinkRules.LinkOp.HistoryQuiet.isHistory)
+        assertEquals(5_000L, PumpLinkRules.FIRST_RECORD_QUIET_MS)
+    }
+
+    @Test
+    fun fallbackReadStartsAtTheOldestRecordThatCame() {
+        // a page error before any record came: "no records"; after a record: a real failure
+        assertTrue(PumpLinkRules.fallbackPageErrorIsEmpty(fallback = true, receivedAny = false))
+        assertFalse(PumpLinkRules.fallbackPageErrorIsEmpty(fallback = true, receivedAny = true))
+        assertFalse(PumpLinkRules.fallbackPageErrorIsEmpty(fallback = false, receivedAny = false))
+        // read 7000..10000, the pump has 9200..10000: start and oldest = 9200, no false holes below
+        val r = PumpLinkRules.fallbackOutcome(PumpLinkRules.HistoryEnding.DONE, 7_000, 10_000, 10_000, (9_200L..10_000L).toList())
+        assertEquals(HistoryReadStatus.COMPLETE, r.status)
+        assertEquals(9_200L, r.requestedFrom)
+        assertEquals(9_200L, r.oldestOnPump)
+        assertEquals(10_000L, r.contiguousTo)
+        assertTrue(r.missing.isEmpty())
+        // a real hole above the oldest stays a hole
+        val g = PumpLinkRules.fallbackOutcome(PumpLinkRules.HistoryEnding.DONE, 7_000, 10_000, 10_000, (9_200L..9_499L) + (9_501L..10_000L))
+        assertEquals(HistoryReadStatus.GAP, g.status)
+        assertEquals(9_499L, g.contiguousTo)
+        assertEquals(listOf(9_500L..9_500L), g.missing)
+        // nothing came although the pump has records: failed
+        val none = PumpLinkRules.fallbackOutcome(PumpLinkRules.HistoryEnding.DONE, 7_000, 10_000, 10_000, emptyList())
+        assertEquals(HistoryReadStatus.FAILED, none.status)
+        assertNull(none.contiguousTo)
+        assertNull(none.oldestOnPump)
+    }
+
+    @Test
+    fun pairingGetsTwoMinutesFromIdentificationToSake() {
+        assertEquals(120_000L, PumpLinkRules.identifyToSakeMs(pairMode = true))
+        assertEquals(30_000L, PumpLinkRules.identifyToSakeMs(pairMode = false))
+    }
+
+    @Test
+    fun handshakeTimeLimitExtendsOnlyTwiceWhilePairing() {
+        assertTrue(PumpLinkRules.handshakeExtend(bonding = true, extensions = 0))
+        assertTrue(PumpLinkRules.handshakeExtend(bonding = true, extensions = 1))
+        assertFalse(PumpLinkRules.handshakeExtend(bonding = true, extensions = 2))
+        assertFalse(PumpLinkRules.handshakeExtend(bonding = false, extensions = 0))
+    }
+
+    @Test
+    fun journalShowsAddressesAndThePhoneNameOnlyWhenDetailed() {
+        val mac = "C4:AB:12:34:56:78"
+        val tag = PumpLinkRules.deviceTag(mac, verbose = false)
+        assertFalse(tag.contains("56:78") || tag.contains("C4:AB"))
+        assertEquals(tag, PumpLinkRules.deviceTag(mac.lowercase(), verbose = false))
+        assertTrue(tag != PumpLinkRules.deviceTag("C4:AB:12:34:56:79", verbose = false))
+        assertEquals(mac, PumpLinkRules.deviceTag(mac, verbose = true))
+        assertEquals("?", PumpLinkRules.deviceTag(null, verbose = false))
+        val line = PumpLinkRules.hideQuoted("phone Bluetooth name given back: \"Galaxy S24 of Somebody\" (accepted)")
+        assertFalse(line.contains("Galaxy"))
+        assertTrue(line.endsWith("(accepted)"))
+    }
+
+    @Test
+    fun historyOutcomeIsHonest() {
+        val outcome = PumpLinkRules::historyOutcome
+        // all came
+        val all = outcome(PumpLinkRules.HistoryEnding.DONE, 100, 399, 50, 399, (100L..399L).toList())
+        assertEquals(HistoryReadStatus.COMPLETE, all.status)
+        assertEquals(399L, all.contiguousTo)
+        assertTrue(all.missing.isEmpty())
+        assertEquals(50L, all.oldestOnPump)
+        assertEquals(399L, all.newestOnPump)
+        assertEquals(100L, all.requestedFrom)
+        assertEquals(399L, all.requestedTo)
+
+        // a hole in the middle: the number stops before it, the rest still comes
+        val gap = outcome(PumpLinkRules.HistoryEnding.DONE, 100, 399, 50, 399, (100L..149L) + (151L..399L))
+        assertEquals(HistoryReadStatus.GAP, gap.status)
+        assertEquals(149L, gap.contiguousTo)
+        assertEquals(listOf(150L..150L), gap.missing)
+
+        // timed out in the middle of the second page: the unread part is missing too
+        val late = outcome(PumpLinkRules.HistoryEnding.TIMED_OUT, 100, 399, 50, 399, (100L..249L).toList())
+        assertEquals(HistoryReadStatus.TIMED_OUT, late.status)
+        assertEquals(249L, late.contiguousTo)
+        assertEquals(listOf(250L..399L), late.missing)
+
+        // the link broke before the first record: nothing contiguous
+        val broken = outcome(PumpLinkRules.HistoryEnding.FAILED, 100, 399, 50, 399, (120L..130L).toList())
+        assertEquals(HistoryReadStatus.FAILED, broken.status)
+        assertNull(broken.contiguousTo)
+        assertEquals(listOf(100L..119L, 131L..399L), broken.missing)
+
+        // records outside the range and repeats do not count
+        val noisy = outcome(PumpLinkRules.HistoryEnding.DONE, 10, 12, 0, 12, listOf(9L, 10L, 10L, 11L, 12L, 13L))
+        assertEquals(HistoryReadStatus.COMPLETE, noisy.status)
+        assertEquals(12L, noisy.contiguousTo)
+
+        // nothing to ask (no records on the pump, nothing new): complete without records
+        val nothing = outcome(PumpLinkRules.HistoryEnding.DONE, null, null, 900, 1234, emptyList())
+        assertEquals(HistoryReadStatus.COMPLETE, nothing.status)
+        assertNull(nothing.requestedFrom)
+        assertNull(nothing.contiguousTo)
+        assertEquals(1234L, nothing.newestOnPump)
+        val empty = outcome(PumpLinkRules.HistoryEnding.DONE, null, null, null, null, emptyList())
+        assertEquals(HistoryReadStatus.COMPLETE, empty.status)
+        assertEquals(HistoryReadStatus.FAILED, outcome(PumpLinkRules.HistoryEnding.FAILED, null, null, null, null, emptyList()).status)
+    }
+
+    @Test
+    fun cycleWritesOnlyWhatTheReadOnlyListAllows() {
+        // every write a background cycle can send: the fixed part in all variants and history pages
+        val ops = buildList<PumpLinkRules.LinkOp> {
+            for (tir in listOf(true, false)) for (features in listOf(true, false)) for (history in listOf(true, false)) {
+                addAll(PumpLinkRules.cycleOps(tir, features, history))
+            }
+            addAll(PumpLinkRules.historyPages(0, 1_234))
+            addAll(PumpLinkRules.historyPages(4_294_967_000L, 4_294_967_295L))
+        }
+        assertTrue(ops.isNotEmpty())
+        for (op in ops) {
+            val w = op.write()
+            if (w == null) {
+                assertTrue("$op is a read", op is PumpLinkRules.LinkOp.Read)
+                val read = op as PumpLinkRules.LinkOp.Read
+                assertTrue("$op on the read list", ReadOnlyPolicy.mayRead(read.characteristic))
+            } else {
+                val decision = ReadOnlyPolicy.check(w)
+                assertTrue("$op: $decision", decision.isAllowed)
+                assertFalse(w.characteristic == PumpUuid.normalize(PumpUuid.IDD_COMMAND_CP))
+            }
+        }
+        // time in range is left out once the pump said it does not support it
+        assertFalse(
+            PumpLinkRules.cycleOps(timeInRange = false, features = true, history = true)
+                .any { it == PumpLinkRules.LinkOp.StatusReader(StatusReaderOpcode.GET_TIME_IN_RANGE) },
+        )
+        // history: "first" and "last" before the pages
+        assertEquals(
+            listOf(PumpLinkRules.LinkOp.HistoryFirst, PumpLinkRules.LinkOp.HistoryLast),
+            PumpLinkRules.cycleOps(timeInRange = true, features = false, history = true).filter { it.isHistory },
+        )
+        assertTrue(PumpLinkRules.cycleOps(timeInRange = true, features = false, history = false).none { it.isHistory })
+    }
+
+    @Test
+    fun anotherDeviceOnOurServerGetsNothing() {
+        val serves = PumpLinkRules::serves
+        // the pump (or the device that may become it) gets the device information and the SAKE port
+        assertTrue(serves(ServerEvent.READ_DEVICE_INFO, PumpLinkRules.Claim.TAKE))
+        assertTrue(serves(ServerEvent.WRITE_SAKE_PORT, PumpLinkRules.Claim.SAME))
+        assertTrue(serves(ServerEvent.WRITE_SAKE_CCCD, PumpLinkRules.Claim.SAME))
+        // another device while the pump is there: refused
+        val other = PumpLinkRules.claim(known = "A", knownBySake = true, knownLinked = true, device = "B", bySake = true)
+        assertEquals(PumpLinkRules.Claim.IGNORE, other)
+        assertFalse(serves(ServerEvent.READ_DEVICE_INFO, other))
+        assertFalse(serves(ServerEvent.WRITE_SAKE_PORT, other))
+        assertFalse(serves(ServerEvent.WRITE_SAKE_CCCD, other))
+        // anything that is not the pump's request: refused whoever asks
+        for (claim in PumpLinkRules.Claim.entries) {
+            assertFalse(serves(ServerEvent.READ_OTHER, claim))
+            assertFalse(serves(ServerEvent.WRITE_OTHER, claim))
+            assertFalse(serves(ServerEvent.WRITE_OTHER_DESCRIPTOR, claim))
+            assertFalse(serves(ServerEvent.CONNECTED, claim))
+        }
+    }
+
+    @Test
+    fun failedPairingIsRecognised() {
+        // bond "bonding -> none" of a device on our server or of the pump
+        assertTrue(PumpLinkRules.pairingFailedByBond(wasBonding = true, nowNone = true, ourDevice = true))
+        assertFalse(PumpLinkRules.pairingFailedByBond(wasBonding = true, nowNone = true, ourDevice = false))
+        assertFalse(PumpLinkRules.pairingFailedByBond(wasBonding = false, nowNone = true, ourDevice = true))
+        assertFalse(PumpLinkRules.pairingFailedByBond(wasBonding = true, nowNone = false, ourDevice = true))
+        // left within 5 s without counting as the pump, while advertising for pairing (27.11: after 0.9 s)
+        assertTrue(PumpLinkRules.pairingFailedByDrop(pairMode = true, identified = false, connectedForMs = 900))
+        assertFalse(PumpLinkRules.pairingFailedByDrop(pairMode = true, identified = false, connectedForMs = 5_000))
+        assertFalse(PumpLinkRules.pairingFailedByDrop(pairMode = true, identified = true, connectedForMs = 900))
+        assertFalse(PumpLinkRules.pairingFailedByDrop(pairMode = false, identified = false, connectedForMs = 900))
+        assertFalse(PumpLinkRules.pairingFailedByDrop(pairMode = true, identified = false, connectedForMs = null))
+    }
+
+    @Test
+    fun advertisingPauseGrowsToAMinuteAndNeverStops() {
+        val delays = (0..20).map { PumpLinkRules.recoverDelayMs(it) }
+        assertEquals(listOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 32_000L, 60_000L), delays.take(7))
+        assertTrue(delays.zipWithNext().all { (a, b) -> b >= a })
+        assertTrue(delays.all { it in 1_000L..PumpLinkRules.RECOVER_MAX_MS })
+        assertEquals(60_000L, PumpLinkRules.recoverDelayMs(Int.MAX_VALUE))
+        assertEquals(30_000L, PumpLinkRules.HANDSHAKE_TIMEOUT_MS)
+    }
+
+    @Test
+    fun wakeHoldIsShortAndCapped() {
+        assertEquals(30_000L, PumpLinkRules.wakeHoldMs(0))
+        assertEquals(30_000L, PumpLinkRules.wakeHoldMs(100_000))
+        assertEquals(10_000L, PumpLinkRules.wakeHoldMs(170_000))
+        assertEquals(0L, PumpLinkRules.wakeHoldMs(180_000))
+        assertEquals(0L, PumpLinkRules.wakeHoldMs(600_000))
+    }
+
+    @Test
+    fun statusReaderAnswersEndOnlyTheirOwnRequest() {
+        // answer opcodes map to their requests
+        assertEquals(0x03F3, PumpLinkRules.statusReaderAnswerFor(bytesOf(0xFC, 0x03, 0x00, 0x00)))
+        assertEquals(0x0365, PumpLinkRules.statusReaderAnswerFor(bytesOf(0x6A, 0x03, 0x00)))
+        // "response code" answer: the request inside (740G: time in range not supported)
+        val unsupported = bytesOf(0x03, 0x03, 0x01, 0x04, 0x70)
+        assertEquals(0x0401, PumpLinkRules.statusReaderAnswerFor(unsupported))
+        assertEquals(StatusReaderOpcode.GET_TIME_IN_RANGE, PumpLinkRules.statusReaderUnsupported(unsupported))
+        assertNull(PumpLinkRules.statusReaderUnsupported(bytesOf(0x03, 0x03, 0x01, 0x04, 0x0F)))
+        assertNull(PumpLinkRules.statusReaderUnsupported(bytesOf(0x02, 0x04, 0x00)))
+        // unknown or short
+        assertNull(PumpLinkRules.statusReaderAnswerFor(bytesOf(0x34, 0x12)))
+        assertNull(PumpLinkRules.statusReaderAnswerFor(bytesOf(0x03)))
+        assertNull(PumpLinkRules.statusReaderAnswerFor(bytesOf(0x03, 0x03, 0x01)))
+    }
+
+    @Test
+    fun racpAnswerCodes() {
+        assertEquals(PumpLinkRules.RACP_SUCCESS, PumpLinkRules.racpCode(bytesOf(0x0F, 0x0F, 0x33, 0xF0)))
+        assertEquals(PumpLinkRules.RACP_NO_RECORDS, PumpLinkRules.racpCode(bytesOf(0x0F, 0x0F, 0x33, 0x06)))
+        assertNull(PumpLinkRules.racpCode(bytesOf(0x0F, 0x0F, 0x33)))
+        assertNull(PumpLinkRules.racpCode(bytesOf(0x01, 0x0F, 0x33, 0xF0)))
+        // the request opcode inside the answer is checked
+        assertEquals(PumpLinkRules.RACP_SUCCESS, PumpLinkRules.racpCode(bytesOf(0x0F, 0x0F, 0x33, 0xF0), request = 0x33))
+        assertNull(PumpLinkRules.racpCode(bytesOf(0x0F, 0x0F, 0x5A, 0xF0), request = 0x33))
+    }
+
+    @Test
+    fun pumpStringsWithoutNulBytesAndBlanks() {
+        assertEquals("NG1234567H", PumpLinkRules.pumpString("NG1234567H\u0000".toByteArray()))
+        assertEquals("6.28.3", PumpLinkRules.pumpString(" 6.28.3 \u0000\u0000".toByteArray()))
+        assertEquals("", PumpLinkRules.pumpString(byteArrayOf(0, 0)))
+    }
+
+    @Test
+    fun journalCountsRecordTypesWithoutValues() {
+        val records = listOf(
+            RawHistoryRecord(1, 0xF00E, 0, ByteArray(8)),
+            RawHistoryRecord(2, 0x0069, 10, ByteArray(13) { 7 }),
+            RawHistoryRecord(3, 0x0069, 20, ByteArray(13) { 9 }),
+        )
+        val line = PumpLinkRules.typeCounts(records)
+        assertEquals("0x0069×2, 0xF00E×1", line)
+        assertEquals("", PumpLinkRules.typeCounts(emptyList()))
+    }
+
+    @Test
+    fun afterACommandTimeoutTheNextOneWaitsForAndroid() {
+        assertTrue(PumpLinkRules.gattRetry(50, sinceTimeoutMs = 1_000))
+        assertTrue(PumpLinkRules.gattRetry(0, sinceTimeoutMs = 29_999))
+        assertFalse(PumpLinkRules.gattRetry(0, sinceTimeoutMs = 30_000))
     }
 
     @Test

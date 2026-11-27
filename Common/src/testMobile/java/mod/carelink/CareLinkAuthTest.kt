@@ -25,6 +25,7 @@ import mod.carelink.CareLinkTestData.ok
 import mod.carelink.CareLinkTestData.status
 import tk.glucodata.mod.carelink.AesGcmSessionCipher
 import tk.glucodata.mod.carelink.CareLinkAuth
+import tk.glucodata.mod.carelink.CareLinkClock
 import tk.glucodata.mod.carelink.CareLinkConfig
 import tk.glucodata.mod.carelink.CareLinkSession
 import tk.glucodata.mod.carelink.CareLinkVault
@@ -66,7 +67,7 @@ class CareLinkAuthTest {
     fun setUp() {
         CareLinkAuth.resetForTest()
         CareLinkAuth.http = net
-        CareLinkAuth.clock = { now }
+        CareLinkClock.now = { now }
         CareLinkVault.cipher = AesGcmSessionCipher(keyProvider = { key })
         CareLinkVault.clear(app)
         pendingFile.delete()
@@ -112,7 +113,7 @@ class CareLinkAuthTest {
         assertEquals("made-up-refresh-2", CareLinkVault.load(app)!!.refreshToken)
         CareLinkAuth.resetForTest()
         CareLinkAuth.http = net
-        CareLinkAuth.clock = { now }
+        CareLinkClock.now = { now }
         assertEquals("made-up-refresh-2", (CareLinkAuth.ensureFresh(app) as FreshResult.Ok).session.refreshToken)
     }
 
@@ -141,7 +142,7 @@ class CareLinkAuthTest {
         for (answer in listOf(status(500), status(429), NO_NETWORK, status(403, """{"error": "access_denied"}"""))) {
             CareLinkAuth.resetForTest()
             CareLinkAuth.http = net
-            CareLinkAuth.clock = { now }
+            CareLinkClock.now = { now }
             // under a minute left: the old key cannot be used
             CareLinkVault.save(app, session(expiresInMs = 30_000L))
             net.on(TOKEN_URL, answer)
