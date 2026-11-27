@@ -12,15 +12,15 @@
     <string name="mod_carelink_login_fail_storage">The sign-in could not be saved on this phone. Try again after unlocking it.</string>
     <string name="mod_carelink_login_fail_generic">Sign-in did not finish. Close this window and try again.</string>
     <string name="mod_carelink_login_fail_webview">The built-in browser (Android System WebView) is not available on this phone. Turn on or update Android System WebView in Google Play and try again.</string>
-    <string name="mod_carelink_channel_name">CareLink</string>
-    <string name="mod_carelink_channel_description">Warnings: you need to sign in to CareLink, or pump data is not coming in or not saved</string>
+    <string name="mod_carelink_channel_name">Pump</string>
+    <string name="mod_carelink_channel_description">Warnings: pump data is not coming in or not saved</string>
     <string name="mod_carelink_need_login_title">Sign in to CareLink again</string>
     <string name="mod_carelink_need_login_text">The CareLink sign-in has stopped working, so pump data is not coming in. Open the CareLink window in the app and sign in again.</string>
     <!-- %1$d - the warning threshold, not the age at the moment of showing (the notification is not updated) -->
     <string name="mod_carelink_no_data_title">No pump data for over %1$d min</string>
-    <string name="mod_carelink_no_data_text">CareLink has no new data from the pump. Check that MiniMed Mobile is running and sees the pump. The active insulin in the app may be old; check the pump.</string>
+    <string name="mod_carelink_no_data_text">No new data has come from the pump. Check that the pump is near the phone and Bluetooth is on, and open the pump window. The active insulin in the app may be old; check the pump.</string>
     <string name="mod_carelink_write_fail_title">Pump records are not saved</string>
-    <string name="mod_carelink_write_fail_text">For %1$d min pump records have not reached the app\'s journal. Open the CareLink window and tap \"Update now\".</string>
+    <string name="mod_carelink_write_fail_text">For %1$d min pump records have not reached the app\'s journal. Open the pump window and tap Read again under Diagnostics; if it repeats, restart the app.</string>
     <string name="mod_carelink_journal_bolus">Pump bolus</string>
     <string name="mod_carelink_journal_carbs">Pump calculator</string>
     <string name="mod_carelink_journal_basal">Pump basal</string>
@@ -32,10 +32,10 @@
     <string name="mod_carelink_note_stop_open">Stop %1$s–…</string>
     <string name="mod_carelink_note_stop">Stop %1$s–%2$s</string>
     <!-- the CareLink window (4e) -->
-    <string name="mod_carelink_title">CareLink</string>
-    <string name="mod_carelink_entry_subtitle">MiniMed pump: sign-in, data, settings</string>
-    <string name="mod_carelink_shortcut_short">CareLink</string>
-    <string name="mod_carelink_shortcut_long">CareLink window</string>
+    <string name="mod_carelink_title">Pump</string>
+    <string name="mod_carelink_entry_subtitle">MiniMed pump over Bluetooth: pairing, data, settings</string>
+    <string name="mod_carelink_shortcut_short">Pump</string>
+    <string name="mod_carelink_shortcut_long">Pump window</string>
     <string name="mod_carelink_status_signed_out">Not signed in</string>
     <string name="mod_carelink_status_signed_out_text">Sign in so that pump boluses, basal and active insulin come to the app.</string>
     <string name="mod_carelink_status_need_login">Sign in again</string>
@@ -93,19 +93,19 @@
     <string name="mod_carelink_warn_after_too_soon">Pump data reaches CareLink a few minutes late, and the update runs every %1$d min. A warning sooner than %2$d min may come even when all is well.</string>
     <string name="mod_carelink_insulin">Insulin in the pump</string>
     <string name="mod_carelink_insulin_none">No insulin types available</string>
-    <string name="mod_carelink_insulin_hint">The type goes with the pump\'s boluses in the journal: the app works out active insulin by it.</string>
+    <string name="mod_carelink_insulin_hint">Pump boluses go to the journal with this insulin type: the app works out its own active insulin by it.</string>
     <string name="mod_carelink_write_carbs">Record carbs from the pump calculator</string>
     <string name="mod_carelink_write_carbs_hint">Carbs entered in the pump calculator go to the journal with their bolus.</string>
     <string name="mod_carelink_nightscout">Send pump records to Nightscout</string>
     <string name="mod_carelink_nightscout_hint">New pump records go to Nightscout, and to LibreView if sending to it is on. Older records are not sent. The Nightscout setting \"Send insulin and carbs\" must be on too.</string>
     <string name="mod_carelink_section_phone">Phone</string>
     <string name="mod_carelink_battery_exempt">Exclude from battery saving</string>
-    <string name="mod_carelink_battery_exempt_hint">Otherwise Android may delay the CareLink updates.</string>
+    <string name="mod_carelink_battery_exempt_hint">Otherwise Android may delay the link to the pump and its warnings.</string>
     <string name="mod_carelink_notifications">Allow notifications</string>
     <!-- the three notification titles as they are; %1$d - the warning threshold -->
-    <string name="mod_carelink_notifications_hint">So that these can reach you: \"No pump data for over %1$d min\", \"Pump records are not saved\" and \"Sign in to CareLink again\".</string>
-    <string name="mod_carelink_channel_off">CareLink notifications are off</string>
-    <string name="mod_carelink_channel_off_hint">The CareLink channel is turned off in the phone settings, so no warnings will come. Tap to turn it on.</string>
+    <string name="mod_carelink_notifications_hint">So that the warnings can reach you: \"No pump data for over %1$d min\", \"Pump records are not saved\", \"The phone forgot the pump\" and others.</string>
+    <string name="mod_carelink_channel_off">Pump notifications are off</string>
+    <string name="mod_carelink_channel_off_hint">The pump channel is turned off in the phone settings, so no warnings will come. Tap to turn it on.</string>
     <string name="mod_carelink_sound">Notification sound and vibration</string>
-    <string name="mod_carelink_sound_hint">The system settings of the CareLink notifications.</string>
+    <string name="mod_carelink_sound_hint">The system settings of the pump notifications.</string>
 </resources>

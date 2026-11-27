@@ -12,8 +12,10 @@ import tk.glucodata.mod.pumpbt.PumpBtNameVariant
 import tk.glucodata.mod.pumpbt.PumpBtProgress
 import tk.glucodata.mod.pumpbt.PumpBtReadiness
 import tk.glucodata.mod.pumpbt.PumpBtReturn
+import tk.glucodata.mod.pumpbt.PumpBtSourceState
 import tk.glucodata.mod.pumpbt.PumpBtStage
 import tk.glucodata.mod.pumpbt.PumpBtUiState
+import tk.glucodata.mod.pumpbt.PumpBtWindow
 import tk.glucodata.mod.pumpbt.ble.PumpLinkRules
 import tk.glucodata.mod.pumpbt.ble.PumpLinkRules.ServerEvent
 import tk.glucodata.mod.pumpbt.core.HistoryReadStatus
@@ -577,21 +579,24 @@ class PumpLinkRulesTest {
     }
 
     @Test
-    fun startNeedsBluetoothAdvertisingAndKey() {
+    fun startNeedsBluetoothAndAdvertisingNotTheKey() {
         assertEquals(
-            listOf(PumpBtBlocker.NO_BLUETOOTH, PumpBtBlocker.NO_PERMISSION, PumpBtBlocker.NO_KEY),
-            PumpBtReadiness.blockers(hasBluetooth = false, on = false, permissions = false, advertising = null, key = false),
+            listOf(PumpBtBlocker.NO_BLUETOOTH, PumpBtBlocker.NO_PERMISSION),
+            PumpBtReadiness.blockers(hasBluetooth = false, on = false, permissions = false, advertising = null),
         )
-        assertEquals(listOf(PumpBtBlocker.BLUETOOTH_OFF), PumpBtReadiness.blockers(true, false, true, null, true))
-        assertEquals(listOf(PumpBtBlocker.NO_ADVERTISING), PumpBtReadiness.blockers(true, true, true, false, true))
-        assertTrue(PumpBtReadiness.blockers(true, true, true, true, true).isEmpty())
+        assertEquals(listOf(PumpBtBlocker.BLUETOOTH_OFF), PumpBtReadiness.blockers(true, false, true, null))
+        assertEquals(listOf(PumpBtBlocker.NO_ADVERTISING), PumpBtReadiness.blockers(true, true, true, false))
+        assertTrue(PumpBtReadiness.blockers(true, true, true, true).isEmpty())
 
         val ready = PumpBtUiState(hasBluetooth = true, bluetoothOn = true, permissionsGranted = true, advertisingSupported = true, keyCrc = "01020304")
-        assertTrue(ready.canStart)
+        val off = PumpBtSourceState()
+        assertTrue(PumpBtWindow.controls(ready, off).canStart)
         // only the permissions missing: the start asks for them
-        assertTrue(ready.copy(permissionsGranted = false).canStart)
-        assertFalse(ready.copy(keyCrc = null).canStart)
-        assertFalse(ready.copy(advertisingSupported = false).canStart)
-        assertFalse(ready.copy(link = PumpBtLinkState(running = true)).canStart)
+        assertTrue(PumpBtWindow.controls(ready.copy(permissionsGranted = false), off).canStart)
+        // no key: the start downloads it first (series brief, decision 11)
+        assertTrue(ready.copy(keyCrc = null).blockers.isEmpty())
+        assertTrue(PumpBtWindow.controls(ready.copy(keyCrc = null), off).canStart)
+        assertFalse(PumpBtWindow.controls(ready.copy(advertisingSupported = false), off).canStart)
+        assertFalse(PumpBtWindow.controls(ready, off.copy(link = PumpBtLinkState(running = true))).canStart)
     }
 }

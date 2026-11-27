@@ -68,6 +68,11 @@ internal data class PumpBtSourceState(
     /** [PumpSourceSwitch.bluetoothOn]. */
     val enabled: Boolean = false,
     val link: PumpBtLinkState = PumpBtLinkState(),
+    /**
+     * Since when the running link waits for the pump to come (phone clock, [PumpBtWindow.waitingSince]); null - not
+     * waiting (stopped, pairing, connected). Process memory: a new process starts the wait anew.
+     */
+    val waitingSinceMs: Long? = null,
     /** The pump's address is among the phone's bonded devices; null - not known (Bluetooth off, no permission, no address). */
     val pumpBonded: Boolean? = null,
     /**
@@ -822,7 +827,7 @@ internal object PumpBtSource {
             journal = journal,
             logcat = { PumpBtLog.i(it) },
             publish = { ls ->
-                _state.update { it.copy(link = ls) }
+                _state.update { it.copy(link = ls, waitingSinceMs = PumpBtWindow.waitingSince(it.waitingSinceMs, ls, System.currentTimeMillis())) }
                 onLinkState?.invoke(ls)
                 val before = lastStage
                 lastStage = ls.stage

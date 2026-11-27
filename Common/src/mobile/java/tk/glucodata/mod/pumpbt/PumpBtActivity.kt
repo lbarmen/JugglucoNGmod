@@ -18,9 +18,12 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.core.content.FileProvider
+import kotlinx.coroutines.flow.MutableStateFlow
 import tk.glucodata.mod.carelink.CareLinkNotifier
 import tk.glucodata.mod.carelink.CareLinkSettings
+import tk.glucodata.mod.carelink.CareLinkStateStore
 import tk.glucodata.mod.carelink.CareLinkTheme
+import tk.glucodata.mod.carelink.PumpNow
 import tk.glucodata.ui.JugglucoTheme
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -34,8 +37,10 @@ import java.util.concurrent.Executors
  * only shows it and presses its buttons. Opening asks nothing: permissions on Allow, on a start or on turning
  * permanent operation on; with permanent operation on the source keeps the link (opening does not start a new one).
  * The window's settings (threshold, insulin type, carbs, Nightscout, the phone checks) are [PumpBtSettingsModel];
- * the phone actions (battery optimization, notifications, our channel's system screen) are here.
- * The screen stays on while the window is shown.
+ * the phone actions (battery optimization, notifications, our channel's system screen) are here. The pump's numbers
+ * come from the kept snapshot (`pump.json`, [CareLinkStateStore]: what the status bar and the watch show, it outlives a
+ * restart), read again when the window comes back and after every reading of the source.
+ * The screen stays on only while a pairing goes on ([PumpBtWindow.keepScreenOn]).
  *
  * Declared only in Common/src/mobileMod/AndroidManifest.xml (not exported); [intentIfDeclared] gives null in upstream's
  * builds and the settings row is not drawn. Closes at once while upstream's restricted mode is locked. The drawing is
@@ -45,6 +50,9 @@ class PumpBtActivity : ComponentActivity() {
 
     /** The window's settings and phone checks; read again on every onResume (the system screens come back there). */
     internal val settings: PumpBtSettingsModel by viewModels()
+
+    /** The kept pump snapshot (`pump.json`); null - none. */
+    private val pumpNow = MutableStateFlow<PumpNow?>(null)
 
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
         settings.refresh()
@@ -90,7 +98,6 @@ class PumpBtActivity : ComponentActivity() {
             enableEdgeToEdge()
         } catch (_: Throwable) {
         }
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         PumpBtTrial.onScreenOpened(this)
         val themeMode = CareLinkTheme.mode(this)
         setContent {
@@ -99,25 +106,57 @@ class PumpBtActivity : ComponentActivity() {
                     stateFlow = PumpBtTrial.state,
                     sourceFlow = PumpBtSource.state,
                     journalFlow = PumpBtJournal.tail,
+                    settingsFlow = settings.state,
+                    pumpNowFlow = pumpNow,
                     actions = PumpBtScreenActions(
                         onBack = { finish() },
                         onAllow = ::askForPermissions,
+                        onAcceptWarnings = { PumpBtTrial.acceptWarnings(this) },
                         onStartPairing = { start(pair = true) },
                         onWaitForPump = { start(pair = false) },
                         onCancelPairing = { PumpBtSource.cancelPairing(this) },
+                        onCancelKey = PumpBtTrial::cancelPendingStart,
+                        onTryOtherName = PumpBtTrial::tryOtherName,
                         onStop = PumpBtTrial::stop,
                         onReadAgain = PumpBtTrial::readAgain,
-                        onLoadKey = PumpBtTrial::loadKeyFromInternet,
                         onLoadKeyFile = ::pickFile,
-                        onVariant = PumpBtTrial::setVariant,
                         onShareJournal = ::shareJournal,
                         onClearJournal = { PumpBtTrial.clearJournal(this) },
                         onPermanent = ::setPermanent,
                         onWriteBackfill = { keys -> PumpBtSource.confirmBackfill(this, keys) },
                         onDeclineBackfill = { PumpBtSource.declineBackfill(this) },
                         onVerbose = ::setVerbose,
+                        onKeepScreenOn = ::keepScreenOn,
+                        onPumpRead = ::refreshPumpNow,
+                        onWarnAfter = settings::setWarnAfter,
+                        onInsulin = settings::setInsulin,
+                        onWriteCarbs = settings::setWriteCarbs,
+                        onNightscout = settings::setSendToNightscout,
+                        onBattery = ::askBatteryExemption,
+                        onNotifications = ::askNotifications,
+                        onSound = ::openChannelSettings,
                     ),
                 )
+            }
+        }
+    }
+
+    /** Only while a pairing goes on (plan G2b, point 1): the phone must not lock before the pump asks to pair. */
+    private fun keepScreenOn(on: Boolean) {
+        if (on) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
+    /** The kept pump snapshot read again off the main thread. */
+    private fun refreshPumpNow() {
+        val app = applicationContext
+        val target = pumpNow
+        background.execute {
+            target.value = try {
+                CareLinkStateStore(app).read().pumpNow
+            } catch (t: Throwable) {
+                PumpBtLog.w("pump snapshot not read (${t.javaClass.simpleName})")
+                null
             }
         }
     }
@@ -142,8 +181,10 @@ class PumpBtActivity : ComponentActivity() {
             return
         }
         PumpBtTrial.refreshChecks(this)
-        PumpBtSource.recheckBond(this)
+        // someone who never used the pump: nothing is made before the warnings are accepted (critic G1, N4)
+        if (PumpBtTrial.attached) PumpBtSource.recheckBond(this)
         settings.refresh()
+        refreshPumpNow()
     }
 
     private fun restricted(): Boolean = try {

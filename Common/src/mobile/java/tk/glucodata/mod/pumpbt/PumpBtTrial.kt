@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import tk.glucodata.mod.carelink.PumpSourceSwitch
 import java.io.File
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -59,10 +60,35 @@ internal object PumpBtTrial {
 
     private fun journal(line: String) = env.journal(line)
 
-    /** The window opened: the source is set up (idempotent; it gives back a changed phone name), nothing started. */
+    /**
+     * The source is set up for this window ([attach]); false - the window was opened by someone who never used the pump
+     * and nothing is made until the warnings are accepted (critic G1, N4: no link state file, no source).
+     */
+    @Volatile
+    var attached = false
+        private set
+
+    /**
+     * The window opened: the source is set up (idempotent; it gives back a changed phone name), nothing started - only
+     * for someone who used the pump (the link state file is there, a pump address is kept in the old preferences) or
+     * has the source on; anyone else sees the warnings and the source is set up when they are accepted.
+     */
     fun onScreenOpened(context: Context) {
         val c = context.applicationContext
         app = c
+        val used = usedBefore(PumpSourceSwitch.bluetoothOn(c), File(File(c.noBackupFilesDir, PumpBtStore.DIR), PumpBtStore.FILE)) {
+            PumpBtStore.addressKnown(c)
+        }
+        if (used) attach(c) else _state.update { it.copy(link = PumpBtSource.state.value.link, warningsAccepted = false, paired = false) }
+        refreshChecks(c)
+    }
+
+    /** The pump was used here: the source on, the link state [file] there, or a pump address kept (read only, nothing made). */
+    internal fun usedBefore(sourceOn: Boolean, file: File, addressKnown: () -> Boolean): Boolean =
+        sourceOn || file.isFile || addressKnown()
+
+    private fun attach(c: Context) {
+        attached = true
         // init leaves a running link alone (a pairing from this window, a turned screen)
         PumpBtSource.init(c)
         val s = PumpBtSource.store(c)
@@ -76,7 +102,6 @@ internal object PumpBtTrial {
                 warningsAccepted = s.warningsAccepted || s.paired,
             )
         }
-        refreshChecks(c)
     }
 
     /**
@@ -128,7 +153,10 @@ internal object PumpBtTrial {
 
     /** The wizard's warnings (decision 14) accepted: kept in the link state file, they are not shown again. */
     fun acceptWarnings(context: Context) {
-        acceptWarnings(PumpBtSource.store(context.applicationContext))
+        val c = context.applicationContext
+        acceptWarnings(PumpBtSource.store(c))
+        // the window of someone new: the source is set up now (critic G1, N4)
+        if (!attached) attach(c)
     }
 
     internal fun acceptWarnings(store: PumpBtStore) {

@@ -7,11 +7,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -19,7 +16,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -32,10 +28,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -44,6 +38,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import tk.glucodata.R
 import tk.glucodata.mod.carelink.IntakeOutcome
+import tk.glucodata.mod.carelink.PumpNow
 import tk.glucodata.ui.components.AppTopBar
 import tk.glucodata.ui.components.CardPosition
 import tk.glucodata.ui.components.SectionLabel
@@ -54,20 +49,24 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-/** What the trial window asks of its activity. */
+/** What the pump window asks of its activity. */
 internal class PumpBtScreenActions(
     val onBack: () -> Unit,
     val onAllow: () -> Unit,
-    /** The trial's "Start pairing", and with the source on "Pair again" (a running link switches to pairing). */
+    /** The wizard's warnings: "Got it" ([PumpBtTrial.acceptWarnings]). */
+    val onAcceptWarnings: () -> Unit,
+    /** "Start pairing", "Retry" of the KEY step and "Pair again" (with the source on a running link switches to pairing). */
     val onStartPairing: () -> Unit,
     val onWaitForPump: () -> Unit,
     /** With the source on, during a pairing: back to waiting for the paired pump ([PumpBtSource.cancelPairing]). */
     val onCancelPairing: () -> Unit,
+    /** The KEY step's "Cancel" ([PumpBtTrial.cancelPendingStart]). */
+    val onCancelKey: () -> Unit,
+    /** The PAIRING step's other name ([PumpBtTrial.tryOtherName]). */
+    val onTryOtherName: () -> Unit,
     val onStop: () -> Unit,
     val onReadAgain: () -> Unit,
-    val onLoadKey: () -> Unit,
     val onLoadKeyFile: () -> Unit,
-    val onVariant: (PumpBtNameVariant) -> Unit,
     val onShareJournal: () -> Unit,
     val onClearJournal: () -> Unit,
     /** "Permanent operation": true - [PumpBtSource.enable] (after the screen's confirmation), false - [PumpBtSource.disable]. */
@@ -76,24 +75,47 @@ internal class PumpBtScreenActions(
     val onWriteBackfill: (List<String>) -> Unit,
     val onDeclineBackfill: () -> Unit,
     val onVerbose: (Boolean) -> Unit,
+    /** The screen stays on ([PumpBtWindow.keepScreenOn]). */
+    val onKeepScreenOn: (Boolean) -> Unit,
+    /** The source read the pump: the kept snapshot is read again. */
+    val onPumpRead: () -> Unit,
+    // settings ([PumpBtSettingsModel]) and the phone ([PumpBtActivity])
+    val onWarnAfter: (Int) -> Unit,
+    val onInsulin: (Long) -> Unit,
+    val onWriteCarbs: (Boolean) -> Unit,
+    val onNightscout: (Boolean) -> Unit,
+    val onBattery: () -> Unit,
+    val onNotifications: () -> Unit,
+    val onSound: () -> Unit,
 )
 
 /**
- * JugglucoNGmod, pump over Bluetooth (trial): the drawing of the trial window in upstream's settings style (top bar,
- * section labels, setting rows). State - [PumpBtTrial] (phone checks, key) and [PumpBtSource.state] (the source and its
- * link); what is pressable - [PumpBtWindow]. Nothing read or written here.
+ * JugglucoNGmod, pump over Bluetooth: the drawing of the one pump window in upstream's settings style (top bar,
+ * section labels, setting rows). Top to bottom: the pairing wizard ([PumpBtWizardSection], while the pump is not paired
+ * or after "Pair again"), the state, the pump's numbers, the settings ([PumpBtSettingsSection]), the diagnostics
+ * (folded). State - [PumpBtTrial] (phone checks, key, wizard), [PumpBtSource.state] (the source and its link), the
+ * settings model and the kept pump snapshot; what is pressable - [PumpBtWindow]. Nothing read or written here.
  */
 @Composable
 internal fun PumpBtScreen(
     stateFlow: StateFlow<PumpBtUiState>,
     sourceFlow: StateFlow<PumpBtSourceState>,
     journalFlow: StateFlow<List<String>>,
+    settingsFlow: StateFlow<PumpBtSettingsState>,
+    pumpNowFlow: StateFlow<PumpNow?>,
     actions: PumpBtScreenActions,
 ) {
     val state by stateFlow.collectAsStateWithLifecycle()
     val source by sourceFlow.collectAsStateWithLifecycle()
     val journal by journalFlow.collectAsStateWithLifecycle()
+    val settings by settingsFlow.collectAsStateWithLifecycle()
+    val pumpNow by pumpNowFlow.collectAsStateWithLifecycle()
     val controls = PumpBtWindow.controls(state, source)
+    val step = PumpBtWindow.wizardStep(state, source)
+    val keepOn = PumpBtWindow.keepScreenOn(source)
+    LaunchedEffect(keepOn) { actions.onKeepScreenOn(keepOn) }
+    LaunchedEffect(source.lastCycleAtMs) { actions.onPumpRead() }
+    var askOn by rememberSaveable { mutableStateOf(false) }
     Scaffold(
         contentWindowInsets = WindowInsets(0.dp),
         topBar = { AppTopBar(stringResource(R.string.mod_pumpbt_title), actions.onBack) },
@@ -102,84 +124,15 @@ internal fun PumpBtScreen(
             Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 32.dp),
         ) {
-            PhoneSection(state, actions)
-            KeySection(state, actions)
-            PermanentSection(state, source, controls, actions)
+            if (step != PumpBtWizardStep.NONE) WizardSection(step, state, source, actions, onTurnOn = { askOn = true })
+            if (PumpBtWindow.stateShown(step)) StateSection(state, source, controls, actions)
             PumpBtWindow.card(source)?.let { BackfillSection(it, actions) }
-            PumpSection(state, source, controls, actions)
             if (PumpBtWindow.dataShown(source)) DataSection(source)
-            ValuesSection(source.link.values)
-            JournalSection(journal, source, actions)
+            if (pumpNow != null || source.enabled) PumpNowSection(pumpNow, source.link.values)
+            SettingsSection(settings, actions)
+            DiagnosticsSection(step, state, source, controls, journal, actions)
         }
     }
-}
-
-@Composable
-private fun PhoneSection(state: PumpBtUiState, actions: PumpBtScreenActions) {
-    SectionLabel(stringResource(R.string.mod_pumpbt_section_phone))
-    val rows = ArrayList<String>(2)
-    when {
-        !state.hasBluetooth -> rows += stringResource(R.string.mod_pumpbt_no_bluetooth)
-        !state.bluetoothOn -> rows += stringResource(R.string.mod_pumpbt_bluetooth_off)
-        else -> rows += stringResource(
-            R.string.mod_pumpbt_advertising_supported,
-            stringResource(if (state.advertisingSupported == true) R.string.mod_pumpbt_yes else R.string.mod_pumpbt_no),
-        )
-    }
-    if (!state.permissionsGranted) rows += stringResource(R.string.mod_pumpbt_no_permissions)
-    Rows(rows)
-    if (!state.permissionsGranted) {
-        Spacer(Modifier.padding(top = 8.dp))
-        Button(onClick = actions.onAllow) { Text(stringResource(R.string.mod_pumpbt_allow)) }
-    }
-}
-
-@Composable
-private fun KeySection(state: PumpBtUiState, actions: PumpBtScreenActions) {
-    SectionLabel(stringResource(R.string.mod_pumpbt_section_key))
-    val crc = state.keyCrc
-    val line = when {
-        state.keyLoading -> stringResource(R.string.mod_pumpbt_key_loading)
-        crc != null -> stringResource(R.string.mod_pumpbt_key_loaded, crc)
-        else -> stringResource(R.string.mod_pumpbt_key_not_loaded)
-    }
-    SettingsItem(title = line, position = CardPosition.SINGLE)
-    keyFailureText(state)?.let { Warning(it) }
-    Spacer(Modifier.padding(top = 8.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Button(onClick = actions.onLoadKey, enabled = !state.keyLoading) { Text(stringResource(R.string.mod_pumpbt_load_key)) }
-        OutlinedButton(onClick = actions.onLoadKeyFile, enabled = !state.keyLoading) { Text(stringResource(R.string.mod_pumpbt_load_key_file)) }
-    }
-    Hint(stringResource(R.string.mod_pumpbt_load_key_hint))
-}
-
-@Composable
-private fun keyFailureText(state: PumpBtUiState): String? = when (state.keyFailure) {
-    null -> null
-    PumpBtKey.Failure.NO_NETWORK -> stringResource(R.string.mod_pumpbt_key_error_network)
-    PumpBtKey.Failure.HTTP -> stringResource(R.string.mod_pumpbt_key_error_http, state.keyFailureCode)
-    PumpBtKey.Failure.NOT_FOUND -> stringResource(R.string.mod_pumpbt_key_error_not_found)
-    PumpBtKey.Failure.CRC -> stringResource(R.string.mod_pumpbt_key_error_crc)
-    PumpBtKey.Failure.WRONG_TYPE -> stringResource(R.string.mod_pumpbt_key_error_wrong_type)
-    PumpBtKey.Failure.FILE_NOT_READ -> stringResource(R.string.mod_pumpbt_key_error_file)
-}
-
-/** The "Permanent operation" switch (decision 14: off by default, turned on here by the owner), its warnings, the lost bond. */
-@Composable
-private fun PermanentSection(state: PumpBtUiState, source: PumpBtSourceState, controls: PumpBtControls, actions: PumpBtScreenActions) {
-    SectionLabel(stringResource(R.string.mod_pumpbt_section_permanent))
-    var askOn by rememberSaveable { mutableStateOf(false) }
-    SettingsSwitchItem(
-        title = stringResource(R.string.mod_pumpbt_permanent),
-        subtitle = stringResource(if (source.enabled) R.string.mod_pumpbt_permanent_on else R.string.mod_pumpbt_permanent_off),
-        checked = source.enabled,
-        onCheckedChange = { want -> if (want) askOn = true else actions.onPermanent(false) },
-        enabled = source.enabled || controls.canTurnOn,
-    )
-    PumpBtWindow.turnOnHint(state, source)?.let { Hint(turnOnHintText(it)) }
-    if (!source.sensorBluetooth) Warning(stringResource(R.string.mod_pumpbt_sensor_bluetooth_off))
-    if (source.memoryLoadFailed) Warning(stringResource(R.string.mod_pumpbt_memory_load_failed))
-    if (PumpBtWindow.bondAdvice(source)) BondLostCard(state, controls, actions)
     if (askOn) {
         AlertDialog(
             onDismissRequest = { askOn = false },
@@ -198,8 +151,62 @@ private fun PermanentSection(state: PumpBtUiState, source: PumpBtSourceState, co
     }
 }
 
+/**
+ * The state: the link (connected / waiting for the pump, how long / Bluetooth off), "Permanent operation" (the switch
+ * while it is on - the wizard's PAIRED step turns it on), its warnings, the lost bond.
+ */
 @Composable
-private fun turnOnHintText(hint: PumpBtTurnOnHint): String = when (hint) {
+private fun StateSection(state: PumpBtUiState, source: PumpBtSourceState, controls: PumpBtControls, actions: PumpBtScreenActions) {
+    SectionLabel(stringResource(R.string.mod_pumpbt_section_state))
+    when (PumpBtWindow.linkStatus(state, source)) {
+        PumpBtLinkStatus.BLUETOOTH_OFF -> BtWarning(stringResource(R.string.mod_pumpbt_link_bluetooth_off))
+        PumpBtLinkStatus.CONNECTED -> SettingsItem(title = stringResource(R.string.mod_pumpbt_link_connected), position = CardPosition.SINGLE)
+        PumpBtLinkStatus.WAITING -> WaitingForPump(source.waitingSinceMs, keepBond = source.enabled)
+        PumpBtLinkStatus.PAIRING -> SettingsItem(title = stringResource(R.string.mod_pumpbt_link_pairing), position = CardPosition.SINGLE)
+        PumpBtLinkStatus.ERROR -> SettingsItem(
+            title = stringResource(R.string.mod_pumpbt_link_error, source.link.error ?: "—"),
+            position = CardPosition.SINGLE,
+        )
+        PumpBtLinkStatus.OFF -> SettingsItem(title = stringResource(R.string.mod_pumpbt_link_off), position = CardPosition.SINGLE)
+    }
+    if (source.enabled) {
+        Spacer(Modifier.padding(top = 8.dp))
+        SettingsSwitchItem(
+            title = stringResource(R.string.mod_pumpbt_permanent),
+            subtitle = stringResource(R.string.mod_pumpbt_permanent_on),
+            checked = true,
+            onCheckedChange = { want -> if (!want) actions.onPermanent(false) },
+        )
+        if (!source.sensorBluetooth) BtWarning(stringResource(R.string.mod_pumpbt_sensor_bluetooth_off))
+    }
+    if (source.memoryLoadFailed) BtWarning(stringResource(R.string.mod_pumpbt_memory_load_failed))
+    if (PumpBtWindow.bondAdvice(source)) BondLostCard(state, controls, actions)
+}
+
+/**
+ * "Waiting for the pump N min" (journal of build 15: the pump came only after 4 min and the person removed the
+ * pairing): how long, how long it usually takes, and - with the source on - not to remove the pairing.
+ */
+@Composable
+private fun WaitingForPump(sinceMs: Long?, keepBond: Boolean) {
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(15_000)
+            now = System.currentTimeMillis()
+        }
+    }
+    val min = sinceMs?.let { PumpBtWindow.waitingMinutes(it, now) } ?: 0
+    SettingsItem(
+        title = stringResource(R.string.mod_pumpbt_link_waiting, min),
+        subtitle = stringResource(R.string.mod_pumpbt_link_waiting_hint),
+        position = CardPosition.SINGLE,
+    )
+    if (keepBond) BtHint(stringResource(R.string.mod_pumpbt_link_keep_bond), Modifier.padding(top = 4.dp))
+}
+
+@Composable
+internal fun turnOnHintText(hint: PumpBtTurnOnHint): String = when (hint) {
     PumpBtTurnOnHint.NO_BLUETOOTH -> stringResource(R.string.mod_pumpbt_permanent_needs_bluetooth)
     PumpBtTurnOnHint.BLUETOOTH_OFF -> stringResource(R.string.mod_pumpbt_permanent_needs_bluetooth_on)
     PumpBtTurnOnHint.NO_ADVERTISING -> stringResource(R.string.mod_pumpbt_permanent_needs_advertising)
@@ -265,34 +272,34 @@ private fun BackfillSection(card: BackfillCard, actions: PumpBtScreenActions) {
     val answer = if (pendingAt != null) PumpBtAnswer.WAITING else PumpBtAnswer.NONE
     val changed = PumpBtWindow.listChanged(shown, current)
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Body(stringResource(R.string.mod_pumpbt_backfill_found, card.bolusesBefore, card.mealsBefore))
-        Body(stringResource(R.string.mod_pumpbt_backfill_in_journal, card.alreadyInJournal))
+        BtBody(stringResource(R.string.mod_pumpbt_backfill_found, card.bolusesBefore, card.mealsBefore))
+        BtBody(stringResource(R.string.mod_pumpbt_backfill_in_journal, card.alreadyInJournal))
         if (shown.isEmpty()) {
-            Body(stringResource(R.string.mod_pumpbt_backfill_nothing))
+            BtBody(stringResource(R.string.mod_pumpbt_backfill_nothing))
         } else {
-            Body(stringResource(R.string.mod_pumpbt_backfill_to_write, shown.size))
+            BtBody(stringResource(R.string.mod_pumpbt_backfill_to_write, shown.size))
             Column(Modifier.padding(start = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 for (item in shown) {
                     val amounts = listOfNotNull(
-                        item.units?.let { stringResource(R.string.mod_pumpbt_units, units(it)) },
-                        item.grams?.let { stringResource(R.string.mod_pumpbt_grams, units(it)) },
+                        item.units?.let { stringResource(R.string.mod_pumpbt_units, btUnits(it)) },
+                        item.grams?.let { stringResource(R.string.mod_pumpbt_grams, btUnits(it)) },
                     )
                     Text(
-                        (listOf(dateTime(item.atMs)) + amounts).joinToString("  "),
+                        (listOf(btDateTime(item.atMs)) + amounts).joinToString("  "),
                         style = MaterialTheme.typography.bodyMedium,
                         fontFamily = FontFamily.Monospace,
                     )
                 }
             }
         }
-        if (card.oldNotFound > 0) Body(stringResource(R.string.mod_pumpbt_backfill_old_not_found, card.oldNotFound))
-        if (card.mealsNotWritten > 0) Body(stringResource(R.string.mod_pumpbt_backfill_meals_not_written, card.mealsNotWritten))
-        Hint(stringResource(R.string.mod_pumpbt_backfill_hint))
+        if (card.oldNotFound > 0) BtBody(stringResource(R.string.mod_pumpbt_backfill_old_not_found, card.oldNotFound))
+        if (card.mealsNotWritten > 0) BtBody(stringResource(R.string.mod_pumpbt_backfill_meals_not_written, card.mealsNotWritten))
+        BtHint(stringResource(R.string.mod_pumpbt_backfill_hint))
     }
-    if (note == PumpBtAnswer.REJECTED) Warning(stringResource(R.string.mod_pumpbt_backfill_rejected))
-    if (note == PumpBtAnswer.NOT_TAKEN) Warning(stringResource(R.string.mod_pumpbt_backfill_not_taken))
+    if (note == PumpBtAnswer.REJECTED) BtWarning(stringResource(R.string.mod_pumpbt_backfill_rejected))
+    if (note == PumpBtAnswer.NOT_TAKEN) BtWarning(stringResource(R.string.mod_pumpbt_backfill_not_taken))
     if (changed) {
-        Warning(stringResource(R.string.mod_pumpbt_backfill_changed))
+        BtWarning(stringResource(R.string.mod_pumpbt_backfill_changed))
         Spacer(Modifier.padding(top = 4.dp))
         OutlinedButton(onClick = {
             shown = current
@@ -336,149 +343,6 @@ private fun BackfillSection(card: BackfillCard, actions: PumpBtScreenActions) {
     }
 }
 
-@Composable
-private fun PumpSection(state: PumpBtUiState, source: PumpBtSourceState, controls: PumpBtControls, actions: PumpBtScreenActions) {
-    val link = source.link
-    SectionLabel(stringResource(R.string.mod_pumpbt_section_pump))
-    val rows = ArrayList<String>(4)
-    rows += stringResource(R.string.mod_pumpbt_stage, stageText(link.stage, link))
-    rows += stringResource(R.string.mod_pumpbt_name_on_pump, state.advertisedName)
-    link.lastProblem?.let { problem ->
-        rows += stringResource(R.string.mod_pumpbt_last_problem, listOfNotNull(link.lastProblemAtMs?.let(::time), problem).joinToString(" "))
-    }
-    link.furthestStage?.let { rows += stringResource(R.string.mod_pumpbt_furthest_stage, stageText(it, link)) }
-    Rows(rows)
-    if (link.stage == PumpBtStage.LOST) {
-        Spacer(Modifier.padding(top = 4.dp))
-        Hint(stringResource(R.string.mod_pumpbt_lost_hint))
-    }
-    if (PumpBtWindow.pairWaitShown(link)) {
-        Spacer(Modifier.padding(top = 4.dp))
-        PairWait(state.pairingStartedAtMs)
-    }
-    if (PumpBtWindow.pairingAdvice(link, state.pairingStartedAtMs)) {
-        Warning(stringResource(R.string.mod_pumpbt_pairing_failed, state.advertisedName))
-    }
-    if (link.returns.isNotEmpty()) {
-        Spacer(Modifier.padding(top = 8.dp))
-        Text(stringResource(R.string.mod_pumpbt_returns_title), style = MaterialTheme.typography.bodyMedium)
-        Rows(
-            link.returns.map { r ->
-                val sec = r.afterMs / 1000
-                stringResource(
-                    R.string.mod_pumpbt_returned,
-                    time(r.lostAtMs),
-                    stringResource(R.string.mod_pumpbt_duration, (sec / 60).toInt(), (sec % 60).toInt()),
-                )
-            },
-        )
-    }
-
-    if (controls.trialButtons) {
-        Spacer(Modifier.padding(top = 12.dp))
-        VariantChoice(state.variant, enabled = controls.variantEditable, onPick = actions.onVariant)
-        Hint(stringResource(R.string.mod_pumpbt_variant_hint))
-    }
-
-    Spacer(Modifier.padding(top = 12.dp))
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (controls.trialButtons) {
-            Hint(stringResource(R.string.mod_pumpbt_stop_minimed_hint))
-            Button(onClick = actions.onStartPairing, enabled = controls.canStart, modifier = Modifier.fillMaxWidth()) {
-                Text(stringResource(R.string.mod_pumpbt_start_pairing))
-            }
-            Hint(stringResource(R.string.mod_pumpbt_start_pairing_hint))
-            OutlinedButton(onClick = actions.onWaitForPump, enabled = controls.canStart, modifier = Modifier.fillMaxWidth()) {
-                Text(stringResource(R.string.mod_pumpbt_wait))
-            }
-            Hint(stringResource(R.string.mod_pumpbt_wait_hint))
-        } else {
-            // the watchdog would start a stopped link again: the link stops only with permanent operation off
-            Hint(stringResource(R.string.mod_pumpbt_stop_by_switch))
-            if (controls.pairOffered && !PumpBtWindow.bondAdvice(source)) {
-                Hint(stringResource(R.string.mod_pumpbt_stop_minimed_hint))
-                Button(onClick = actions.onStartPairing, enabled = controls.canPair, modifier = Modifier.fillMaxWidth()) {
-                    Text(stringResource(R.string.mod_pumpbt_start_pairing))
-                }
-                Hint(stringResource(R.string.mod_pumpbt_start_pairing_hint))
-            }
-            if (controls.canCancelPairing) {
-                OutlinedButton(onClick = actions.onCancelPairing, modifier = Modifier.fillMaxWidth()) {
-                    Text(stringResource(R.string.mod_pumpbt_cancel_pairing))
-                }
-                Hint(stringResource(R.string.mod_pumpbt_cancel_pairing_hint))
-            }
-        }
-        if (state.keyCrc == null) Warning(stringResource(R.string.mod_pumpbt_need_key))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (controls.trialButtons) {
-                OutlinedButton(onClick = actions.onStop, enabled = controls.canStop) { Text(stringResource(R.string.mod_pumpbt_stop)) }
-            }
-            OutlinedButton(onClick = actions.onReadAgain, enabled = controls.canReadAgain) { Text(stringResource(R.string.mod_pumpbt_read_again)) }
-        }
-    }
-}
-
-/**
- * Decision 12: how long the phone has waited for the pump to pair ("usually up to a minute"); it does not stop by
- * itself. Counted from [startedAtMs] (when the window started the pairing), else from when this window first showed
- * the wait - kept over a turned screen (critic B2b, N4).
- */
-@Composable
-private fun PairWait(startedAtMs: Long?) {
-    val firstShown = rememberSaveable { System.currentTimeMillis() }
-    val since = startedAtMs ?: firstShown
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(1000)
-            now = System.currentTimeMillis()
-        }
-    }
-    val sec = ((now - since) / 1000).coerceAtLeast(0)
-    Hint(
-        stringResource(
-            R.string.mod_pumpbt_pair_wait,
-            stringResource(R.string.mod_pumpbt_duration, (sec / 60).toInt(), (sec % 60).toInt()),
-        ),
-    )
-}
-
-@Composable
-private fun stageText(stage: PumpBtStage, link: PumpBtLinkState): String = when (stage) {
-    PumpBtStage.NOT_STARTED -> stringResource(R.string.mod_pumpbt_stage_not_started)
-    PumpBtStage.ADVERTISING_PAIR -> stringResource(R.string.mod_pumpbt_stage_advertising)
-    PumpBtStage.WAITING -> stringResource(R.string.mod_pumpbt_stage_waiting)
-    PumpBtStage.PUMP_CONNECTED -> stringResource(R.string.mod_pumpbt_stage_connected)
-    PumpBtStage.PAIRING -> stringResource(R.string.mod_pumpbt_stage_pairing)
-    PumpBtStage.HANDSHAKE -> stringResource(R.string.mod_pumpbt_stage_handshake)
-    PumpBtStage.READING -> stringResource(R.string.mod_pumpbt_stage_reading)
-    PumpBtStage.DATA_READ -> stringResource(R.string.mod_pumpbt_stage_data_read)
-    PumpBtStage.LOST -> stringResource(R.string.mod_pumpbt_stage_lost, link.lostAtMs?.let(::time) ?: "—")
-    PumpBtStage.ERROR -> stringResource(R.string.mod_pumpbt_stage_error, link.error ?: "—")
-    PumpBtStage.STOPPED -> stringResource(R.string.mod_pumpbt_stage_stopped)
-}
-
-@Composable
-private fun VariantChoice(selected: PumpBtNameVariant, enabled: Boolean, onPick: (PumpBtNameVariant) -> Unit) {
-    Column {
-        for ((variant, text) in listOf(
-            PumpBtNameVariant.A to stringResource(R.string.mod_pumpbt_variant_a),
-            PumpBtNameVariant.B to stringResource(R.string.mod_pumpbt_variant_b),
-        )) {
-            Row(
-                Modifier.fillMaxWidth().heightIn(min = 48.dp)
-                    .selectable(selected = variant == selected, enabled = enabled, role = Role.RadioButton, onClick = { onPick(variant) }),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                RadioButton(selected = variant == selected, onClick = null, enabled = enabled)
-                Spacer(Modifier.width(12.dp))
-                Text(text, style = MaterialTheme.typography.bodyMedium)
-            }
-        }
-    }
-}
-
 /** The source's status: last reading and what the journal did with it, the history memory, counters, warnings. */
 @Composable
 private fun DataSection(source: PumpBtSourceState) {
@@ -496,14 +360,14 @@ private fun DataSection(source: PumpBtSourceState) {
             source.lastIntake == IntakeOutcome.FAILED -> stringResource(R.string.mod_pumpbt_outcome_failed)
             else -> null
         }
-        if (outcome == null) stringResource(R.string.mod_pumpbt_last_reading, dateTimeSeconds(at))
-        else stringResource(R.string.mod_pumpbt_last_reading_outcome, dateTimeSeconds(at), outcome)
+        if (outcome == null) stringResource(R.string.mod_pumpbt_last_reading, btDateTimeSeconds(at))
+        else stringResource(R.string.mod_pumpbt_last_reading_outcome, btDateTimeSeconds(at), outcome)
     }
     if (source.records > 0) rows += stringResource(R.string.mod_pumpbt_records_saved, source.records)
     if (source.enabled && source.backfill == BackfillState.NOT_READY) rows += stringResource(R.string.mod_pumpbt_first_read_pending)
     for ((count, n) in PumpBtWindow.counts(source.counters)) rows += countText(count, n)
-    Rows(rows)
-    for (w in PumpBtWindow.warnings(source.warnings)) Warning(warningText(w))
+    BtRows(rows)
+    for (w in PumpBtWindow.warnings(source.warnings)) BtWarning(warningText(w))
 }
 
 @Composable
@@ -526,10 +390,197 @@ private fun warningText(w: PumpWarning): String = when (w) {
     PumpWarning.UNPAIRED_MEAL -> stringResource(R.string.mod_pumpbt_warning_unpaired_meal)
 }
 
+/**
+ * The pump's numbers from the kept snapshot (`pump.json`: what the status bar and the watch show) with one data time
+ * for all: active insulin, reservoir in units (no percent: none over Bluetooth, an old cloud one would look fresh -
+ * window decision 6), battery, basal, temporary basal. A temporary basal the snapshot cannot give a value for (another
+ * IDD type) - "running, type N" from the link's values (process memory).
+ */
+@Composable
+private fun PumpNowSection(pump: PumpNow?, values: PumpBtValues) {
+    if (pump == null) {
+        SectionLabel(stringResource(R.string.mod_pumpbt_section_pump))
+        BtBody(stringResource(R.string.mod_carelink_data_none))
+        return
+    }
+    SectionLabel(stringResource(R.string.mod_carelink_section_pump, btAge(System.currentTimeMillis(), pump.dataAtMs)))
+    val rows = ArrayList<Pair<String, String>>(6)
+    pump.iobUnits?.let { rows += stringResource(R.string.mod_carelink_iob) to stringResource(R.string.mod_carelink_units, btUnits(it)) }
+    pump.reservoirUnits?.let { rows += stringResource(R.string.mod_carelink_reservoir) to stringResource(R.string.mod_carelink_units, btUnits(it)) }
+    pump.batteryPercent?.let { rows += stringResource(R.string.mod_carelink_battery) to stringResource(R.string.mod_carelink_percent, it) }
+    if (pump.suspended == true) {
+        rows += stringResource(R.string.mod_pumpbt_basal_now) to stringResource(R.string.mod_pumpbt_delivery_stopped)
+    } else {
+        pump.basalRate?.let { rows += stringResource(R.string.mod_pumpbt_basal_now) to stringResource(R.string.mod_pumpbt_units_per_hour, btUnits(it)) }
+    }
+    val tempPercent = pump.tempBasal?.percent
+    val tempRate = pump.tempBasal?.rate
+    val tempLeft = pump.tempBasal?.minutesLeft ?: 0
+    val tempText = when {
+        tempPercent != null -> stringResource(
+            R.string.mod_pumpbt_temp_basal_value,
+            stringResource(R.string.mod_pumpbt_percent, tempPercent),
+            tempLeft,
+        )
+        tempRate != null -> stringResource(
+            R.string.mod_pumpbt_temp_basal_value,
+            stringResource(R.string.mod_pumpbt_units_per_hour, btUnits(tempRate)),
+            tempLeft,
+        )
+        values.tempBasalType != null -> stringResource(R.string.mod_pumpbt_temp_basal_type, "0x%02X".format(values.tempBasalType))
+        pump.basalKnown -> stringResource(R.string.mod_pumpbt_none)
+        else -> null
+    }
+    tempText?.let { rows += stringResource(R.string.mod_pumpbt_temp_basal) to it }
+    if (rows.isEmpty()) {
+        BtBody(stringResource(R.string.mod_carelink_data_none))
+        return
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        rows.forEachIndexed { i, (title, value) -> SettingsItem(title = title, subtitle = value, position = btPosition(i, rows.size)) }
+    }
+}
+
+/**
+ * "Diagnostics" (folded): the link's stage, the name on the pump, the last problem, returns, the trial's buttons
+ * ("Wait for the pump", "Stop" - with the source off), "Read again", "Pair again", "Cancel pairing", the key database,
+ * the values the link read (model, firmware, serial number - not in the pump section) and the link journal.
+ */
+@Composable
+private fun DiagnosticsSection(
+    step: PumpBtWizardStep,
+    state: PumpBtUiState,
+    source: PumpBtSourceState,
+    controls: PumpBtControls,
+    journal: List<String>,
+    actions: PumpBtScreenActions,
+) {
+    var open by rememberSaveable { mutableStateOf(false) }
+    SectionLabel(stringResource(R.string.mod_pumpbt_section_diagnostics))
+    SettingsItem(
+        title = stringResource(if (open) R.string.mod_pumpbt_diagnostics_hide else R.string.mod_pumpbt_diagnostics_show),
+        subtitle = stringResource(R.string.mod_pumpbt_diagnostics_hint),
+        position = CardPosition.SINGLE,
+        onClick = { open = !open },
+    )
+    if (!open) return
+    LinkRows(state, source)
+    // before the warnings are accepted nothing starts a link (decision 14)
+    if (step != PumpBtWizardStep.WARNINGS) {
+        DiagnosticsButtons(controls, actions)
+        KeyRows(state, actions)
+    }
+    ValuesSection(source.link.values)
+    JournalSection(journal, source, actions)
+}
+
+@Composable
+private fun DiagnosticsButtons(controls: PumpBtControls, actions: PumpBtScreenActions) {
+    Spacer(Modifier.padding(top = 12.dp))
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (controls.trialButtons) {
+            OutlinedButton(onClick = actions.onWaitForPump, enabled = controls.canStart, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.mod_pumpbt_wait))
+            }
+            BtHint(stringResource(R.string.mod_pumpbt_wait_hint))
+        } else {
+            // the watchdog would start a stopped link again: the link stops only with permanent operation off
+            BtHint(stringResource(R.string.mod_pumpbt_stop_by_switch))
+        }
+        OutlinedButton(onClick = actions.onStartPairing, enabled = controls.canPairAgain, modifier = Modifier.fillMaxWidth()) {
+            Text(stringResource(R.string.mod_pumpbt_pair_again))
+        }
+        if (controls.canCancelPairing) {
+            OutlinedButton(onClick = actions.onCancelPairing, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.mod_pumpbt_cancel_pairing))
+            }
+            BtHint(stringResource(R.string.mod_pumpbt_cancel_pairing_hint))
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (controls.trialButtons) {
+                OutlinedButton(onClick = actions.onStop, enabled = controls.canStop) { Text(stringResource(R.string.mod_pumpbt_stop)) }
+            }
+            OutlinedButton(onClick = actions.onReadAgain, enabled = controls.canReadAgain) { Text(stringResource(R.string.mod_pumpbt_read_again)) }
+        }
+    }
+}
+
+@Composable
+private fun LinkRows(state: PumpBtUiState, source: PumpBtSourceState) {
+    val link = source.link
+    Spacer(Modifier.padding(top = 8.dp))
+    val rows = ArrayList<String>(4)
+    rows += stringResource(R.string.mod_pumpbt_stage, stageText(link.stage, link))
+    if (state.advertisedName.isNotEmpty()) rows += stringResource(R.string.mod_pumpbt_name_on_pump, state.advertisedName)
+    link.lastProblem?.let { problem ->
+        rows += stringResource(R.string.mod_pumpbt_last_problem, listOfNotNull(link.lastProblemAtMs?.let(::btTime), problem).joinToString(" "))
+    }
+    link.furthestStage?.let { rows += stringResource(R.string.mod_pumpbt_furthest_stage, stageText(it, link)) }
+    BtRows(rows)
+    if (link.stage == PumpBtStage.LOST) BtHint(stringResource(R.string.mod_pumpbt_lost_hint), Modifier.padding(top = 4.dp))
+    if (link.returns.isNotEmpty()) {
+        Spacer(Modifier.padding(top = 8.dp))
+        Text(stringResource(R.string.mod_pumpbt_returns_title), style = MaterialTheme.typography.bodyMedium)
+        BtRows(
+            link.returns.map { r ->
+                val sec = r.afterMs / 1000
+                stringResource(
+                    R.string.mod_pumpbt_returned,
+                    btTime(r.lostAtMs),
+                    stringResource(R.string.mod_pumpbt_duration, (sec / 60).toInt(), (sec % 60).toInt()),
+                )
+            },
+        )
+    }
+}
+
+/** The key database: loaded (CRC) or not, the last failure, "Load from file" (the wizard downloads it by itself). */
+@Composable
+private fun KeyRows(state: PumpBtUiState, actions: PumpBtScreenActions) {
+    Spacer(Modifier.padding(top = 12.dp))
+    val crc = state.keyCrc
+    val line = when {
+        state.keyLoading -> stringResource(R.string.mod_pumpbt_key_loading)
+        crc != null -> stringResource(R.string.mod_pumpbt_key_loaded, crc)
+        else -> stringResource(R.string.mod_pumpbt_key_not_loaded)
+    }
+    SettingsItem(title = line, position = CardPosition.SINGLE)
+    keyFailureText(state)?.let { BtWarning(it) }
+    Spacer(Modifier.padding(top = 8.dp))
+    OutlinedButton(onClick = actions.onLoadKeyFile, enabled = !state.keyLoading) { Text(stringResource(R.string.mod_pumpbt_load_key_file)) }
+}
+
+@Composable
+internal fun keyFailureText(state: PumpBtUiState): String? = when (state.keyFailure) {
+    null -> null
+    PumpBtKey.Failure.NO_NETWORK -> stringResource(R.string.mod_pumpbt_key_error_network)
+    PumpBtKey.Failure.HTTP -> stringResource(R.string.mod_pumpbt_key_error_http, state.keyFailureCode)
+    PumpBtKey.Failure.NOT_FOUND -> stringResource(R.string.mod_pumpbt_key_error_not_found)
+    PumpBtKey.Failure.CRC -> stringResource(R.string.mod_pumpbt_key_error_crc)
+    PumpBtKey.Failure.WRONG_TYPE -> stringResource(R.string.mod_pumpbt_key_error_wrong_type)
+    PumpBtKey.Failure.FILE_NOT_READ -> stringResource(R.string.mod_pumpbt_key_error_file)
+}
+
+@Composable
+private fun stageText(stage: PumpBtStage, link: PumpBtLinkState): String = when (stage) {
+    PumpBtStage.NOT_STARTED -> stringResource(R.string.mod_pumpbt_stage_not_started)
+    PumpBtStage.ADVERTISING_PAIR -> stringResource(R.string.mod_pumpbt_stage_advertising)
+    PumpBtStage.WAITING -> stringResource(R.string.mod_pumpbt_stage_waiting)
+    PumpBtStage.PUMP_CONNECTED -> stringResource(R.string.mod_pumpbt_stage_connected)
+    PumpBtStage.PAIRING -> stringResource(R.string.mod_pumpbt_stage_pairing)
+    PumpBtStage.HANDSHAKE -> stringResource(R.string.mod_pumpbt_stage_handshake)
+    PumpBtStage.READING -> stringResource(R.string.mod_pumpbt_stage_reading)
+    PumpBtStage.DATA_READ -> stringResource(R.string.mod_pumpbt_stage_data_read)
+    PumpBtStage.LOST -> stringResource(R.string.mod_pumpbt_stage_lost, link.lostAtMs?.let(::btTime) ?: "—")
+    PumpBtStage.ERROR -> stringResource(R.string.mod_pumpbt_stage_error, link.error ?: "—")
+    PumpBtStage.STOPPED -> stringResource(R.string.mod_pumpbt_stage_stopped)
+}
+
+/** What the link read (process memory): model, firmware, serial number, numbers, the last history records. */
 @Composable
 private fun ValuesSection(v: PumpBtValues) {
     val none = stringResource(R.string.mod_pumpbt_not_read)
-    SectionLabel(stringResource(R.string.mod_pumpbt_section_values, v.readAtMs?.let(::time) ?: none))
+    SectionLabel(stringResource(R.string.mod_pumpbt_section_values, v.readAtMs?.let(::btTime) ?: none))
     val temp = when {
         // a temp basal in percent is shown as percent, never as units per hour
         v.tempBasalPercent != null -> stringResource(
@@ -539,9 +590,10 @@ private fun ValuesSection(v: PumpBtValues) {
         )
         v.tempBasalUnitsPerHour != null -> stringResource(
             R.string.mod_pumpbt_temp_basal_value,
-            stringResource(R.string.mod_pumpbt_units_per_hour, units(v.tempBasalUnitsPerHour)),
+            stringResource(R.string.mod_pumpbt_units_per_hour, btUnits(v.tempBasalUnitsPerHour)),
             v.tempBasalRemainingMin ?: 0,
         )
+        v.tempBasalType != null -> stringResource(R.string.mod_pumpbt_temp_basal_type, "0x%02X".format(v.tempBasalType))
         v.basalRead -> stringResource(R.string.mod_pumpbt_none)
         else -> none
     }
@@ -549,15 +601,15 @@ private fun ValuesSection(v: PumpBtValues) {
         stringResource(R.string.mod_pumpbt_model) to (v.model ?: none),
         stringResource(R.string.mod_pumpbt_firmware) to (v.firmware ?: none),
         stringResource(R.string.mod_pumpbt_serial) to (v.serial ?: none),
-        stringResource(R.string.mod_pumpbt_iob) to (v.iobUnits?.let { stringResource(R.string.mod_pumpbt_units, units(it)) } ?: none),
-        stringResource(R.string.mod_pumpbt_reservoir) to (v.reservoirUnits?.let { stringResource(R.string.mod_pumpbt_units, units(it)) } ?: none),
+        stringResource(R.string.mod_pumpbt_iob) to (v.iobUnits?.let { stringResource(R.string.mod_pumpbt_units, btUnits(it)) } ?: none),
+        stringResource(R.string.mod_pumpbt_reservoir) to (v.reservoirUnits?.let { stringResource(R.string.mod_pumpbt_units, btUnits(it)) } ?: none),
         stringResource(R.string.mod_pumpbt_battery) to (v.batteryPercent?.let { stringResource(R.string.mod_pumpbt_percent, it) } ?: none),
-        stringResource(R.string.mod_pumpbt_basal_now) to (v.basalUnitsPerHour?.let { stringResource(R.string.mod_pumpbt_units_per_hour, units(it)) } ?: none),
+        stringResource(R.string.mod_pumpbt_basal_now) to (v.basalUnitsPerHour?.let { stringResource(R.string.mod_pumpbt_units_per_hour, btUnits(it)) } ?: none),
         stringResource(R.string.mod_pumpbt_temp_basal) to temp,
     )
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         rows.forEachIndexed { i, (title, value) ->
-            SettingsItem(title = title, subtitle = value, position = position(i, rows.size))
+            SettingsItem(title = title, subtitle = value, position = btPosition(i, rows.size))
         }
     }
     Spacer(Modifier.padding(top = 12.dp))
@@ -568,7 +620,7 @@ private fun ValuesSection(v: PumpBtValues) {
         Column(Modifier.padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             for (h in v.history) {
                 Text(
-                    listOf(h.timeMs?.let(::dateTime) ?: none, h.kind, h.value).filter { it.isNotEmpty() }.joinToString("  "),
+                    listOf(h.timeMs?.let(::btDateTime) ?: none, h.kind, h.value).filter { it.isNotEmpty() }.joinToString("  "),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -622,7 +674,7 @@ private fun JournalSection(lines: List<String>, source: PumpBtSourceState, actio
             },
         )
     }
-    // the journal is the only record of a trial: clearing only after a confirmation
+    // the journal is the only record of the link: clearing only after a confirmation
     if (askClear) {
         AlertDialog(
             onDismissRequest = { askClear = false },
@@ -641,29 +693,31 @@ private fun JournalSection(lines: List<String>, source: PumpBtSourceState, actio
     }
 }
 
+// MARK: - Helpers of the window's sections
+
 @Composable
-private fun Rows(rows: List<String>) {
+internal fun BtRows(rows: List<String>) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        rows.forEachIndexed { i, r -> SettingsItem(title = r, position = position(i, rows.size)) }
+        rows.forEachIndexed { i, r -> SettingsItem(title = r, position = btPosition(i, rows.size)) }
     }
 }
 
 @Composable
-private fun Hint(text: String) {
-    Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+internal fun BtHint(text: String, modifier: Modifier = Modifier) {
+    Text(text, modifier, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
 @Composable
-private fun Body(text: String) {
+internal fun BtBody(text: String) {
     Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
 }
 
 @Composable
-private fun Warning(text: String) {
+internal fun BtWarning(text: String) {
     Text(text, Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
 }
 
-private fun position(i: Int, n: Int): CardPosition = when {
+internal fun btPosition(i: Int, n: Int): CardPosition = when {
     n == 1 -> CardPosition.SINGLE
     i == 0 -> CardPosition.TOP
     i == n - 1 -> CardPosition.BOTTOM
@@ -674,11 +728,23 @@ private val timeFormat = DateTimeFormatter.ofPattern("HH:mm:ss")
 private val dateTimeFormat = DateTimeFormatter.ofPattern("dd.MM HH:mm")
 private val dateTimeSecondsFormat = DateTimeFormatter.ofPattern("dd.MM HH:mm:ss")
 
-private fun time(ms: Long): String = timeFormat.format(Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()))
+private fun btTime(ms: Long): String = timeFormat.format(Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()))
 
-private fun dateTime(ms: Long): String = dateTimeFormat.format(Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()))
+private fun btDateTime(ms: Long): String = dateTimeFormat.format(Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()))
 
-private fun dateTimeSeconds(ms: Long): String = dateTimeSecondsFormat.format(Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()))
+private fun btDateTimeSeconds(ms: Long): String = dateTimeSecondsFormat.format(Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()))
 
 /** 1.25 - "1.25", 150.0 - "150"; the phone's decimal mark. */
-private fun units(v: Double): String = DecimalFormat("0.##").format(v)
+internal fun btUnits(v: Double): String = DecimalFormat("0.##").format(v)
+
+/** "just now", "12 min ago", "2 h 5 min ago", "over a day ago". */
+@Composable
+private fun btAge(nowMs: Long, atMs: Long): String {
+    val min = ((nowMs - atMs).coerceAtLeast(0L) / 60_000L).toInt()
+    return when {
+        min < 1 -> stringResource(R.string.mod_carelink_age_now)
+        min < 60 -> stringResource(R.string.mod_carelink_age_min, min)
+        min < 24 * 60 -> stringResource(R.string.mod_carelink_age_hours, min / 60, min % 60)
+        else -> stringResource(R.string.mod_carelink_age_day)
+    }
+}

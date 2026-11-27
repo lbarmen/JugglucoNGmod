@@ -16,6 +16,7 @@ import tk.glucodata.mod.pumpbt.PumpBtAnswer
 import tk.glucodata.mod.pumpbt.PumpBtCount
 import tk.glucodata.mod.pumpbt.PumpBtKey
 import tk.glucodata.mod.pumpbt.PumpBtLinkState
+import tk.glucodata.mod.pumpbt.PumpBtLinkStatus
 import tk.glucodata.mod.pumpbt.PumpBtNameVariant
 import tk.glucodata.mod.pumpbt.PumpBtSourceState
 import tk.glucodata.mod.pumpbt.PumpBtStage
@@ -25,6 +26,8 @@ import tk.glucodata.mod.pumpbt.PumpBtTrial
 import tk.glucodata.mod.pumpbt.PumpBtTurnOnHint
 import tk.glucodata.mod.pumpbt.PumpBtUiState
 import tk.glucodata.mod.pumpbt.PumpBtWindow
+import tk.glucodata.mod.pumpbt.PumpBtWizardButton
+import tk.glucodata.mod.pumpbt.PumpBtWizardLine
 import tk.glucodata.mod.pumpbt.PumpBtWizardStep
 import tk.glucodata.mod.pumpbt.PumpHistoryCounters
 import tk.glucodata.mod.pumpbt.PumpWarning
@@ -33,7 +36,8 @@ import java.io.File
 
 /**
  * JugglucoNGmod, pump over Bluetooth (series part 2, parts B2b and G1): what the pump window shows and allows, the
- * pairing wizard's steps, the accepted warnings, name variant B as a fallback, the threshold choices.
+ * pairing wizard's steps, the accepted warnings, name variant B as a fallback, the threshold choices; the pump window
+ * (part G2b): the wizard's lines and buttons, the wait for the pump, the link line, the strings in both languages.
  */
 class PumpBtWindowTest {
 
@@ -548,4 +552,200 @@ class PumpBtWindowTest {
         assertEquals(30, CareLinkSettings.shownWarnMin(45))
         assertEquals(30, CareLinkSettings.shownWarnMin(0))
     }
+
+    // MARK: - The pump window (part G2b)
+
+    @Test
+    fun theWaitForThePumpCountsFromWhenTheLinkBeganWaiting() {
+        // journal of build 15: after turning permanent operation on the pump came only after 4 min
+        assertEquals(1_000L, PumpBtWindow.waitingSince(null, running, 1_000))
+        assertEquals("kept while it waits", 1_000L, PumpBtWindow.waitingSince(1_000, running, 250_000))
+        // lost: from when the pump was lost, when that is earlier
+        val lost = running.copy(stage = PumpBtStage.LOST, lostAtMs = 500)
+        assertEquals(500L, PumpBtWindow.waitingSince(null, lost, 9_000))
+        assertEquals(500L, PumpBtWindow.waitingSince(800, lost, 9_000))
+        // connected, pairing, stopped: no wait
+        assertNull(PumpBtWindow.waitingSince(1_000, up, 9_000))
+        assertNull(PumpBtWindow.waitingSince(1_000, pairingLink, 9_000))
+        assertNull(PumpBtWindow.waitingSince(1_000, switchedToPairing, 9_000))
+        assertNull(PumpBtWindow.waitingSince(1_000, running.copy(running = false, stage = PumpBtStage.STOPPED), 9_000))
+        assertEquals(4, PumpBtWindow.waitingMinutes(0, 4 * 60_000L + 59_000))
+        assertEquals(0, PumpBtWindow.waitingMinutes(10_000, 0))
+        // the source keeps it in its state (process memory)
+        assertNull(PumpBtSourceState().waitingSinceMs)
+    }
+
+    @Test
+    fun theLinkLineSaysBluetoothOffFirstThenTheLinksState() {
+        assertEquals(PumpBtLinkStatus.BLUETOOTH_OFF, PumpBtWindow.linkStatus(ready.copy(bluetoothOn = false), on.copy(link = up)))
+        assertEquals(PumpBtLinkStatus.BLUETOOTH_OFF, PumpBtWindow.linkStatus(ready.copy(hasBluetooth = false), on))
+        assertEquals(PumpBtLinkStatus.CONNECTED, PumpBtWindow.linkStatus(ready, on.copy(link = up)))
+        assertEquals(PumpBtLinkStatus.CONNECTED, PumpBtWindow.linkStatus(ready, on.copy(link = running.copy(stage = PumpBtStage.PUMP_CONNECTED))))
+        assertEquals(PumpBtLinkStatus.WAITING, PumpBtWindow.linkStatus(ready, on.copy(link = running)))
+        assertEquals(PumpBtLinkStatus.WAITING, PumpBtWindow.linkStatus(ready, on.copy(link = running.copy(stage = PumpBtStage.LOST))))
+        assertEquals(PumpBtLinkStatus.PAIRING, PumpBtWindow.linkStatus(ready, on.copy(link = switchedToPairing)))
+        assertEquals(PumpBtLinkStatus.ERROR, PumpBtWindow.linkStatus(ready, on.copy(link = running.copy(stage = PumpBtStage.ERROR))))
+        assertEquals(PumpBtLinkStatus.OFF, PumpBtWindow.linkStatus(ready, off))
+    }
+
+    @Test
+    fun theScreenStaysOnOnlyDuringAPairing() {
+        assertTrue(PumpBtWindow.keepScreenOn(off.copy(link = pairingLink)))
+        assertTrue(PumpBtWindow.keepScreenOn(on.copy(link = switchedToPairing)))
+        assertFalse(PumpBtWindow.keepScreenOn(off))
+        assertFalse(PumpBtWindow.keepScreenOn(on.copy(link = running)))
+        assertFalse(PumpBtWindow.keepScreenOn(on.copy(link = up)))
+    }
+
+    @Test
+    fun theKeyStepHasRetryCancelAndAFileAfterAFailedDownload() {
+        val accepted = newcomer.copy(warningsAccepted = true)
+        val loading = accepted.copy(pendingStart = true, keyLoading = true)
+        assertEquals(PumpBtWizardStep.KEY, PumpBtWindow.wizardStep(loading, off))
+        assertEquals(listOf(PumpBtWizardButton.CANCEL), PumpBtWindow.wizardButtons(PumpBtWizardStep.KEY, loading, off))
+        assertEquals(listOf(PumpBtWizardLine.KEY_LOADING), PumpBtWindow.wizardLines(PumpBtWizardStep.KEY, loading, off))
+        val failed = accepted.copy(pendingStart = true, keyFailure = PumpBtKey.Failure.NO_NETWORK)
+        assertEquals(
+            listOf(PumpBtWizardButton.RETRY, PumpBtWizardButton.LOAD_FILE, PumpBtWizardButton.CANCEL),
+            PumpBtWindow.wizardButtons(PumpBtWizardStep.KEY, failed, off),
+        )
+        assertEquals(listOf(PumpBtWizardLine.KEY_FAILED), PumpBtWindow.wizardLines(PumpBtWizardStep.KEY, failed, off))
+    }
+
+    @Test
+    fun theOtherNameOnlyAfterAFailedPairingWithA() {
+        val pairing = ready.copy(paired = false, warningsAccepted = true, pairingStartedAtMs = 1_000)
+        val source = off.copy(link = pairingLink)
+        assertEquals(PumpBtWizardStep.PAIRING, PumpBtWindow.wizardStep(pairing, source))
+        assertEquals(listOf(PumpBtWizardButton.STOP), PumpBtWindow.wizardButtons(PumpBtWizardStep.PAIRING, pairing, source))
+        val lines = PumpBtWindow.wizardLines(PumpBtWizardStep.PAIRING, pairing, source)
+        assertEquals(listOf(PumpBtWizardLine.PAIR_WAIT, PumpBtWizardLine.PAIR_ON_PUMP, PumpBtWizardLine.CONFIRM_ON_PHONE), lines)
+
+        val failedSource = off.copy(link = pairingLink.copy(pairingFailedAtMs = 2_000))
+        assertEquals(
+            listOf(PumpBtWizardButton.OTHER_NAME, PumpBtWizardButton.STOP),
+            PumpBtWindow.wizardButtons(PumpBtWizardStep.PAIRING, pairing, failedSource),
+        )
+        assertEquals(
+            listOf(PumpBtWizardLine.PAIR_WAIT, PumpBtWizardLine.PAIRING_FAILED, PumpBtWizardLine.OTHER_NAME_HINT),
+            PumpBtWindow.wizardLines(PumpBtWizardStep.PAIRING, pairing, failedSource),
+        )
+        // a failure older than this pairing is not this pairing's
+        assertFalse(PumpBtWindow.otherNameOffered(pairing.copy(pairingStartedAtMs = 3_000), failedSource))
+        // already on B: no second offer, the line says the name is changed
+        val onB = pairing.copy(variant = PumpBtNameVariant.B)
+        assertEquals(listOf(PumpBtWizardButton.STOP), PumpBtWindow.wizardButtons(PumpBtWizardStep.PAIRING, onB, failedSource))
+        assertTrue(PumpBtWizardLine.OTHER_NAME_ON in PumpBtWindow.wizardLines(PumpBtWizardStep.PAIRING, onB, failedSource))
+        // with the source on (pair again): never the other name
+        assertFalse(PumpBtWindow.otherNameOffered(pairing, on.copy(link = failedSource.link)))
+    }
+
+    @Test
+    fun pairedWithTheSourceOffOffersPermanentOperationAndPairAgain() {
+        // critic G1, N5: an owner without permanent operation whose phone forgot the pump can pair again
+        val paired = ready.copy(warningsAccepted = true)
+        assertEquals(PumpBtWizardStep.PAIRED, PumpBtWindow.wizardStep(paired, off))
+        assertEquals(
+            listOf(PumpBtWizardButton.TURN_ON, PumpBtWizardButton.PAIR_AGAIN),
+            PumpBtWindow.wizardButtons(PumpBtWizardStep.PAIRED, paired, off),
+        )
+        assertTrue(PumpBtWindow.controls(paired, off).canPairAgain)
+        assertTrue("a waiting link switches to pairing", PumpBtWindow.controls(paired, off.copy(link = running)).canPairAgain)
+        assertFalse(PumpBtWindow.controls(paired, off.copy(link = pairingLink)).canPairAgain)
+        assertFalse(PumpBtWindow.controls(paired.copy(bluetoothOn = false), off).canPairAgain)
+        assertTrue("diagnostics with the source on", PumpBtWindow.controls(paired, on.copy(link = up)).canPairAgain)
+        assertEquals(listOf(PumpBtWizardLine.PAIRED), PumpBtWindow.wizardLines(PumpBtWizardStep.PAIRED, paired, off))
+        // no key: the line says why permanent operation does not turn on
+        assertEquals(
+            listOf(PumpBtWizardLine.PAIRED, PumpBtWizardLine.TURN_ON_HINT),
+            PumpBtWindow.wizardLines(PumpBtWizardStep.PAIRED, paired.copy(keyCrc = null), off),
+        )
+        assertTrue(PumpBtWindow.stateShown(PumpBtWizardStep.PAIRED))
+        assertTrue(PumpBtWindow.stateShown(PumpBtWizardStep.NONE))
+        assertFalse(PumpBtWindow.stateShown(PumpBtWizardStep.START))
+    }
+
+    @Test
+    fun theWizardsOtherSteps() {
+        assertEquals(listOf(PumpBtWizardButton.ACCEPT), PumpBtWindow.wizardButtons(PumpBtWizardStep.WARNINGS, newcomer, off))
+        assertEquals(
+            listOf(
+                PumpBtWizardLine.FAMILY, PumpBtWizardLine.NOT_MEDICAL, PumpBtWizardLine.UNPAIR_MINIMED_LOSES,
+                PumpBtWizardLine.NOT_CHECKED, PumpBtWizardLine.GO_BACK,
+            ),
+            PumpBtWindow.wizardLines(PumpBtWizardStep.WARNINGS, newcomer, off),
+        )
+        val accepted = newcomer.copy(warningsAccepted = true)
+        val noPermission = accepted.copy(permissionsGranted = false, bluetoothOn = false)
+        assertEquals(listOf(PumpBtWizardButton.ALLOW), PumpBtWindow.wizardButtons(PumpBtWizardStep.PHONE, noPermission, off))
+        assertEquals(
+            listOf(PumpBtWizardLine.BLUETOOTH_OFF, PumpBtWizardLine.NO_PERMISSION),
+            PumpBtWindow.wizardLines(PumpBtWizardStep.PHONE, noPermission, off),
+        )
+        // Bluetooth off, permissions there: the line says what to do, no button
+        assertTrue(PumpBtWindow.wizardButtons(PumpBtWizardStep.PHONE, accepted.copy(bluetoothOn = false), off).isEmpty())
+        assertEquals(listOf(PumpBtWizardLine.NO_ADVERTISING), PumpBtWindow.wizardLines(PumpBtWizardStep.PHONE, accepted.copy(advertisingSupported = false), off))
+
+        assertEquals(listOf(PumpBtWizardButton.START), PumpBtWindow.wizardButtons(PumpBtWizardStep.START, accepted, off))
+        val start = PumpBtWindow.wizardLines(PumpBtWizardStep.START, accepted, off)
+        assertEquals(
+            listOf(
+                PumpBtWizardLine.STOP_MINIMED, PumpBtWizardLine.UNPAIR_ON_PUMP, PumpBtWizardLine.PAIR_ON_PUMP,
+                PumpBtWizardLine.CONFIRM_ON_PHONE, PumpBtWizardLine.KEY_NEEDS_INTERNET,
+            ),
+            start,
+        )
+        assertFalse(PumpBtWizardLine.KEY_NEEDS_INTERNET in PumpBtWindow.wizardLines(PumpBtWizardStep.START, accepted.copy(keyCrc = "01020304"), off))
+        assertTrue(PumpBtWindow.wizardButtons(PumpBtWizardStep.NONE, ready, on).isEmpty())
+        assertTrue(PumpBtWindow.wizardLines(PumpBtWizardStep.NONE, ready, on).isEmpty())
+    }
+
+    @Test
+    fun theWindowOfSomeoneNewMakesNoLinkStateFile() {
+        // critic G1, N4: opening the window makes nothing until the warnings are accepted
+        val dir = tmp.newFolder()
+        val file = File(dir, PumpBtStore.FILE)
+        assertFalse(PumpBtTrial.usedBefore(false, file) { false })
+        assertFalse(file.exists())
+        assertTrue("the source on", PumpBtTrial.usedBefore(true, file) { false })
+        assertTrue("a pump address in the old preferences", PumpBtTrial.usedBefore(false, file) { true })
+        PumpBtStore(file, null).awaitWrites()
+        assertTrue("the link state file is there", PumpBtTrial.usedBefore(false, file) { false })
+    }
+
+    @Test
+    fun englishAndRussianHaveTheSameStringsAndFormats() {
+        for (name in listOf("mod_carelink_strings.xml", "mod_pumpbt_strings.xml", "mod_pumpbt_notify_strings.xml")) {
+            val en = strings("mobile/res/values/$name")
+            val ru = strings("mobile/res/values-ru/$name")
+            assertEquals(name, en.keys, ru.keys)
+            for ((key, value) in en) {
+                assertEquals("$name $key", formats(value), formats(ru.getValue(key)))
+            }
+        }
+    }
+
+    @Test
+    fun theVisibleNameIsPumpAndRussianIsFormal() {
+        val en = strings("mobile/res/values/mod_carelink_strings.xml") + strings("mobile/res/values/mod_pumpbt_strings.xml")
+        val ru = strings("mobile/res/values-ru/mod_carelink_strings.xml") + strings("mobile/res/values-ru/mod_pumpbt_strings.xml")
+        for (key in listOf("mod_carelink_title", "mod_carelink_shortcut_short", "mod_carelink_channel_name", "mod_pumpbt_title")) {
+            assertEquals(key, "Pump", en[key])
+            assertEquals(key, "Помпа", ru[key])
+        }
+        assertEquals("Pump window", en["mod_carelink_shortcut_long"])
+        assertEquals("Окно помпы", ru["mod_carelink_shortcut_long"])
+        val pumpRu = strings("mobile/res/values-ru/mod_pumpbt_strings.xml")
+        val informal = Regex("(?iu)(^|[^а-яё])(включи|выключи|нажми|проверь|сверь|поделись|подожди|дождись|загрузи|выбери|подтверди|останови|держи|делись|поставь|сопрягай|попробуй|перезагрузи|сверяй)([^а-яё]|$)")
+        for ((key, value) in pumpRu) assertFalse("$key: $value", informal.containsMatchIn(value))
+        for ((key, value) in en.filterKeys { it.startsWith("mod_pumpbt_") }) assertFalse("$key: $value", value.contains("(trial)"))
+    }
+
+    private fun strings(path: String): Map<String, String> {
+        val text = listOf(File("src/$path"), File("Common/src/$path")).first { it.isFile }.readText()
+        return Regex("""<string name="([^"]+)">(.*?)</string>""", RegexOption.DOT_MATCHES_ALL).findAll(text)
+            .associate { it.groupValues[1] to it.groupValues[2] }
+    }
+
+    private fun formats(value: String): List<String> = Regex("""%\d\$[sd]""").findAll(value).map { it.value }.sorted().toList()
 }
