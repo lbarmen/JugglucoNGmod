@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import tk.glucodata.mod.pumpbt.ble.PumpBtAdapterName
 import tk.glucodata.mod.pumpbt.ble.PumpLink
+import tk.glucodata.mod.pumpbt.ble.PumpLinkRules
 import tk.glucodata.mod.pumpbt.core.PumpCycle
 import java.io.File
 import java.time.LocalDateTime
@@ -48,7 +49,8 @@ internal object PumpBtTrial {
         PumpBtJournal.init(c)
         val s = store ?: PumpBtStore(c).also { store = it }
         journal("trial screen opened ${PumpBtJournal.fullDate()}, Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), ${Build.MANUFACTURER} ${Build.MODEL}")
-        if (link?.isRunning != true) PumpBtAdapterName.restore(c, s, journal)
+        // the phone's own Bluetooth name stays out of the journal
+        if (link?.isRunning != true) PumpBtAdapterName.restore(c, s) { journal(PumpLinkRules.hideQuoted(it)) }
         if (key == null) key = PumpBtKey.load(c)
         _state.update { it.copy(variant = s.variant, advertisedName = s.advertisedName, keyCrc = key?.crc) }
         refreshChecks(c)

@@ -112,10 +112,62 @@ class PumpLinkRulesTest {
         assertNull(PumpLinkRules.historyStart(from = 1235, oldest = 900, newest = 1234))
         // the pump's counter is below the number (another pump): nothing read, the memory sees newestOnPump
         assertNull(PumpLinkRules.historyStart(from = 5000, oldest = 900, newest = 1234))
-        // no records, or the start unknown
+        // no newest record
         assertNull(PumpLinkRules.historyStart(from = 10, oldest = null, newest = null))
-        assertNull(PumpLinkRules.historyStart(from = null, oldest = null, newest = 1234))
         assertEquals(1234L, PumpLinkRules.historyStart(from = 1234, oldest = 900, newest = 1234))
+        // neither a number nor the oldest record: the last 3000 numbers (not below 0)
+        assertEquals(0L, PumpLinkRules.historyStart(from = null, oldest = null, newest = 1234))
+        assertEquals(7_000L, PumpLinkRules.historyStart(from = null, oldest = null, newest = 10_000))
+    }
+
+    @Test
+    fun historyDoesNotDependOnFirstRecord() {
+        val ok = PumpLinkRules.EndAnswer.SUCCESS
+        val bad = PumpLinkRules.EndAnswer.FAILED
+        val none = PumpLinkRules.EndAnswer.NO_RECORDS
+        val plan = PumpLinkRules::historyPlan
+        // both answered
+        assertEquals(PumpLinkRules.HistoryPlan.Read(900, 1234, 900, 1234, fallback = false), plan(null, ok, 900, ok, 1234))
+        assertEquals(PumpLinkRules.HistoryPlan.Read(1000, 1234, 900, 1234, fallback = false), plan(1000, ok, 900, ok, 1234))
+        // "first record" refused, failed, timed out or "no records": oldest unknown, the read goes on
+        for (first in listOf(bad, none)) {
+            assertEquals(PumpLinkRules.HistoryPlan.Read(1000, 1234, null, 1234, fallback = false), plan(1000, first, 900, ok, 1234))
+            assertEquals(PumpLinkRules.HistoryPlan.Read(0, 1234, null, 1234, fallback = true), plan(null, first, null, ok, 1234))
+        }
+        assertEquals(PumpLinkRules.HistoryPlan.Read(7_000, 10_000, null, 10_000, fallback = true), plan(null, bad, null, ok, 10_000))
+        // a number seen during "first record" counts only with its success answer
+        assertEquals(PumpLinkRules.HistoryPlan.Read(7_000, 10_000, null, 10_000, fallback = true), plan(null, bad, 9_990, ok, 10_000))
+        // oldest above newest (a late record): not trusted
+        assertEquals(PumpLinkRules.HistoryPlan.Read(1000, 1234, null, 1234, fallback = false), plan(1000, ok, 5000, ok, 1234))
+        // only "last record" decides failure
+        assertEquals(PumpLinkRules.HistoryPlan.Failed(900), plan(1000, ok, 900, bad, 1234))
+        assertEquals(PumpLinkRules.HistoryPlan.Failed(900), plan(1000, ok, 900, ok, null))
+        assertNull(PumpLinkRules.HistoryPlan.Failed(900).newest)
+        // no records at all, nothing new
+        assertEquals(PumpLinkRules.HistoryPlan.NothingToRead(null, null), plan(1000, bad, null, none, null))
+        assertEquals(PumpLinkRules.HistoryPlan.NothingToRead(900, 1234), plan(1235, ok, 900, ok, 1234))
+    }
+
+    @Test
+    fun handshakeTimeLimitExtendsOnlyTwiceWhilePairing() {
+        assertTrue(PumpLinkRules.handshakeExtend(bonding = true, extensions = 0))
+        assertTrue(PumpLinkRules.handshakeExtend(bonding = true, extensions = 1))
+        assertFalse(PumpLinkRules.handshakeExtend(bonding = true, extensions = 2))
+        assertFalse(PumpLinkRules.handshakeExtend(bonding = false, extensions = 0))
+    }
+
+    @Test
+    fun journalShowsAddressesAndThePhoneNameOnlyWhenDetailed() {
+        val mac = "C4:AB:12:34:56:78"
+        val tag = PumpLinkRules.deviceTag(mac, verbose = false)
+        assertFalse(tag.contains("56:78") || tag.contains("C4:AB"))
+        assertEquals(tag, PumpLinkRules.deviceTag(mac.lowercase(), verbose = false))
+        assertTrue(tag != PumpLinkRules.deviceTag("C4:AB:12:34:56:79", verbose = false))
+        assertEquals(mac, PumpLinkRules.deviceTag(mac, verbose = true))
+        assertEquals("?", PumpLinkRules.deviceTag(null, verbose = false))
+        val line = PumpLinkRules.hideQuoted("phone Bluetooth name given back: \"Galaxy S24 of Somebody\" (accepted)")
+        assertFalse(line.contains("Galaxy"))
+        assertTrue(line.endsWith("(accepted)"))
     }
 
     @Test
@@ -280,6 +332,9 @@ class PumpLinkRulesTest {
         assertEquals(PumpLinkRules.RACP_NO_RECORDS, PumpLinkRules.racpCode(bytesOf(0x0F, 0x0F, 0x33, 0x06)))
         assertNull(PumpLinkRules.racpCode(bytesOf(0x0F, 0x0F, 0x33)))
         assertNull(PumpLinkRules.racpCode(bytesOf(0x01, 0x0F, 0x33, 0xF0)))
+        // the request opcode inside the answer is checked
+        assertEquals(PumpLinkRules.RACP_SUCCESS, PumpLinkRules.racpCode(bytesOf(0x0F, 0x0F, 0x33, 0xF0), request = 0x33))
+        assertNull(PumpLinkRules.racpCode(bytesOf(0x0F, 0x0F, 0x5A, 0xF0), request = 0x33))
     }
 
     @Test

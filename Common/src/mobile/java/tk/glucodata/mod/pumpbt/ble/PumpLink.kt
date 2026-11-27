@@ -141,7 +141,7 @@ internal class PumpLink(
         val same = pumpDevice?.address == pump.address
         val linked = same && isLinked(pump)
         journal(
-            "pump ${pump.address} on our server ${PumpLinkRules.RECHECK_MS} ms later: " +
+            "pump ${mac(pump.address)} on our server ${PumpLinkRules.RECHECK_MS} ms later: " +
                 if (!same) "no longer the pump" else if (linked) "connected - not lost" else "not connected - lost",
         )
         if (PumpLinkRules.recheckLost(same, linked)) pumpDisconnected(recheckStatus)
@@ -171,6 +171,7 @@ internal class PumpLink(
     private var recoverScheduled = false
     private val recoverRun = Runnable { recoverNow() }
     private val handshakeDeadline: Runnable = Runnable { handshakeOverTime() }
+    private var handshakeExtensions = 0
 
     // Central side (GATT client on the pump)
     private var gatt: BluetoothGatt? = null
@@ -207,7 +208,7 @@ internal class PumpLink(
     private val operationTimeout = Runnable {
         current?.let { op ->
             journal("no answer from the pump: $op")
-            if (op.isHistory) finishHistory(HistoryEnding.TIMED_OUT)
+            if (op.isHistory) historyOpFailed(op, HistoryEnding.TIMED_OUT)
         }
         nextOperation()
     }
@@ -224,16 +225,21 @@ internal class PumpLink(
         var tempBasalRate: Double? = null
         var tempBasalMinutesLeft: Int? = null
         var batteryPercent: Int? = null
+        /** A status value came in this cycle (IDD Status, a Status Reader answer, battery). */
+        var gotData = false
         /** null - the cycle reads no history. */
         var history: HistoryReading? = null
     }
 
     /** One history read: from the number given, "first" and "last" record, the pages, what came. */
     private class HistoryReading(val from: Long?) {
+        /** Smallest number seen during "first record", largest during "last record"; taken only with a success answer. */
+        var firstSeen: Long? = null
+        var lastSeen: Long? = null
+        var firstAnswer = PumpLinkRules.EndAnswer.FAILED
+        var lastAnswer = PumpLinkRules.EndAnswer.FAILED
         var oldest: Long? = null
         var newest: Long? = null
-        var noRecords = false
-        var answerFailed = false
         var requestedFrom: Long? = null
         var requestedTo: Long? = null
         val received = TreeMap<Long, RawHistoryRecord>()
@@ -300,9 +306,19 @@ internal class PumpLink(
         }
         private var startedAt = 0L
 
+        /** Counts [begin]s: a release for an earlier hold does not end a newer one. */
+        var generation = 0
+            private set
+
         fun begin() {
+            generation++
             startedAt = SystemClock.elapsedRealtime()
             hold()
+        }
+
+        /** Releases the hold only if no new one began since [ofGeneration]. */
+        fun release(ofGeneration: Int) {
+            if (ofGeneration == generation) release()
         }
 
         fun extend() = hold()
@@ -337,6 +353,8 @@ internal class PumpLink(
      * is used), else for the paired pump's return (FE81) - the permanent mode.
      */
     fun start(pair: Boolean) {
+        // the permanent mode never keeps the phone's name of variant B
+        if (!pair) PumpBtAdapterName.restore(context, store, nameJournal)
         if (running) {
             pairMode = pair
             journal("mode: " + if (pair) "pairing" else "waiting for the pump")
@@ -403,7 +421,7 @@ internal class PumpLink(
         recoverScheduled = false
         unregisterReceivers()
         tearDown(cancelPump = true)
-        PumpBtAdapterName.restore(context, store, journal)
+        PumpBtAdapterName.restore(context, store, nameJournal)
         setStage(PumpBtStage.STOPPED)
         update { it.copy(running = false, pairMode = false, lostAtMs = null) }
     }
@@ -455,6 +473,12 @@ internal class PumpLink(
     private inline fun detail(line: () -> String) {
         if (verbose()) journal(line())
     }
+
+    /** A device in the journal: the address only in the detailed journal. */
+    private fun mac(address: String?): String = PumpLinkRules.deviceTag(address, verbose())
+
+    /** Lines of [PumpBtAdapterName]: the phone's own Bluetooth name only in the detailed journal. */
+    private val nameJournal: (String) -> Unit = { line -> journal(if (verbose()) line else PumpLinkRules.hideQuoted(line)) }
 
     private fun setStage(stage: PumpBtStage, error: String? = null) {
         if (state.stage == stage && state.error == error) return
@@ -595,24 +619,24 @@ internal class PumpLink(
             val now = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1)
             val before = intent.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, -1)
             val address = device.address ?: return
-            journal("bond state of $address: ${bondName(before)} → ${bondName(now)}")
+            journal("bond state of ${mac(address)}: ${bondName(before)} → ${bondName(now)}")
             if (!running) return
             val onServer = isLinked(device)
             val ours = address == pumpDevice?.address || address == pairingShownAddress ||
                 address in serverConnectedAt || onServer
             if (PumpLinkRules.pairingFailedByBond(before == BluetoothDevice.BOND_BONDING, now == BluetoothDevice.BOND_NONE, ours)) {
-                markPairingFailed("bond of $address went from bonding to none")
+                markPairingFailed("bond of ${mac(address)} went from bonding to none")
             }
             if (ours && now == BluetoothDevice.BOND_BONDED) {
                 // variant B: the phone's own name is given back right after the pairing
-                PumpBtAdapterName.restore(context, store, journal)
+                PumpBtAdapterName.restore(context, store, nameJournal)
             }
             val failed = PumpLinkRules.bondFailed(
                 running, pumpKnown = pumpDevice != null,
                 wasBonding = before == BluetoothDevice.BOND_BONDING, nowNone = now == BluetoothDevice.BOND_NONE,
             )
             if (failed == PumpLinkRules.Drop.ADVERTISE_AGAIN) {
-                journal("pairing with $address failed or was refused, no pump identified: advertising again")
+                journal("pairing with ${mac(address)} failed or was refused, no pump identified: advertising again")
                 advertiseAgain(pairingFailed = true, shownPairingDeviceLeft = false)
                 return
             }
@@ -936,11 +960,11 @@ internal class PumpLink(
                 return true
             }
             PumpLinkRules.Claim.IGNORE -> {
-                journal("${device.address} $what - ignored, ${known?.address} is the pump")
+                journal("${mac(device.address)} $what - ignored, ${mac(known?.address)} is the pump")
                 return false
             }
             PumpLinkRules.Claim.TAKE -> if (known != null && knownLinked) {
-                journal("${device.address} $what - it is the pump, not ${known.address} (that one only read the device information)")
+                journal("${mac(device.address)} $what - it is the pump, not ${mac(known.address)} (that one only read the device information)")
             }
         }
         pumpDevice = device
@@ -949,9 +973,11 @@ internal class PumpLink(
         pairingShownAddress = null
         main.removeCallbacks(advertiseAgainLater)
         store.pumpAddress = device.address
-        journal("pump identified: ${device.address} ($what), bond state ${bondName(device.bondState)}")
+        journal("pump identified: ${mac(device.address)} ($what), bond state ${bondName(device.bondState)}")
         // the official app stops advertising once the pump is connected
         stopAdvertising()
+        // a device that only read our device information and never starts SAKE must not keep advertising off
+        armHandshakeDeadline()
         if (state.stage in ADVERTISE_STAGES || state.stage == PumpBtStage.LOST) {
             setStage(if (device.bondState == BluetoothDevice.BOND_BONDING) PumpBtStage.PAIRING else PumpBtStage.PUMP_CONNECTED)
         }
@@ -990,7 +1016,7 @@ internal class PumpLink(
             update { it.copy(pairMode = false) }
         }
         // variant B: the reconnect advertisement (FE81) carries no name, give the phone's name back right away
-        PumpBtAdapterName.restore(context, store, journal)
+        PumpBtAdapterName.restore(context, store, nameJournal)
         val lostAt = state.lostAtMs
         if (lostAt != null) {
             val after = System.currentTimeMillis() - lostAt
@@ -1002,7 +1028,18 @@ internal class PumpLink(
         connectAsGattClient()
     }
 
-    /** The handshake did not complete in [PumpLinkRules.HANDSHAKE_TIMEOUT_MS]: drop and advertise (not while pairing). */
+    /** [PumpLinkRules.HANDSHAKE_TIMEOUT_MS] from now: at pump identification and again at its SAKE subscription. */
+    private fun armHandshakeDeadline() {
+        handshakeExtensions = 0
+        main.removeCallbacks(handshakeDeadline)
+        main.postDelayed(handshakeDeadline, PumpLinkRules.HANDSHAKE_TIMEOUT_MS)
+    }
+
+    /**
+     * No SAKE subscription after the identification, or no complete handshake after the subscription, within the time
+     * limit: drop and advertise. While a pairing is running it waits longer, at most [PumpLinkRules.HANDSHAKE_EXTENSIONS]
+     * times.
+     */
     private fun handshakeOverTime() {
         if (!running || gate.crypt != null) return
         val d = pumpDevice ?: return
@@ -1011,13 +1048,14 @@ internal class PumpLink(
         } catch (_: Exception) {
             false
         }
-        if (bonding) {
+        if (PumpLinkRules.handshakeExtend(bonding, handshakeExtensions)) {
             // the pairing confirmation on the phone may take longer than the handshake itself
+            handshakeExtensions++
             journal("handshake: pairing still running, waiting ${PumpLinkRules.HANDSHAKE_TIMEOUT_MS / 1000} s more")
             main.postDelayed(handshakeDeadline, PumpLinkRules.HANDSHAKE_TIMEOUT_MS)
             return
         }
-        fail("handshake not complete within ${PumpLinkRules.HANDSHAKE_TIMEOUT_MS / 1000} s")
+        fail(if (sake == null) "no SAKE handshake started within the time limit" else "handshake not complete within the time limit")
     }
 
     // MARK: - Central side (GATT client on the pump)
@@ -1038,7 +1076,7 @@ internal class PumpLink(
         if (device != null) {
             // the system's answer decides; the server callback's last state is logged next to it in case they differ
             journal(
-                "GATT client: pump ${device.address} on our server - system: " + (if (linked) "connected" else "not connected") +
+                "GATT client: pump ${mac(device.address)} on our server - system: " + (if (linked) "connected" else "not connected") +
                     ", last server callback: " + (serverStates[device.address]?.let { connName(it) } ?: "none"),
             )
         }
@@ -1054,6 +1092,9 @@ internal class PumpLink(
         }
         val existing = gatt
         if (existing != null && existing.device.address == device.address) {
+            // a time limit on this path too: a discovery that never answers must not hang the link
+            main.removeCallbacks(attachTimeout)
+            main.postDelayed(attachTimeout, ATTACH_TIMEOUT_MS)
             startDiscovery(existing)
             return
         }
@@ -1301,6 +1342,7 @@ internal class PumpLink(
             if (Duration.between(it, Instant.now()).seconds > 60) {
                 journal("reading stuck (${current ?: "?"}), resetting")
                 if (current?.isHistory == true) finishHistory(HistoryEnding.TIMED_OUT)
+                // the cycle is cut here: nothing more of it is read
                 main.removeCallbacks(operationTimeout)
                 operations.clear()
                 current = null
@@ -1355,38 +1397,51 @@ internal class PumpLink(
         if (current == null) nextOperation()
     }
 
-    /** "First" and "last" answered: queue the pages from the start to the newest record, or end the read. */
+    /** "Last record" answered (or failed): queue the pages from the start to the newest record, or end the read. */
     private fun planHistoryPages(h: HistoryReading) {
-        if (h.noRecords) {
-            journal("history: the pump has no records")
-            finishHistory(HistoryEnding.DONE)
-            return
+        if (h.firstAnswer != PumpLinkRules.EndAnswer.SUCCESS) journal("history: no usable answer to \"first record\", the oldest is not known")
+        val plan = PumpLinkRules.historyPlan(h.from, h.firstAnswer, h.firstSeen, h.lastAnswer, h.lastSeen)
+        h.oldest = plan.oldest
+        h.newest = plan.newest
+        if (h.firstAnswer == PumpLinkRules.EndAnswer.SUCCESS && h.firstSeen != null && plan.oldest == null && plan.newest != null) {
+            journal("history: \"first record\" #${h.firstSeen} is above the newest #${plan.newest}: not used")
         }
-        if (h.answerFailed || h.newest == null) {
-            journal("history: no usable answer to first / last record")
-            finishHistory(HistoryEnding.FAILED)
-            return
-        }
-        val start = PumpLinkRules.historyStart(h.from, h.oldest, h.newest)
-        if (start == null) {
-            if (h.from == null && h.oldest == null) {
-                journal("history: the oldest record is not known")
+        when (plan) {
+            is PumpLinkRules.HistoryPlan.Failed -> {
+                journal("history: no usable answer to \"last record\"")
                 finishHistory(HistoryEnding.FAILED)
-            } else {
-                journal("history: nothing new (newest #${h.newest})")
+            }
+            is PumpLinkRules.HistoryPlan.NothingToRead -> {
+                journal(if (plan.newest == null) "history: the pump has no records" else "history: nothing new (newest #${plan.newest})")
                 finishHistory(HistoryEnding.DONE)
             }
+            is PumpLinkRules.HistoryPlan.Read -> {
+                if (plan.fallback) {
+                    journal("history: neither a start number nor the oldest record known: reading the last ${PumpLinkRules.HISTORY_FALLBACK_SPAN} numbers")
+                } else if (h.from != null && plan.oldest != null && h.from < plan.oldest) {
+                    journal("history: #${h.from} is older than the oldest record on the pump (#${plan.oldest}), reading from there")
+                }
+                h.requestedFrom = plan.from
+                h.requestedTo = plan.to
+                val pages = PumpLinkRules.historyPages(plan.from, plan.to)
+                journal("history: reading ${plan.to - plan.from + 1} records (#${plan.from}…#${plan.to}) in ${pages.size} page(s)")
+                operations.addAll(0, pages)
+            }
+        }
+    }
+
+    /**
+     * The running history operation ended without a usable answer ([ending] for a page or "last record"). "First
+     * record" only leaves the oldest record unknown: "last record" still follows (its support on the 740G is not
+     * verified, the history must not depend on it).
+     */
+    private fun historyOpFailed(op: LinkOp, ending: HistoryEnding) {
+        if (op === LinkOp.HistoryFirst) {
+            cycle?.history?.firstAnswer = PumpLinkRules.EndAnswer.FAILED
+            journal("history: \"first record\" not answered, going on without it")
             return
         }
-        val to = h.newest!!
-        if (h.from != null && h.oldest != null && h.from < h.oldest!!) {
-            journal("history: #${h.from} is older than the oldest record on the pump (#${h.oldest}), reading from there")
-        }
-        h.requestedFrom = start
-        h.requestedTo = to
-        val pages = PumpLinkRules.historyPages(start, to)
-        journal("history: reading ${to - start + 1} records (#$start…#$to) in ${pages.size} page(s)")
-        operations.addAll(0, pages)
+        finishHistory(ending)
     }
 
     /** Ends the running history read once ([ending]) and drops its operations still queued. */
@@ -1423,8 +1478,10 @@ internal class PumpLink(
     /** The cycle ends (queue drained, or the link [lost]): hand it out as a [PumpCycle]. */
     private fun finishCycle(lost: Boolean) {
         val c = cycle ?: return
-        c.history?.let { if (it.ending == null) finishHistory(if (lost) HistoryEnding.FAILED else HistoryEnding.DONE) }
+        // a history read still open at the end of a cycle did not finish: failed, never "complete"
+        c.history?.let { if (it.ending == null) finishHistory(HistoryEnding.FAILED) }
         cycle = null
+        val wakeOfThisCycle = wake.generation
         val now = System.currentTimeMillis()
         val h = c.history
         val records = h?.received?.values?.toList() ?: emptyList()
@@ -1442,20 +1499,34 @@ internal class PumpLink(
             records = records,
             history = h?.let(::historyResult) ?: HistoryRead(HistoryReadStatus.NONE),
         )
-        lastCycleAtMs = now
-        if (records.isNotEmpty()) {
-            val (lines, reference) = PumpBtHistory.lines(records.map { it.parse() }, store.historyReference)
-            store.historyReference = reference
-            updateValues { it.copy(history = PumpBtHistory.merge(it.history, lines)) }
-        }
-        updateValues { it.copy(readAtMs = now) }
-        journal("read cycle " + (if (lost) "ended by the lost link" else "done") + if (linkSerialHash == null) " - no serial number read on this link" else "")
+        // the watchdog's "no data" goes by this: only a cycle that really read something moves it
+        val readSomething = c.gotData || result.history.status == HistoryReadStatus.COMPLETE || result.history.status == HistoryReadStatus.GAP
+        if (readSomething) lastCycleAtMs = now
+        journal(
+            "read cycle " + (if (lost) "ended by the lost link" else "done") + (if (readSomething) "" else ", nothing read") +
+                if (linkSerialHash == null) " - no serial number read on this link" else "",
+        )
         try {
-            onCycle(result)
-        } catch (e: Exception) {
-            journal("cycle not taken (${e.javaClass.simpleName})")
+            // the cycle goes to the history memory first; the window's lines must not stop it
+            try {
+                onCycle(result)
+            } catch (e: Exception) {
+                journal("cycle not taken (${e.javaClass.simpleName})")
+            }
+            try {
+                if (records.isNotEmpty()) {
+                    val (lines, reference) = PumpBtHistory.lines(records.map { it.parse() }, store.historyReference)
+                    store.historyReference = reference
+                    updateValues { it.copy(history = PumpBtHistory.merge(it.history, lines)) }
+                }
+                updateValues { it.copy(readAtMs = now) }
+            } catch (e: Exception) {
+                journal("window lines of the cycle not made (${e.javaClass.simpleName})")
+            }
+        } finally {
+            // not the hold of a cycle that onCycle may have started meanwhile
+            wake.release(wakeOfThisCycle)
         }
-        wake.release()
         if (!lost) setStage(PumpLinkRules.cycleDoneStage(gate.serialVerified && linkSerialHash != null))
     }
 
@@ -1471,7 +1542,7 @@ internal class PumpLink(
                 main.postDelayed(operationTimeout, if (op is LinkOp.HistoryRange) 45_000 else 8_000)
                 return
             }
-            if (op.isHistory) finishHistory(HistoryEnding.FAILED)
+            if (op.isHistory) historyOpFailed(op, HistoryEnding.FAILED)
         }
         if (cycle != null) finishCycle(lost = false)
         // Run a refresh that was requested while busy.
@@ -1495,7 +1566,7 @@ internal class PumpLink(
     /** The running operation failed (write or read error): a history read ends as failed. */
     private fun currentFailed() {
         val op = current ?: return
-        if (op.isHistory) finishHistory(HistoryEnding.FAILED)
+        if (op.isHistory) historyOpFailed(op, HistoryEnding.FAILED)
         nextOperation()
     }
 
@@ -1571,6 +1642,7 @@ internal class PumpLink(
                     cycle?.let {
                         it.therapyState = s.therapyControlState
                         it.reservoirUnits = s.reservoirUnits
+                        it.gotData = true
                     }
                     updateValues { it.copy(reservoirUnits = s.reservoirUnits) }
                 } else {
@@ -1588,7 +1660,10 @@ internal class PumpLink(
                 plain.firstOrNull()?.let { b ->
                     val pct = b.toInt() and 0xFF
                     journal("pump battery: $pct %")
-                    cycle?.batteryPercent = pct
+                    cycle?.let {
+                        it.batteryPercent = pct
+                        it.gotData = true
+                    }
                     updateValues { it.copy(batteryPercent = pct) }
                 }
                 finish { isReadOf(it, BATTERY_LEVEL) }
@@ -1613,8 +1688,10 @@ internal class PumpLink(
             return
         }
         when (op) {
-            LinkOp.HistoryFirst -> h.oldest = record.sequence
-            LinkOp.HistoryLast -> h.newest = record.sequence
+            // a late record of an earlier request may arrive here: the smallest / largest number wins, and only a
+            // success answer to this request makes it count
+            LinkOp.HistoryFirst -> h.firstSeen = minOf(h.firstSeen ?: record.sequence, record.sequence)
+            LinkOp.HistoryLast -> h.lastSeen = maxOf(h.lastSeen ?: record.sequence, record.sequence)
             is LinkOp.HistoryRange -> {
                 val from = h.requestedFrom
                 val to = h.requestedTo
@@ -1626,22 +1703,30 @@ internal class PumpLink(
 
     /** IDD RACP answer `0F 0F <request opcode> <code>`: ends the running history operation. */
     private fun racpAnswer(plain: ByteArray) {
-        val code = PumpLinkRules.racpCode(plain)
         val op = current
         val h = cycle?.history
         if (op == null || !op.isHistory || h == null || h.ending != null) {
             journal("history RACP answer without a running history request: ignored")
             return
         }
+        // the request opcode inside the answer must be the running request's
+        val request = op.write()?.plaintext?.firstOrNull()?.toInt()?.and(0xFF)
+        val code = PumpLinkRules.racpCode(plain, request) ?: run {
+            journal("history RACP answer for another request: ignored (${plain.toHex()})")
+            return
+        }
         val ok = code == PumpLinkRules.RACP_SUCCESS
         val none = code == PumpLinkRules.RACP_NO_RECORDS
         if (!ok && !none) journal("history RACP answer is not success: ${plain.toHex()}")
+        val answer = when {
+            ok -> PumpLinkRules.EndAnswer.SUCCESS
+            none -> PumpLinkRules.EndAnswer.NO_RECORDS
+            else -> PumpLinkRules.EndAnswer.FAILED
+        }
         when (op) {
-            LinkOp.HistoryFirst -> {
-                if (none) h.noRecords = true else if (!ok) h.answerFailed = true
-            }
+            LinkOp.HistoryFirst -> h.firstAnswer = answer
             LinkOp.HistoryLast -> {
-                if (none) h.noRecords = true else if (!ok) h.answerFailed = true
+                h.lastAnswer = answer
                 planHistoryPages(h)
             }
             is LinkOp.HistoryRange -> {
@@ -1708,6 +1793,7 @@ internal class PumpLink(
                 PumpLinkRules.STATUS_READER_RESPONSE_CODE -> {}
                 else -> journal("status reader answer 0x%04x not expected".format(opcode ?: -1))
             }
+            if (opcode != PumpLinkRules.STATUS_READER_RESPONSE_CODE && forRequest != null) cycle?.gotData = true
         } catch (e: Exception) {
             journal("status reader answer not readable (${e.javaClass.simpleName})")
         }
@@ -1746,7 +1832,7 @@ internal class PumpLink(
                 val pump = pumpDevice
                 val isPump = address == pump?.address
                 journal(
-                    "GATT server: $address ${connName(newState)} (status $status, bond $bond)" +
+                    "GATT server: ${mac(address)} ${connName(newState)} (status $status, bond $bond)" +
                         if (isPump) " - the pump" else " - not counted as the pump",
                 )
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
@@ -1757,7 +1843,7 @@ internal class PumpLink(
                 val connectedFor = serverConnectedAt.remove(address)?.let { SystemClock.elapsedRealtime() - it }
                 val identified = identifiedAddresses.remove(address) || isPump
                 if (running && PumpLinkRules.pairingFailedByDrop(pairMode, identified, connectedFor)) {
-                    markPairingFailed("$address left $connectedFor ms after connecting, without counting as the pump")
+                    markPairingFailed("${mac(address)} left $connectedFor ms after connecting, without counting as the pump")
                 }
                 // the pump may be reported under another address (random before the bond, identity after): when the
                 // identified pump is gone from our server, it is lost whatever address this callback carries
@@ -1766,7 +1852,7 @@ internal class PumpLink(
                     PumpLinkRules.Drop.PUMP_LOST -> pumpDisconnected(status)
                     PumpLinkRules.Drop.RECHECK -> if (pump != null) {
                         // a false "not connected" at this moment must not end a working session: ask again in 1 s
-                        journal("another device left and the pump ${pump.address} does not look connected now: checking again in ${PumpLinkRules.RECHECK_MS} ms")
+                        journal("another device left and the pump ${mac(pump.address)} does not look connected now: checking again in ${PumpLinkRules.RECHECK_MS} ms")
                         recheckFor = pump
                         recheckStatus = status
                         main.removeCallbacks(pumpRecheck)
@@ -1795,7 +1881,7 @@ internal class PumpLink(
             }
             main.post {
                 if (value == null) {
-                    journal("${device.address} reads $short: refused")
+                    journal("${mac(device.address)} reads $short: refused")
                     return@post
                 }
                 if (!pumpSignal(device, "read device information $short", bySake = false)) return@post
@@ -1815,7 +1901,7 @@ internal class PumpLink(
             val copy = value?.copyOf()
             main.post {
                 if (!served || copy == null) {
-                    journal("${device.address} writes ${PumpUuid.short(characteristic.uuid)}: refused")
+                    journal("${mac(device.address)} writes ${PumpUuid.short(characteristic.uuid)}: refused")
                     return@post
                 }
                 if (!pumpSignal(device, "wrote the SAKE port", bySake = true)) return@post
@@ -1861,7 +1947,7 @@ internal class PumpLink(
         }
 
         override fun onMtuChanged(device: BluetoothDevice, mtu: Int) {
-            main.post { journal("GATT server: MTU $mtu (${device.address})") }
+            main.post { journal("GATT server: MTU $mtu (${mac(device.address)})") }
         }
     }
 
@@ -1876,8 +1962,7 @@ internal class PumpLink(
         clearOutbox()
         setStage(PumpBtStage.HANDSHAKE)
         wake.begin()
-        main.removeCallbacks(handshakeDeadline)
-        main.postDelayed(handshakeDeadline, PumpLinkRules.HANDSHAKE_TIMEOUT_MS)
+        armHandshakeDeadline()
         send(ByteArray(SakeServer.MESSAGE_SIZE))
     }
 

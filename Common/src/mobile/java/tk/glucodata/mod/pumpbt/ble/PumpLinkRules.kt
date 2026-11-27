@@ -250,17 +250,55 @@ internal object PumpLinkRules {
 
     /**
      * Where the history read starts: [from] (asked of the history memory; null - from the oldest record), but never
-     * before the oldest record on the pump ([oldest]); null - nothing to read: the pump has no records, [from] is past
-     * the newest, or the start is not known (no answer to "first record" and no [from]).
+     * before the oldest record on the pump ([oldest]); with neither - [HISTORY_FALLBACK_SPAN] records back from the
+     * newest (the pump keeps 4-5 days; what it answers to a range below its oldest record is not verified - the result
+     * says it honestly). Null - nothing to read: no newest record, or [from] is past it.
      */
     fun historyStart(from: Long?, oldest: Long?, newest: Long?): Long? {
         if (newest == null || newest < 0) return null
         val start = when {
-            from == null -> oldest ?: return null
+            from == null -> oldest ?: (newest - HISTORY_FALLBACK_SPAN)
             oldest != null && from < oldest -> oldest
             else -> from
         }
         return if (start > newest) null else start.coerceAtLeast(0)
+    }
+
+    const val HISTORY_FALLBACK_SPAN = 3_000L
+
+    /** How the pump answered "first record" or "last record": RACP success, "no records", or anything else / no answer. */
+    enum class EndAnswer { SUCCESS, NO_RECORDS, FAILED }
+
+    /** What follows the answers to "first record" and "last record". */
+    sealed class HistoryPlan {
+        abstract val oldest: Long?
+        abstract val newest: Long?
+
+        /** Read [from]..[to] in pages; [fallback] - neither the memory's number nor the oldest record was known. */
+        data class Read(val from: Long, val to: Long, override val oldest: Long?, override val newest: Long, val fallback: Boolean) : HistoryPlan()
+
+        /** Nothing to read (no records, nothing new): the read is complete without records. */
+        data class NothingToRead(override val oldest: Long?, override val newest: Long?) : HistoryPlan()
+
+        /** "Last record" failed: the read failed. */
+        data class Failed(override val oldest: Long?) : HistoryPlan() {
+            override val newest: Long? get() = null
+        }
+    }
+
+    /**
+     * The history read after "first record" ([first], the smallest number seen during it: [firstSeq]) and "last record"
+     * ([last], the largest number seen: [lastSeq]). Only "last record" decides success: a failed, refused or
+     * unanswered "first record" just leaves the oldest record unknown (the 740G's support for it is not verified).
+     * The oldest is trusted only after a successful answer and when it is not above the newest.
+     */
+    fun historyPlan(from: Long?, first: EndAnswer, firstSeq: Long?, last: EndAnswer, lastSeq: Long?): HistoryPlan {
+        var oldest = if (first == EndAnswer.SUCCESS) firstSeq else null
+        if (last == EndAnswer.NO_RECORDS) return HistoryPlan.NothingToRead(null, null)
+        if (last != EndAnswer.SUCCESS || lastSeq == null || lastSeq < 0) return HistoryPlan.Failed(oldest)
+        if (oldest != null && oldest > lastSeq) oldest = null
+        val start = historyStart(from, oldest, lastSeq) ?: return HistoryPlan.NothingToRead(oldest, lastSeq)
+        return HistoryPlan.Read(start, lastSeq, oldest, lastSeq, fallback = from == null && oldest == null)
     }
 
     /** Pages of at most [HISTORY_PAGE] records from [from] to [to], oldest first; no cap on the total. */
@@ -320,9 +358,28 @@ internal object PumpLinkRules {
     fun typeCounts(records: Collection<RawHistoryRecord>): String =
         records.groupingBy { it.type }.eachCount().toSortedMap().entries.joinToString(", ") { "0x%04X×%d".format(it.key, it.value) }
 
-    /** IDD RACP answer `0F 0F <request opcode> <code>`: the code; null - not such an answer. */
-    fun racpCode(plain: ByteArray): Int? =
-        if (plain.size >= 4 && plain[0].toInt() and 0xFF == 0x0F) plain[3].toInt() and 0xFF else null
+    /**
+     * IDD RACP answer `0F 0F <request opcode> <code>`: the code; null - not such an answer, or (with [request]) an
+     * answer to another request opcode.
+     */
+    fun racpCode(plain: ByteArray, request: Int? = null): Int? {
+        if (plain.size < 4 || plain[0].toInt() and 0xFF != 0x0F) return null
+        if (request != null && plain[2].toInt() and 0xFF != request) return null
+        return plain[3].toInt() and 0xFF
+    }
+
+    /**
+     * A device in the journal: its address only in the detailed journal, otherwise a short tag that tells devices
+     * apart without the address.
+     */
+    fun deviceTag(address: String?, verbose: Boolean): String = when {
+        address == null -> "?"
+        verbose -> address
+        else -> "device-%04x".format(address.uppercase().hashCode() and 0xFFFF)
+    }
+
+    /** A journal line with quoted names (the phone's own Bluetooth name) hidden, outside the detailed journal. */
+    fun hideQuoted(line: String): String = line.replace(Regex("\"[^\"]*\""), "\"…\"")
 
     const val RACP_SUCCESS = 0xF0
     const val RACP_NO_RECORDS = 0x06
@@ -367,8 +424,15 @@ internal object PumpLinkRules {
 
     const val RECOVER_MAX_MS = 60_000L
 
-    /** The SAKE handshake from the pump's subscription to its end; past it the link is dropped. */
+    /**
+     * From the pump's identification to its SAKE subscription, and from the subscription to the end of the handshake;
+     * past it the link is dropped. While a pairing is running it is extended at most [HANDSHAKE_EXTENSIONS] times.
+     */
     const val HANDSHAKE_TIMEOUT_MS = 30_000L
+    const val HANDSHAKE_EXTENSIONS = 2
+
+    /** The handshake time limit ran out: extend while pairing ([extensions] so far), else drop the link. */
+    fun handshakeExtend(bonding: Boolean, extensions: Int): Boolean = bonding && extensions < HANDSHAKE_EXTENSIONS
 
     /**
      * Short wake hold of a handshake or read cycle: [WAKE_STEP_MS] from now, at most until [WAKE_MAX_MS] after the
