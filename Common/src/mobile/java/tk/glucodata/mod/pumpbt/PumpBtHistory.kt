@@ -27,7 +27,8 @@ internal object PumpBtHistory {
         zone: ZoneId = ZoneId.systemDefault(),
     ): Pair<List<PumpBtHistoryLine>, Pair<Long, Long>?> {
         val stored = reference?.let { HistoryReferenceLocal(it.first, Instant.ofEpochMilli(it.second).atZone(zone).toLocalDateTime()) }
-        val times = HistoryDating.times(records, stored)
+        // one read at a time: the records before it are not here, so a missing number is not a gap
+        val times = HistoryDating.times(records, stored, requireNoGaps = false)
         var ref = reference
         val out = ArrayList<PumpBtHistoryLine>(records.size)
         for (r in records.sortedBy { it.sequence }) {

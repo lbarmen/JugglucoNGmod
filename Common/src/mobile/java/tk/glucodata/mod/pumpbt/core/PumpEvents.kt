@@ -126,10 +126,28 @@ internal object HistoryDating {
      *   reference's offset is its distance to the previous reference); only if the record's offset is not larger than
      *   the reference's (otherwise the record would land after the reference it precedes);
      * - otherwise [stored], if it is earlier than the record; else no time.
-     * A reference with another reason than periodic (0x3C) counts the same.
+     * A reference with another reason than periodic (0x3C) counts the same. A record is dated from a reference (either
+     * way) only if no record number between them is missing ([requireNoGaps]) and no record between them is an
+     * unreadable reference time: a lost reference would shift the time by up to an hour. If the first way is not
+     * clean, the other one is tried; if neither is - no time.
+     * [requireNoGaps] = false is for the trial screen only, which dates one read at a time.
      */
-    fun times(records: List<HistoryRecord>, stored: HistoryReferenceLocal?): Map<Long, LocalDateTime> {
-        val sorted = records.sortedBy { it.sequence }
+    fun times(records: List<HistoryRecord>, stored: HistoryReferenceLocal?, requireNoGaps: Boolean = true): Map<Long, LocalDateTime> {
+        val sorted = records.sortedBy { it.sequence }.distinctBy { it.sequence }
+        val seqs = LongArray(sorted.size) { sorted[it].sequence }
+        // brokenBefore[i]: unreadable reference times among sorted[0 until i]
+        val brokenBefore = IntArray(sorted.size + 1)
+        for (i in sorted.indices) {
+            val r = sorted[i]
+            brokenBefore[i + 1] = brokenBefore[i] + if (r.eventType == 0xF00E && r.event is HistoryEvent.Unparsed) 1 else 0
+        }
+        /** Records strictly between sequence numbers [a] and [b] are all there and none is an unreadable reference. */
+        fun clean(a: Long, b: Long): Boolean {
+            val from = lowerBound(seqs, a + 1)
+            val to = lowerBound(seqs, b)
+            return (!requireNoGaps || (to - from).toLong() == b - a - 1) && brokenBefore[to] == brokenBefore[from]
+        }
+
         val refs = sorted.mapNotNull { r -> (r.event as? HistoryEvent.ReferenceTime)?.let { Ref(r.sequence, it.time, r.relativeOffset) } }
         val out = HashMap<Long, LocalDateTime>(sorted.size * 2)
         for (r in sorted) {
@@ -139,21 +157,32 @@ internal object HistoryDating {
                 continue
             }
             val prev = refs.lastOrNull { it.sequence < r.sequence }
+            val next = refs.firstOrNull { it.sequence > r.sequence }
             val offset = r.relativeOffset.toLong()
-            val time = if (prev != null) {
-                val base = if (stored != null && stored.sequence > prev.sequence && stored.sequence < r.sequence) stored.time else prev.time
-                base.plusSeconds(offset)
-            } else {
-                val next = refs.firstOrNull { it.sequence > r.sequence }
-                when {
-                    next != null && r.relativeOffset <= next.offset -> next.time.minusSeconds(next.offset.toLong()).plusSeconds(offset)
-                    stored != null && stored.sequence < r.sequence -> stored.time.plusSeconds(offset)
-                    else -> null
-                }
+            val forwardBase = when {
+                stored != null && stored.sequence < r.sequence && (prev == null || stored.sequence > prev.sequence) -> stored.sequence to stored.time
+                prev != null -> prev.sequence to prev.time
+                else -> null
             }
+            val forward = forwardBase?.takeIf { clean(it.first, r.sequence) }?.second?.plusSeconds(offset)
+            val back = next?.takeIf { r.relativeOffset <= it.offset && clean(r.sequence, it.sequence) }
+                ?.let { it.time.minusSeconds(it.offset.toLong()).plusSeconds(offset) }
+            // after a reference in the records: forward first; before the first one: back first, then the stored one
+            val time = if (prev != null) forward ?: back else back ?: forward
             if (time != null) out[r.sequence] = time
         }
         return out
+    }
+
+    /** First index with a value ≥ [x] in the ascending [a]. */
+    private fun lowerBound(a: LongArray, x: Long): Int {
+        var lo = 0
+        var hi = a.size
+        while (lo < hi) {
+            val mid = (lo + hi) ushr 1
+            if (a[mid] < x) lo = mid + 1 else hi = mid
+        }
+        return lo
     }
 
     /** The newest of the references in [records] and [stored] (by sequence number). */
@@ -173,6 +202,12 @@ internal object PumpEvents {
 
     /** "Delivered" is matched to "programmed" at most this many records back (the bolus id is only 2 bytes). */
     const val MAX_BOLUS_DISTANCE = 2_000L
+
+    /** A bolus (fast + extended) above this many units is not believed: the record is reported as unparsed. */
+    const val MAX_BOLUS_UNITS = 75.0
+
+    /** A meal above this many grams is not believed: the record is reported as unparsed. */
+    const val MAX_MEAL_GRAMS = 300.0
 
     /** Types decoded here and service types skipped on purpose; any other type is reported in unknownTypes. */
     val KNOWN_TYPES: Set<Int> = setOf(
@@ -194,9 +229,13 @@ internal object PumpEvents {
      * Events from [records] (repeats of a sequence number count once - the first one given). [stored] is the last
      * reference time kept by the memory; [contiguousTo] is the memory's number (everything up to it came or is marked
      * lost), used for a "delivered" without "programmed".
+     * Not believed and not used, but reported in unparsed: a bolus part or meal with a special value instead of the
+     * dose or grams, a dose below 0 or above [MAX_BOLUS_UNITS], grams below 0 or above [MAX_MEAL_GRAMS], and a second
+     * "delivered" for a bolus id whose "programmed" is already taken (a dual bolus is not seen on a 740G; an extra dose
+     * would be worse than a counter).
      */
     fun build(records: List<RawHistoryRecord>, stored: HistoryReferenceLocal?, contiguousTo: Long?): PumpEventsResult {
-        val parsed = records.sortedBy { it.sequence }.distinctBy { it.sequence }.map { it.parse() }
+        val parsed = records.sortedBy { it.sequence }.distinctBy { it.sequence }.map { checked(it.parse()) }
         val bySeq = parsed.associateBy { it.sequence }
         val times = HistoryDating.times(parsed, stored)
 
@@ -215,7 +254,15 @@ internal object PumpEvents {
                 it.sequence < d.sequence && d.sequence - it.sequence <= MAX_BOLUS_DISTANCE &&
                     (it.event as HistoryEvent.BolusProgrammed).id == de.id && it.sequence !in takenBy
             }
-            if (p != null) takenBy[p.sequence] = d else unmatched += d
+            val secondDelivery = p == null && programmed.any {
+                it.sequence < d.sequence && d.sequence - it.sequence <= MAX_BOLUS_DISTANCE &&
+                    (it.event as HistoryEvent.BolusProgrammed).id == de.id && it.sequence in takenBy
+            }
+            when {
+                p != null -> takenBy[p.sequence] = d
+                secondDelivery -> unparsed += UnparsedRecord(d.sequence, d.eventType, "second delivery of bolus")
+                else -> unmatched += d
+            }
         }
         var held = 0
 
@@ -237,8 +284,8 @@ internal object PumpEvents {
                 deliveredSequence = d?.sequence,
                 deliveredAt = d?.let { times[it.sequence] },
                 bolusType = pe?.bolusType ?: de?.bolusType,
-                programmedUnits = pe?.let { sum(it.fastUnits, it.extendedUnits) },
-                deliveredUnits = de?.let { sum(it.fastUnits, it.extendedUnits) },
+                programmedUnits = pe?.let { sum(it.fastUnits!!, it.extendedUnits!!) },
+                deliveredUnits = de?.let { sum(it.fastUnits!!, it.extendedUnits!!) },
                 programmedExtendedUnits = pe?.extendedUnits,
                 deliveredExtendedUnits = de?.extendedUnits,
                 durationMinutes = pe?.durationMinutes ?: de?.durationMinutes,
@@ -260,12 +307,8 @@ internal object PumpEvents {
                 is HistoryEvent.Unparsed -> unparsed += UnparsedRecord(r.sequence, r.eventType, e.reason)
                 is HistoryEvent.Other -> if (e.type !in KNOWN_TYPES) unknown += e.type
                 is HistoryEvent.Meal -> {
-                    val grams = e.grams
-                    if (grams == null) {
-                        unparsed += UnparsedRecord(r.sequence, r.eventType, "special value instead of grams")
-                    } else {
-                        dated(r, times, undated) { MealEvent(r.sequence, it, grams) }?.let(events::add)
-                    }
+                    val grams = e.grams ?: continue // checked() made it Unparsed
+                    dated(r, times, undated) { MealEvent(r.sequence, it, grams) }?.let(events::add)
                 }
                 is HistoryEvent.DeliveryStopped -> dated(r, times, undated) { DeliveryStopEvent(r.sequence, it, e.reason) }?.let(events::add)
                 is HistoryEvent.DeliveryRestarted -> dated(r, times, undated) { DeliveryResumeEvent(r.sequence, it, e.reason) }?.let(events::add)
@@ -278,12 +321,33 @@ internal object PumpEvents {
         events.sortWith(compareBy<PumpEvent>({ it.at }, { it.sequence }))
         return PumpEventsResult(
             events = events,
-            unparsed = unparsed,
+            unparsed = unparsed.sortedBy { it.sequence },
             unknownTypes = unknown,
             undated = undated.sorted(),
             heldBoluses = held,
             lastReference = HistoryDating.latest(parsed, stored),
         )
+    }
+
+    /** [r], or an Unparsed copy when its dose or grams are not believable (see [build]). */
+    private fun checked(r: HistoryRecord): HistoryRecord {
+        val reason = when (val e = r.event) {
+            is HistoryEvent.BolusProgrammed -> doseProblem(e.fastUnits, e.extendedUnits)
+            is HistoryEvent.BolusDelivered -> doseProblem(e.fastUnits, e.extendedUnits)
+            is HistoryEvent.Meal -> when {
+                e.grams == null -> "special value instead of grams"
+                e.grams < 0 || e.grams > MAX_MEAL_GRAMS -> "value out of range"
+                else -> null
+            }
+            else -> null
+        } ?: return r
+        return r.copy(event = HistoryEvent.Unparsed(r.eventType, reason))
+    }
+
+    private fun doseProblem(fast: Double?, ext: Double?): String? = when {
+        fast == null || ext == null -> "special value instead of dose"
+        fast < 0 || ext < 0 || fast + ext > MAX_BOLUS_UNITS -> "value out of range"
+        else -> null
     }
 
     private inline fun dated(
@@ -296,6 +360,6 @@ internal object PumpEvents {
         return make(t)
     }
 
-    /** Fast + extended; null if either is not known. Rounded to 6 decimals against binary noise (0.1 + 0.2). */
-    private fun sum(a: Double?, b: Double?): Double? = if (a == null || b == null) null else Math.round((a + b) * 1e6) / 1e6
+    /** Fast + extended (both known after [checked]), rounded to 6 decimals against binary noise (0.1 + 0.2). */
+    private fun sum(a: Double, b: Double): Double = Math.round((a + b) * 1e6) / 1e6
 }

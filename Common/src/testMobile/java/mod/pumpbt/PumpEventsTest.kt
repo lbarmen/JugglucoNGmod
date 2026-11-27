@@ -16,6 +16,7 @@ import tk.glucodata.mod.pumpbt.core.PumpEvents
 import tk.glucodata.mod.pumpbt.core.PumpEventsResult
 import tk.glucodata.mod.pumpbt.core.PumpIdentity
 import tk.glucodata.mod.pumpbt.core.RawHistoryRecord
+import tk.glucodata.mod.pumpbt.core.UnparsedRecord
 import tk.glucodata.mod.pumpbt.core.bytesOf
 import tk.glucodata.mod.pumpbt.core.le32
 import java.time.LocalDateTime
@@ -175,12 +176,14 @@ class PumpEventsTest {
 
     @Test
     fun deliveredAfterAGapIsHeldUntilTheGapIsSettled() {
-        // 101..104 missing ("programmed" may be among them)
-        val records = listOf(ref(100, 3600, 14), delivered(105, 300, 9, 30), deliveredDetails(106, 300))
+        // 101..104 missing ("programmed" may be among them); the next reference dates "delivered" back over no gap
+        val records = listOf(ref(100, 3600, 14), delivered(105, 300, 9, 30), deliveredDetails(106, 300), ref(107, 3600, 15))
         val held = PumpEvents.build(records, null, contiguousTo = 100)
         assertTrue(held.events.isEmpty())
         assertEquals(1, held.heldBoluses)
         assertEquals(1, PumpEvents.build(records, null, contiguousTo = null).heldBoluses)
+        // the edge of the rule: the memory number two below "delivered" - record 104 may still be "programmed"
+        assertEquals(1, PumpEvents.build(records, null, contiguousTo = 103).heldBoluses)
 
         // the gap is marked lost (the memory number moved to 104): out with the time of "delivered"
         val out = PumpEvents.build(records, null, contiguousTo = 104)
@@ -195,6 +198,11 @@ class PumpEventsTest {
         assertNull(b.programmedUnits)
         assertEquals(3.0, b.deliveredUnits!!, 0.0)
         assertEquals(0x0F, b.endReason)
+
+        // without the later reference the gap (a reference may be lost in it) leaves it without a time
+        val noRef = PumpEvents.build(records.dropLast(1), null, contiguousTo = 104)
+        assertTrue(noRef.events.isEmpty())
+        assertEquals(listOf(105L), noRef.undated)
     }
 
     @Test
@@ -225,15 +233,15 @@ class PumpEventsTest {
     @Test
     fun bolusesWithOneIdFarApartAreNotJoined() {
         val r = PumpEvents.build(
-            listOf(ref(99, 3600, 6), programmed(100, 10, 7, 10), ref(2150, 3600, 9), delivered(2200, 60, 7, 30)),
-            null, 2200,
+            listOf(ref(99, 3600, 6), programmed(100, 10, 7, 10), ref(2150, 3600, 9), delivered(2151, 60, 7, 30)),
+            null, 2151,
         )
         val b = boluses(r)
         assertEquals(2, b.size)
         assertEquals(100L, b[0].requestSequence)
         assertFalse(b[0].completed)
         assertNull(b[0].deliveredSequence)
-        assertEquals(2200L, b[1].sequence)
+        assertEquals(2151L, b[1].sequence)
         assertTrue(b[1].timeFromDelivery)
         assertNull(b[1].requestSequence)
     }
@@ -258,10 +266,12 @@ class PumpEventsTest {
             ),
             null, 4,
         )
-        val b = boluses(r).single()
-        assertNull(b.programmedUnits)
-        assertEquals(0.0, b.programmedExtendedUnits!!, 0.0)
-        assertEquals(listOf(3L), r.unparsed.map { it.sequence })
+        // a special value in a dose: the record is unparsed, not a bolus without a dose
+        assertTrue(boluses(r).isEmpty())
+        assertEquals(
+            listOf(2L to "special value instead of dose", 3L to "special value instead of grams"),
+            r.unparsed.map { it.sequence to it.reason },
+        )
         assertTrue(r.events.none { it is MealEvent })
         assertEquals(BasalChangeEvent(4, at(6, 0, 12), null, 0.5), r.events.single { it is BasalChangeEvent })
     }
@@ -292,6 +302,97 @@ class PumpEventsTest {
             null, 4,
         )
         assertEquals(listOf(4L, 2L, 3L), r.events.map { it.sequence })
+    }
+
+    @Test
+    fun noDatingAcrossAGapOrAnUnreadableReference() {
+        // 101..102 missing: a reference may be lost there, the time from 100 could be an hour early
+        val gap = PumpEvents.build(listOf(ref(100, 3600, 10), raw(0xF005, 103, 60, "2d00")), null, 103)
+        assertTrue(gap.events.isEmpty())
+        assertEquals(listOf(103L), gap.undated)
+        // a later reference with nothing missing in between dates it back
+        val back = PumpEvents.build(
+            listOf(ref(100, 3600, 10), raw(0xF005, 103, 60, "2d00"), raw(0xF00A, 104, 70, "02"), ref(105, 3600, 11)), null, 105,
+        )
+        assertEquals(listOf(at(10, 1), at(10, 1, 10)), back.events.map { it.at })
+
+        // an unreadable reference (month 13) between: neither forward nor back
+        val broken = raw(0xF00E, 2, 3600, "3cea070d0f070000")
+        val forward = PumpEvents.build(listOf(ref(1, 3600, 6), broken, raw(0xF005, 3, 60, "2d00")), null, 3)
+        assertEquals(listOf(3L), forward.undated)
+        assertEquals(listOf(2L), forward.unparsed.map { it.sequence })
+        val backward = PumpEvents.build(listOf(raw(0xF005, 1, 60, "2d00"), broken, ref(3, 3600, 8)), null, 3)
+        assertEquals(listOf(1L), backward.undated)
+
+        // the stored reference counts only without a gap either
+        assertEquals(listOf(203L), PumpEvents.build(listOf(raw(0xF005, 203, 60, "2d00")), HistoryReferenceLocal(200, at(8, 0)), 203).undated)
+    }
+
+    @Test
+    fun aSecondDeliveryForATakenProgrammedIsUnparsed() {
+        val r = PumpEvents.build(
+            listOf(ref(1, 3600, 6), programmed(2, 10, 7, 30), delivered(3, 80, 7, 10), delivered(4, 90, 7, 20)),
+            null, 4,
+        )
+        val b = boluses(r).single()
+        assertEquals(3L, b.deliveredSequence)
+        assertEquals(1.0, b.deliveredUnits!!, 0.0)
+        assertEquals(listOf(UnparsedRecord(4, 0x0069, "second delivery of bolus")), r.unparsed)
+        assertEquals(0, r.heldBoluses)
+    }
+
+    @Test
+    fun aSpecialValueInADoseMakesTheRecordUnparsed() {
+        // "delivered" with a special extended part: "programmed" stays running, the record is reported
+        val d = PumpEvents.build(
+            listOf(ref(1, 3600, 6), programmed(2, 10, 7, 30), raw(0x0069, 3, 80, "0700" + "33" + units(30) + "ffff7f00" + "0000")),
+            null, 3,
+        )
+        val running = boluses(d).single()
+        assertFalse(running.completed)
+        assertNull(running.deliveredUnits)
+        assertEquals(listOf(UnparsedRecord(3, 0x0069, "special value instead of dose")), d.unparsed)
+
+        // "programmed" with a special value: the bolus comes from "delivered" once "programmed" cannot come
+        val p = PumpEvents.build(
+            listOf(ref(1, 3600, 6), raw(0x005A, 2, 10, "0700" + "33" + "00008000" + units(0) + "0000"), delivered(3, 80, 7, 30)),
+            null, 3,
+        )
+        val fromDelivery = boluses(p).single()
+        assertTrue(fromDelivery.timeFromDelivery)
+        assertEquals(3.0, fromDelivery.deliveredUnits!!, 0.0)
+        assertEquals(listOf(2L), p.unparsed.map { it.sequence })
+    }
+
+    @Test
+    fun unbelievableDosesAndGramsAreUnparsed() {
+        val r = PumpEvents.build(
+            listOf(
+                ref(1, 3600, 6),
+                programmed(2, 10, 1, 760),                            // 76 U
+                programmed(3, 11, 2, -10),                            // -1 U
+                raw(0x005A, 4, 12, bolusBody(3, 400, 360, 60, 0xFF)), // 40 + 36 U
+                programmed(5, 13, 4, 750),                            // 75 U: believed
+                raw(0xF005, 6, 14, "5e01"),                           // 350 g
+                raw(0xF005, 7, 15, "fb0f"),                           // -5 g
+                raw(0xF005, 8, 16, "2c01"),                           // 300 g: believed
+            ),
+            null, 8,
+        )
+        assertEquals(listOf(2L, 3L, 4L, 6L, 7L), r.unparsed.map { it.sequence })
+        assertTrue(r.unparsed.all { it.reason == "value out of range" })
+        assertEquals(75.0, boluses(r).single().programmedUnits!!, 0.0)
+        assertEquals(300.0, r.events.filterIsInstance<MealEvent>().single().grams, 0.0)
+    }
+
+    @Test
+    fun anUndatedProgrammedKeepsItsDelivered() {
+        // "programmed" has no time (offset larger than the next reference's), "delivered" has one
+        val r = PumpEvents.build(listOf(programmed(1, 4000, 7, 20), ref(2, 3600, 7), delivered(3, 100, 7, 20)), null, 3)
+        assertTrue(r.events.isEmpty())
+        assertEquals(listOf(1L), r.undated)
+        assertEquals(0, r.heldBoluses)
+        assertTrue(r.unparsed.isEmpty())
     }
 
     @Test
