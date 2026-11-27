@@ -68,10 +68,13 @@ class ModCareLinkStarter : ContentProvider() {
         @Volatile
         internal var startBackground: (Runnable) -> Unit = { Thread(it, "mod-carelink-start").start() }
 
-        /** The background steps of a process start, each never throwing. */
+        /**
+         * The background steps of a process start, each never throwing. The shortcut first: the cleanup may start the
+         * WebView once (the cookies), which can be slow (critic D1, C-1).
+         */
         internal fun background(app: Context) {
-            CareLinkCloudCleanup.run(app)
             installShortcut(app)
+            CareLinkCloudCleanup.run(app)
         }
 
         /**

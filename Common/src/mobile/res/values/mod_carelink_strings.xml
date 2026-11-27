@@ -36,7 +36,6 @@
     <string name="mod_carelink_iob">Pump active insulin</string>
     <string name="mod_carelink_reservoir">Reservoir</string>
     <string name="mod_carelink_battery">Pump battery</string>
-    <string name="mod_carelink_units">%1$s U</string>
     <string name="mod_carelink_percent">%1$d %%</string>
     <string name="mod_carelink_section_settings">Settings</string>
     <string name="mod_carelink_minutes">%1$d min</string>

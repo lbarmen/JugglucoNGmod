@@ -32,7 +32,6 @@
     <string name="mod_carelink_iob">Активный инсулин помпы</string>
     <string name="mod_carelink_reservoir">Резервуар</string>
     <string name="mod_carelink_battery">Батарейка помпы</string>
-    <string name="mod_carelink_units">%1$s ед.</string>
     <string name="mod_carelink_percent">%1$d %%</string>
     <string name="mod_carelink_section_settings">Настройки</string>
     <string name="mod_carelink_minutes">%1$d мин</string>

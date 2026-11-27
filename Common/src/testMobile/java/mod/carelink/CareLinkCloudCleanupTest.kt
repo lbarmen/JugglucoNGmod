@@ -74,6 +74,8 @@ class CareLinkCloudCleanupTest {
 
     private fun file(name: String) = File(dir, name)
 
+    private fun mark(): Set<String> = file(CareLinkCloudCleanup.MARK_FILE).readLines().filter { it.isNotBlank() }.toSet()
+
     private fun put(name: String, text: String = "x") {
         dir.mkdirs()
         file(name).writeText(text)
@@ -143,7 +145,7 @@ class CareLinkCloudCleanupTest {
         assertEquals("{}", file("seen.json").readText())
         assertEquals("{}", file("pump.json").readText())
         assertTrue(File(app.noBackupFilesDir, "mod-pumpbt/source_on").exists())
-        assertEquals(setOf("signed-in", "done"), file(CareLinkCloudCleanup.MARK_FILE).readLines().toSet())
+        assertEquals(setOf("signed-in", "done", "cookies-tried"), mark())
     }
 
     @Test
@@ -193,27 +195,90 @@ class CareLinkCloudCleanupTest {
         assertNull(cloudAlarm(PendingIntent.FLAG_NO_CREATE))
         assertEquals(1, keyDeletes)
         assertTrue(app.getSharedPreferences("mod_carelink_schedule", Context.MODE_PRIVATE).all.isEmpty())
-        assertEquals(1, cookieClears)
-        assertEquals(listOf("signed-in"), file(CareLinkCloudCleanup.MARK_FILE).readLines())
+        assertEquals("the cookies wait for the cleanup to be done", 0, cookieClears)
+        assertEquals(setOf("signed-in", "attempt=1"), mark())
 
         // the next start: the files that told of a sign-in are gone, the mark file remembers it
         workFails = false
-        cookieClears = 0
         CareLinkCloudCleanup.run(app)
 
         assertEquals(listOf("mod-carelink-poll", "mod-carelink-now", "mod-carelink-periodic"), worksCancelled)
         assertEquals(1, cookieClears)
-        assertEquals(setOf("signed-in", "done"), file(CareLinkCloudCleanup.MARK_FILE).readLines().toSet())
+        assertEquals(setOf("signed-in", "done", "cookies-tried"), mark())
     }
 
     @Test
-    fun aFailingCookieClearDoesNotKeepTheCleanupFromBeingDone() {
+    fun theCookiesComeAfterDoneIsWrittenAndAreTriedOnceEvenWhenTheyFail() {
+        // critic D1, C-1: a WebView that hangs or takes the process down must not be started at every start
         put("session.bin")
-        CareLinkCloudCleanup.clearCookies = { throw IllegalStateException("no WebView") }
+        var markWhenCalled: Set<String>? = null
+        CareLinkCloudCleanup.clearCookies = {
+            cookieClears++
+            markWhenCalled = mark()
+            throw IllegalStateException("no WebView")
+        }
+
+        CareLinkCloudCleanup.run(app)
+        CareLinkCloudCleanup.run(app)
+
+        assertEquals(setOf("signed-in", "done", "cookies-tried"), markWhenCalled)
+        assertEquals(setOf("signed-in", "done", "cookies-tried"), mark())
+        assertEquals(1, cookieClears)
+    }
+
+    @Test
+    fun aStepThatAlwaysFailsEndsAsPartialAfterThreeRunsWithTheCookiesTriedOnce() {
+        signedInPhone()
+        var keyTries = 0
+        CareLinkCloudCleanup.deleteKey = { keyTries++; throw java.security.KeyStoreException("made-up") }
+
+        CareLinkCloudCleanup.run(app)
+        assertEquals(setOf("signed-in", "attempt=1"), mark())
+        CareLinkCloudCleanup.run(app)
+        assertEquals(setOf("signed-in", "attempt=2"), mark())
+        assertEquals(0, cookieClears)
+        CareLinkCloudCleanup.run(app)
+        assertEquals(setOf("signed-in", "done", "partial", "cookies-tried"), mark())
+        assertEquals(1, cookieClears)
+        CareLinkCloudCleanup.run(app)
+
+        assertEquals("not tried after partial", 3, keyTries)
+        assertEquals(1, cookieClears)
+    }
+
+    @Test
+    fun oneFileThatCannotBeDeletedDoesNotStopTheOthers() {
+        signedInPhone()
+        file("session.bin").delete()
+        File(file("session.bin"), "inside").apply { parentFile!!.mkdirs() }.writeText("x") // a folder: delete() fails
 
         CareLinkCloudCleanup.run(app)
 
-        assertEquals(setOf("signed-in", "done"), file(CareLinkCloudCleanup.MARK_FILE).readLines().toSet())
+        assertTrue(file("session.bin").exists())
+        listOf("session.bin.tmp", "pending.json", "pending.json.tmp", "enabled").forEach { assertFalse(it, file(it).exists()) }
+        assertEquals(1, keyDeletes)
+        assertEquals(setOf("signed-in", "attempt=1"), mark())
+    }
+
+    @Test
+    fun withTheSourceOffTheCloudsNotificationMarksGo() {
+        // critic D1, C-2: left by the cloud, "no data" shown would keep the source's first one back, and the write clock
+        // would make its first empty cycle a false "not saved"
+        put("session.bin")
+        val store = CareLinkStateStore(app)
+        store.noDataShown = true
+        store.writeFailShown = true
+        store.writeFailSinceMs = 1_790_000_000_000L
+        nm.createNotificationChannel(NotificationChannel("mod_carelink", "Pump", NotificationManager.IMPORTANCE_DEFAULT))
+        nm.notify(1_947_002, Notification.Builder(app, "mod_carelink").setSmallIcon(android.R.drawable.ic_dialog_info).build())
+
+        CareLinkCloudCleanup.run(app)
+
+        assertFalse(store.noDataShown)
+        assertFalse(store.writeFailShown)
+        assertNull(store.writeFailSinceMs)
+        assertTrue(nm.activeNotifications.isEmpty())
+        assertTrue("done" in mark())
     }
 
     @Test
@@ -224,7 +289,7 @@ class CareLinkCloudCleanupTest {
 
         assertEquals(0, cookieClears)
         assertEquals(3, worksCancelled.size)
-        assertEquals(listOf("done"), file(CareLinkCloudCleanup.MARK_FILE).readLines())
+        assertEquals(setOf("done"), mark())
         assertEquals("{}", file("seen.json").readText())
     }
 }
