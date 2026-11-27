@@ -924,28 +924,36 @@ internal object PumpBtSource {
         bondTrusted = false
     }
 
-    /** Bond changes of the phone: checked again (system action, registered like upstream's receivers). */
+    /**
+     * Bond changes of the phone: checked again (system action, registered like upstream's receivers). A change of our
+     * pump is written to the link journal while the link is not running (a running link writes it itself).
+     */
     private fun watchBonds(c: Context) {
         if (bondReceiver != null) return
         val r = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 if (intent?.action != BluetoothDevice.ACTION_BOND_STATE_CHANGED) return
                 val state = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR)
-                if (state == BluetoothDevice.BOND_NONE) {
-                    val device: BluetoothDevice? = try {
-                        @Suppress("DEPRECATION")
-                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
-                    } catch (_: Throwable) {
-                        null
-                    }
-                    val name = try {
-                        device?.name
-                    } catch (_: SecurityException) {
-                        null
-                    }
-                    val address = store(c).pumpAddress
-                    if (device == null || device.address.equals(address, ignoreCase = true) || PumpLinkRules.pumpLikeName(name)) bondTrusted = false
+                val device: BluetoothDevice? = try {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                } catch (_: Throwable) {
+                    null
                 }
+                val name = try {
+                    device?.name
+                } catch (_: SecurityException) {
+                    null
+                }
+                val s = store(c)
+                val ours = PumpLinkRules.ourPumpBond(device?.address, name, s.pumpAddress)
+                PumpLinkRules.sourceBondLine(
+                    linkRunning = link?.isRunning == true, ours = ours,
+                    device = PumpLinkRules.deviceTag(device?.address, s.verbose),
+                    before = intent.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, -1), now = state,
+                    reason = intent.getIntExtra(PumpLink.EXTRA_BOND_REASON, -1),
+                )?.let { journal(it) }
+                if (state == BluetoothDevice.BOND_NONE && ours) bondTrusted = false
                 if (state == BluetoothDevice.BOND_NONE || state == BluetoothDevice.BOND_BONDED) recheckBond(c)
             }
         }

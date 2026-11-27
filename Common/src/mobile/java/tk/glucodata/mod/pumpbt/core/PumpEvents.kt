@@ -239,6 +239,10 @@ internal object PumpEvents {
         0xF00C, // sensor glucose
         0xF00F, // annunciation cleared
         0xF010, // annunciation
+        // Seen on a 740G next to the temporary basal (build 15). Not confirmed: from memory these are IDS "TBR
+        // Adjustment Started / Ended"; OpenMinimed's idd-service.md (pinned commit) lists only Medtronic's 0xF0xx
+        // types. Skipped: the basal comes from the snapshot.
+        0x00A5, 0x00AA,
     )
 
     /**

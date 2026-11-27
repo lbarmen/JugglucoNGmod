@@ -419,6 +419,42 @@ internal object PumpLinkRules {
     /** A journal line with quoted names (the phone's own Bluetooth name) hidden, outside the detailed journal. */
     fun hideQuoted(line: String): String = line.replace(Regex("\"[^\"]*\""), "\"…\"")
 
+    /** BluetoothDevice.BOND_NONE / BOND_BONDING / BOND_BONDED (the platform's values, kept here for plain tests). */
+    const val BOND_NONE = 10
+    const val BOND_BONDING = 11
+    const val BOND_BONDED = 12
+
+    fun bondName(state: Int): String = when (state) {
+        BOND_NONE -> "none"
+        BOND_BONDING -> "bonding"
+        BOND_BONDED -> "bonded"
+        else -> "unknown"
+    }
+
+    /**
+     * The journal line of a bond change, the one format for the link's receiver and the source's: [device] as
+     * [deviceTag] gives it (the address only in the detailed journal), the states and the system's reason as a number
+     * (-1 - none given). After the update of build 14 over 13 the pump's bond was gone without the person removing it:
+     * the reason shows who took it next time.
+     */
+    fun bondLine(device: String, before: Int, now: Int, reason: Int): String =
+        "bond state of $device: ${bondName(before)} → ${bondName(now)}, reason $reason"
+
+    /**
+     * A bond change of our pump, as the source sees it: the device not given (counted as ours, the safe side), the
+     * paired pump's address, or a pump-like name.
+     */
+    fun ourPumpBond(deviceAddress: String?, deviceName: String?, pumpAddress: String?): Boolean =
+        deviceAddress == null || deviceAddress.equals(pumpAddress, ignoreCase = true) || pumpLikeName(deviceName)
+
+    /**
+     * The source's bond line (build 15: the bond went 10 s after the link was stopped, and only the link wrote the
+     * reason): only for our pump and only while the link is not running - a running link has its receiver on and
+     * writes the line itself, so no line twice. null - the source writes nothing.
+     */
+    fun sourceBondLine(linkRunning: Boolean, ours: Boolean, device: String, before: Int, now: Int, reason: Int): String? =
+        if (linkRunning || !ours) null else bondLine(device, before, now, reason)
+
     const val RACP_SUCCESS = 0xF0
     const val RACP_NO_RECORDS = 0x06
 

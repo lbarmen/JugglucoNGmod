@@ -505,6 +505,40 @@ class PumpLinkRulesTest {
     }
 
     @Test
+    fun bondLineHasOneFormat() {
+        assertEquals(
+            "bond state of device-1a2b: bonded → none, reason 9",
+            PumpLinkRules.bondLine("device-1a2b", PumpLinkRules.BOND_BONDED, PumpLinkRules.BOND_NONE, 9),
+        )
+        assertEquals(
+            "bond state of ?: unknown → bonding, reason -1",
+            PumpLinkRules.bondLine("?", -1, PumpLinkRules.BOND_BONDING, -1),
+        )
+        // the platform's values
+        assertEquals(android.bluetooth.BluetoothDevice.BOND_NONE, PumpLinkRules.BOND_NONE)
+        assertEquals(android.bluetooth.BluetoothDevice.BOND_BONDING, PumpLinkRules.BOND_BONDING)
+        assertEquals(android.bluetooth.BluetoothDevice.BOND_BONDED, PumpLinkRules.BOND_BONDED)
+    }
+
+    @Test
+    fun sourceWritesTheBondLineOnlyForOurPumpWhileTheLinkIsNotRunning() {
+        val pump = "C4:AB:12:34:56:78"
+        val tag = PumpLinkRules.deviceTag(pump, verbose = false)
+        val line = PumpLinkRules.bondLine(tag, PumpLinkRules.BOND_BONDED, PumpLinkRules.BOND_NONE, 9)
+        assertEquals(line, PumpLinkRules.sourceBondLine(false, ours = true, device = tag, before = PumpLinkRules.BOND_BONDED, now = PumpLinkRules.BOND_NONE, reason = 9))
+        // a running link writes the line itself: no line twice
+        assertNull(PumpLinkRules.sourceBondLine(true, ours = true, device = tag, before = PumpLinkRules.BOND_BONDED, now = PumpLinkRules.BOND_NONE, reason = 9))
+        // another device (a watch, headphones)
+        assertNull(PumpLinkRules.sourceBondLine(false, ours = false, device = tag, before = PumpLinkRules.BOND_BONDED, now = PumpLinkRules.BOND_NONE, reason = 9))
+
+        assertTrue(PumpLinkRules.ourPumpBond(pump.lowercase(), null, pump))
+        assertTrue(PumpLinkRules.ourPumpBond("00:11:22:33:44:55", "Pump 123456", pump))
+        assertTrue(PumpLinkRules.ourPumpBond(null, null, pump))
+        assertFalse(PumpLinkRules.ourPumpBond("00:11:22:33:44:55", "Galaxy Watch5 Pro", pump))
+        assertFalse(PumpLinkRules.ourPumpBond("00:11:22:33:44:55", null, null))
+    }
+
+    @Test
     fun failedPairingBeforeThePumpIsIdentifiedAdvertisesAgain() {
         assertEquals(PumpLinkRules.Drop.ADVERTISE_AGAIN, PumpLinkRules.bondFailed(running = true, pumpKnown = false, wasBonding = true, nowNone = true))
         assertEquals(PumpLinkRules.Drop.NOTHING, PumpLinkRules.bondFailed(running = true, pumpKnown = true, wasBonding = true, nowNone = true))
