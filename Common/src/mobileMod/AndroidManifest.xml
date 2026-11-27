@@ -32,6 +32,26 @@
             android:exported="false"
             android:label="@string/mod_pumpbt_title"
             android:theme="@style/Theme.AppCompat.NoActionBar" />
+        <!-- Pump over Bluetooth starter: on every process start sets the source's notifier, starts the source (with it on:
+             the link waiting for the paired pump) and its watchdog. Not exported: nobody queries it. -->
+        <provider
+            android:name="tk.glucodata.mod.pumpbt.ModPumpStarter"
+            android:authorities="${applicationId}.mod-pumpbt"
+            android:exported="false" />
+        <!-- Pump over Bluetooth watchdog alarm (every 5 min while the source is on): only our own PendingIntent sends it -->
+        <receiver
+            android:name="tk.glucodata.mod.pumpbt.PumpBtWatchdogReceiver"
+            android:exported="false" />
+        <!-- Pump over Bluetooth: after an app update the link, upstream's service (by the person's setting) and the
+             watchdog at once. With an intent filter Android 12+ wants exported stated; MY_PACKAGE_REPLACED is a
+             protected broadcast only the system sends (as the CareLink boot receiver). -->
+        <receiver
+            android:name="tk.glucodata.mod.pumpbt.PumpBtUpdateReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
         <!-- CareLink poll alarm: only our own PendingIntent sends it -->
         <receiver
             android:name="tk.glucodata.mod.carelink.CareLinkAlarmReceiver"

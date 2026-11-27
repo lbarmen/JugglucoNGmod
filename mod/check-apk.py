@@ -441,6 +441,14 @@ MOD_CARELINK_COMPONENTS = [MOD_STARTER, 'tk.glucodata.mod.carelink.CareLinkLogin
                            'tk.glucodata.mod.carelink.CareLinkActivity',
                            'tk.glucodata.mod.carelink.CareLinkAlarmReceiver',
                            'tk.glucodata.mod.carelink.CareLinkBootReceiver']
+# Every pump-over-Bluetooth component of the same manifest (series part 2, part B2c): without the starter the link does
+# not start with the process, without the watchdog nothing brings a stuck link back, without the update receiver the
+# link waits for the next process start after an update - the pump data would stop quietly.
+MOD_PUMPBT_STARTER = 'tk.glucodata.mod.pumpbt.ModPumpStarter'
+MOD_PUMPBT_COMPONENTS = [MOD_PUMPBT_STARTER, 'tk.glucodata.mod.pumpbt.PumpBtActivity',
+                         'tk.glucodata.mod.pumpbt.PumpBtWatchdogReceiver',
+                         'tk.glucodata.mod.pumpbt.PumpBtUpdateReceiver']
+NOT_EXPORTED = r'exported\([^)]*\)=(?:false|\(type 0x12\)0x0)\b'
 # Strings that only the CareLink trial code has (part 4p; Common/src/modTrial and .../mod/carelink/trial): the command
 # action, the log tag, the address of the trial session. Release builds rename classes (R8, no -dontobfuscate), so the
 # trial is found by these, not by class names.
@@ -497,11 +505,20 @@ def check_mod_components(phone, wear, release):
     boot = blocks.get('tk.glucodata.mod.carelink.CareLinkBootReceiver', '')
     check('android.intent.action.BOOT_COMPLETED' in boot and 'android.intent.action.MY_PACKAGE_REPLACED' in boot,
           'CareLink boot receiver: BOOT_COMPLETED and MY_PACKAGE_REPLACED')
+    missing = [c for c in MOD_PUMPBT_COMPONENTS if c not in blocks]
+    check(not missing and f'{PACKAGE}.mod-pumpbt' in tree,
+          f'phone manifest: our {len(MOD_PUMPBT_COMPONENTS)} pump-over-Bluetooth components (authority {PACKAGE}.mod-pumpbt)'
+          + (f' (missing: {missing})' if missing else ''))
+    update = blocks.get('tk.glucodata.mod.pumpbt.PumpBtUpdateReceiver', '')
+    check('android.intent.action.MY_PACKAGE_REPLACED' in update, 'pump update receiver: MY_PACKAGE_REPLACED')
+    private = [c for c in (MOD_PUMPBT_STARTER, 'tk.glucodata.mod.pumpbt.PumpBtWatchdogReceiver')
+               if re.search(NOT_EXPORTED, blocks.get(c, '')) is None]
+    check(not private, 'pump starter and watchdog receiver: not exported' + (f' (exported: {private})' if private else ''))
     wtree = manifest_tree(wear)
-    bad = sorted(set(re.findall(r'tk\.glucodata\.mod\.carelink[\w.$]*', wtree))
+    bad = sorted(set(re.findall(r'tk\.glucodata\.mod\.(?:carelink|pumpbt)[\w.$]*', wtree))
                  | {c for c in MOD_PHONE_COMPONENTS if c in wtree})
-    check(not bad and 'mod-carelink' not in wtree,
-          'wear manifest: none of our phone components (CareLink, watch block phone side)'
+    check(not bad and 'mod-carelink' not in wtree and 'mod-pumpbt' not in wtree,
+          'wear manifest: none of our phone components (CareLink, pump over Bluetooth, watch block phone side)'
           + (f' (found: {bad[:10]})' if bad else ''))
     phone_only = [c.replace('.', '/') for c in MOD_PHONE_COMPONENTS]
     hits = set()

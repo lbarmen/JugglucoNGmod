@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JugglucoNGmod, pump over Bluetooth (series part 2, part B2c): notifications of the Bluetooth pump source (English;
+     Russian in values-ru). Not an overlay of upstream's strings: every name starts with mod_pumpbt_notify_. Nothing
+     personal: a record type in hex at most. -->
+<resources>
+    <string name="mod_pumpbt_notify_unknown_title">Pump: unknown record</string>
+    <!-- %1$s - the record type, hex, e.g. 0x1234 -->
+    <string name="mod_pumpbt_notify_unknown_text">The pump has a record of type %1$s that the app does not know. Doses may be missing from the journal: check the pump\'s history and share the pump link journal.</string>
+    <string name="mod_pumpbt_notify_unparsed_title">Pump: bolus or meal not read</string>
+    <!-- %1$s - the record type, hex, e.g. 0x005A -->
+    <string name="mod_pumpbt_notify_unparsed_text">A bolus or meal record of type %1$s could not be read. Check the pump\'s history and add the dose to the journal by hand if it is missing.</string>
+    <string name="mod_pumpbt_notify_backfill_title">Pump: older doses found</string>
+    <string name="mod_pumpbt_notify_backfill_text">Boluses and meals from before the pump source was turned on were found. Open the pump window and choose whether to write them to the journal.</string>
+    <string name="mod_pumpbt_notify_no_result_title">Pump: bolus result not received</string>
+    <string name="mod_pumpbt_notify_no_result_text">The pump has not reported how much of a bolus was delivered. Check the delivered amount on the pump.</string>
+    <string name="mod_pumpbt_notify_drift_title">Pump and phone clocks differ</string>
+    <string name="mod_pumpbt_notify_drift_text">The pump\'s clock differs from the phone\'s. Set the time on the pump, otherwise the journal times may be off.</string>
+    <string name="mod_pumpbt_notify_bond_lost_title">The phone forgot the pump</string>
+    <string name="mod_pumpbt_notify_bond_lost_text">The pump is no longer among the phone\'s paired Bluetooth devices, so its data cannot come. Open the pump window and pair again.</string>
+</resources>
