@@ -138,6 +138,17 @@ internal object PumpBtWatchdogRules {
             recheckBond = recheck,
         )
     }
+
+    /**
+     * The journal line of the first arm in a process (a process start or the source turned on): whether the alarm was
+     * set, the round's time kept or new, and in how long it comes - so a journal shows the watchdog alive after a restart.
+     */
+    fun armLine(set: Boolean, kept: Boolean, inMs: Long): String {
+        if (!set) return "watchdog: the system refused the alarm - no rounds until the app starts again"
+        val s = (inMs.coerceAtLeast(0L) + 999) / 1000
+        val time = if (s >= 60) "${s / 60} min ${s % 60} s" else "$s s"
+        return "watchdog set: next round in $time (${if (kept) "time kept" else "new time"})"
+    }
 }
 
 /** What a watchdog round asks of the source and the notifications: an interface so tests need neither. */
@@ -253,8 +264,12 @@ internal object PumpBtWatchdog {
     }
 
     /**
-     * The next round in [PumpBtWatchdogRules.TICK_MS]. Without [force] an alarm already set within one tick is kept (a
-     * process start does not push the round back). false - the source is off (nothing armed).
+     * The next round in [PumpBtWatchdogRules.TICK_MS]. Without [force] a round already due within one tick keeps its
+     * time (a process start does not push the round back), but the alarm is set again for that time: a force stop
+     * removes the app's alarms while Android 14 keeps its PendingIntent, so "the PendingIntent is there" does not prove
+     * the alarm is (pump journal 28.11: after a force stop at 09:59 no round came for hours, and with the pump connected
+     * and quiet nothing was read). Setting the same PendingIntent again replaces the alarm - never two. The first such
+     * arm of a process with the source on writes a journal line. false - the source is off (nothing armed).
      */
     fun arm(context: Context, force: Boolean = false): Boolean {
         val app = context.applicationContext
@@ -265,14 +280,20 @@ internal object PumpBtWatchdog {
         val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val now = elapsed()
         val next = prefs.getLong(K_NEXT, 0L)
-        if (!force && next > now && next - now <= PumpBtWatchdogRules.TICK_MS && intent(app, PendingIntent.FLAG_NO_CREATE) != null) {
-            return true
-        }
-        val at = now + PumpBtWatchdogRules.TICK_MS
+        val kept = !force && next > now && next - now <= PumpBtWatchdogRules.TICK_MS
+        val at = if (kept) next else now + PumpBtWatchdogRules.TICK_MS
         // the time is kept only for an alarm that was set: a refused one is tried again at the next arm (critic B2c, N7)
-        if (setAlarm(app, at)) prefs.edit().putLong(K_NEXT, at).apply() else prefs.edit().remove(K_NEXT).apply()
+        val set = setAlarm(app, at)
+        if (set) prefs.edit().putLong(K_NEXT, at).apply() else prefs.edit().remove(K_NEXT).apply()
+        if (!force && journaledArm.compareAndSet(false, true)) {
+            PumpBtJournal.init(app)
+            PumpBtJournal.add(PumpBtWatchdogRules.armLine(set, kept, at - now))
+        }
         return true
     }
+
+    /** The first arm without force in this process was written to the journal (one line per process start). */
+    private val journaledArm = AtomicBoolean(false)
 
     /** The alarm and the marks go (the card's reminder time stays: the same card must not be told again at once). */
     fun disarm(context: Context) {
@@ -442,6 +463,7 @@ internal object PumpBtWatchdog {
         followJob?.cancel()
         followJob = null
         following.set(false)
+        journaledArm.set(false)
     }
 }
 

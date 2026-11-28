@@ -70,6 +70,19 @@ class PumpBtWatchdogRulesTest {
     ) = WatchdogInput(now, on, health, seen, card, reminded, noAdvert, bondUntold)
 
     @Test
+    fun theArmLineSaysWhenTheNextRoundComes() {
+        assertEquals("watchdog set: next round in 5 min 0 s (new time)", PumpBtWatchdogRules.armLine(true, false, 5 * MIN))
+        assertEquals("watchdog set: next round in 3 min 12 s (time kept)", PumpBtWatchdogRules.armLine(true, true, 191_001))
+        assertEquals("watchdog set: next round in 59 s (time kept)", PumpBtWatchdogRules.armLine(true, true, 59_000))
+        assertEquals("watchdog set: next round in 1 min 0 s (time kept)", PumpBtWatchdogRules.armLine(true, true, 59_001))
+        assertEquals("watchdog set: next round in 0 s (new time)", PumpBtWatchdogRules.armLine(true, false, -5))
+        assertEquals(
+            "watchdog: the system refused the alarm - no rounds until the app starts again",
+            PumpBtWatchdogRules.armLine(false, true, 5 * MIN),
+        )
+    }
+
+    @Test
     fun anUndeliveredLostBondIsCheckedAgainInARoundWithoutThePump() {
         // critic of the joints 2, N-2: the check tells it again; a connected pump is paired (its handshake clears the mark)
         for (h in listOf(null, health(running = false, connected = false), health(connected = false, advertising = true), health(connected = false))) {
@@ -372,6 +385,43 @@ class PumpBtWatchdogTest {
         assertEquals(listOf("advertise", "noData"), calls)
         // and again
         elapsed += 5 * MIN
+        fire()
+        assertEquals(1, alarms.size)
+        assertEquals(elapsed + PumpBtWatchdogRules.TICK_MS, alarms[0].triggerAtMs)
+    }
+
+    @Test
+    fun aProcessStartAfterAForceStopSetsTheRemovedAlarmAgainAtTheKeptTime() {
+        // pump journal 28.11: a force stop at 09:59 removed the alarm, Android 14 kept the PendingIntent, the process
+        // start trusted it and no round came for hours - with the pump connected and quiet nothing was read
+        assertTrue(PumpBtWatchdog.arm(app))
+        val first = alarms[0].triggerAtMs
+        assertTrue(PumpBtJournal.tail.value.last().endsWith("watchdog set: next round in 5 min 0 s (new time)"))
+        // the force stop: the alarm goes, the PendingIntent stays
+        val pending = PumpBtWatchdog.intent(app, android.app.PendingIntent.FLAG_NO_CREATE)
+        assertNotNull(pending)
+        am.cancel(pending!!)
+        assertTrue(alarms.isEmpty())
+        assertNotNull(PumpBtWatchdog.intent(app, android.app.PendingIntent.FLAG_NO_CREATE))
+        // a new process a minute later: the alarm is back at the same time, one only, and the journal says so
+        PumpBtWatchdog.resetForTest()
+        PumpBtWatchdog.elapsed = { elapsed }
+        PumpBtWatchdog.actions = fake
+        PumpBtWatchdog.upstreamService = { calls += "upstream" }
+        elapsed += MIN
+        assertTrue(PumpBtWatchdog.arm(app))
+        assertEquals(1, alarms.size)
+        assertEquals(first, alarms[0].triggerAtMs)
+        assertTrue(PumpBtJournal.tail.value.last().endsWith("watchdog set: next round in 4 min 0 s (time kept)"))
+        // a second arm in the same process sets it again without a second alarm and without a second line
+        fun armLines() = PumpBtJournal.tail.value.count { it.contains("watchdog set:") }
+        val lines = armLines()
+        assertTrue(PumpBtWatchdog.arm(app))
+        assertEquals(1, alarms.size)
+        assertEquals(first, alarms[0].triggerAtMs)
+        assertEquals(lines, armLines())
+        // and the alarm, when it comes, carries on every 5 min
+        elapsed += 4 * MIN
         fire()
         assertEquals(1, alarms.size)
         assertEquals(elapsed + PumpBtWatchdogRules.TICK_MS, alarms[0].triggerAtMs)
