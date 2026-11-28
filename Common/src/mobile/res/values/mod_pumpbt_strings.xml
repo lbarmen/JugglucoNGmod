@@ -195,6 +195,7 @@
     <string name="mod_pumpbt_link_waiting_hint">It usually comes within a minute; after an app update or a phone restart it can take longer.</string>
     <string name="mod_pumpbt_link_keep_bond">Do not remove the pairing in the phone\'s Bluetooth settings: if it is really gone, this window will say so.</string>
     <string name="mod_pumpbt_link_bluetooth_off">Bluetooth is off, so no pump data can come. Turn it on (quick settings at the top of the screen).</string>
+    <string name="mod_pumpbt_link_paused">The pump is not being called for now</string>
     <string name="mod_pumpbt_link_pairing">A pairing is going on</string>
     <!-- %1$s - technical detail in English -->
     <string name="mod_pumpbt_link_error">Link error: %1$s</string>
@@ -216,12 +217,12 @@
 
     <!-- build 17: another app's Bluetooth server sits in front of ours, the paired pump is not called -->
     <string name="mod_pumpbt_front_title">The pump connection is paused</string>
-    <string name="mod_pumpbt_front_text">Another app\'s Bluetooth server (for example, OMRON connect) now sits in front of ours. The pump gets stuck on it, and after 30 seconds the phone erases the pairing. So the app does not call the pump for now - the pairing is safe. To get the connection back right away, turn Bluetooth off and on. Otherwise the app checks every 5 minutes and brings the connection back by itself once the other app is gone.</string>
+    <string name="mod_pumpbt_front_text">Another app (for example, OMRON connect) got hold of Bluetooth before JugglucoNGmod. If the pump connected now, it would get stuck, and after 30 seconds the phone would erase its pairing. So the app does not call the pump: the pairing is safe, but no pump data comes for now. Turning Bluetooth off and on helps fastest (the sensor and the watch drop off for a moment). Otherwise the app checks every 5 minutes and brings the connection back by itself once the other app closes.</string>
     <string name="mod_pumpbt_front_settings">Bluetooth settings</string>
     <string name="mod_pumpbt_front_anyway">Call the pump anyway</string>
-    <string name="mod_pumpbt_front_anyway_ask">If the other app\'s server does not answer the pump, the phone erases the pairing and the pump has to be paired again. Call the pump?</string>
+    <string name="mod_pumpbt_front_anyway_ask">Most likely the pump will get stuck on the other app, and after 30 seconds the phone will erase the pairing — then the pump has to be paired again. Call the pump?</string>
     <string name="mod_pumpbt_front_anyway_confirm">Call</string>
-    <string name="mod_pumpbt_front_pairing">Before pairing, turn Bluetooth off and on: another app\'s Bluetooth server sits in front of ours, and the pairing would fail on it.</string>
-    <string name="mod_pumpbt_bond_lost_held">The pairing was erased because of another app with Bluetooth (for example, OMRON connect). Turn Bluetooth off and on first, then pair.</string>
-    <string name="mod_pumpbt_foreign_app_hint">OMRON connect is installed: its Bluetooth server gets in the pump\'s way. Keep it among the deep sleeping apps in the phone\'s battery settings.</string>
+    <string name="mod_pumpbt_front_pairing">Turn Bluetooth off and on first, then go on with the pairing on the pump: another app got hold of Bluetooth before JugglucoNGmod, and the pairing may fail.</string>
+    <string name="mod_pumpbt_bond_lost_held">The phone erased the pairing itself: the pump got stuck on another app using Bluetooth (for example, OMRON connect). So turn Bluetooth off and on first, and only then press \"Pair again\" — otherwise the pairing fails the same way.</string>
+    <string name="mod_pumpbt_foreign_app_hint">OMRON connect is installed: its Bluetooth server may get in the pump\'s way. If it is not yet among the deep sleeping apps in the phone\'s battery settings, add it there.</string>
 </resources>

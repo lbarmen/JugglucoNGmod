@@ -170,6 +170,16 @@ internal object PumpBtSource {
     /** The link's last published [PumpBtLinkState.front]: a notification when it appears, taken away when it goes. */
     @Volatile private var lastFront: PumpBtFront? = null
 
+    /**
+     * The notification about another app's server in front comes this long after the pause appeared, if it is still
+     * the same pause: the link's quick first check (30 s) clears a false pause right after an update without a
+     * notification.
+     */
+    internal const val FOREIGN_ALERT_DELAY_MS = 60_000L
+
+    /** The pending notification about the pause ([FOREIGN_ALERT_DELAY_MS]); null - none. Main thread. */
+    private var foreignAlert: Runnable? = null
+
     /** Upstream's sensor Bluetooth switch; tests put their own (the native library is not there). */
     @Volatile
     internal var sensorBluetooth: () -> Boolean = { runCatching { Natives.getusebluetooth() }.getOrDefault(true) }
@@ -682,14 +692,43 @@ internal object PumpBtSource {
         false
     }
 
-    /** The link's front changed: a notification when another app's server appears in front, taken away when it goes. */
+    /** A state the link published (main thread). */
+    private fun linkPublished(c: Context, ls: PumpBtLinkState) {
+        _state.update { it.copy(link = ls, waitingSinceMs = PumpBtWindow.waitingSince(it.waitingSinceMs, ls, System.currentTimeMillis())) }
+        onLinkState?.invoke(ls)
+        if (ls.front != lastFront) frontChanged(c, ls.front)
+        val before = lastStage
+        lastStage = ls.stage
+        if (PumpBtAlertRules.handshakeDone(before, ls.stage)) handshakeDone(c)
+    }
+
+    /** Tests: [ls] as if the link published it (call on the main thread). */
+    internal fun linkPublishedForTest(context: Context, ls: PumpBtLinkState) = linkPublished(attach(context), ls)
+
+    /**
+     * The link's front changed: a notification [FOREIGN_ALERT_DELAY_MS] after another app's server appears in front
+     * (only if the same pause still stands, the source is on and the bond is not lost - then the lost-bond
+     * notification says it), taken away when it goes.
+     */
     private fun frontChanged(c: Context, front: PumpBtFront?) {
         val before = lastFront
         lastFront = front
         if (before == null && front != null) {
             journal("source: another app's server lies in front - the pump is not called")
-            if (PumpSourceSwitch.bluetoothOn(c)) scope.launch { sendAlert(c, PumpBtAlert(PumpBtAlertKind.FOREIGN_SERVER)) }
+            foreignAlert?.let { main.removeCallbacks(it) }
+            val since = front.sinceMs
+            val pending = Runnable {
+                foreignAlert = null
+                val s = _state.value
+                if (s.link.front?.sinceMs == since && s.enabled && !s.bondLost && PumpSourceSwitch.bluetoothOn(c)) {
+                    scope.launch { sendAlert(c, PumpBtAlert(PumpBtAlertKind.FOREIGN_SERVER)) }
+                }
+            }
+            foreignAlert = pending
+            main.postDelayed(pending, FOREIGN_ALERT_DELAY_MS)
         } else if (before != null && front == null) {
+            foreignAlert?.let { main.removeCallbacks(it) }
+            foreignAlert = null
             try {
                 cancelAlert?.invoke(c, PumpBtAlertKind.FOREIGN_SERVER)
             } catch (t: Throwable) {
@@ -904,14 +943,7 @@ internal object PumpBtSource {
             c, k.db, store(c),
             journal = journal,
             logcat = { PumpBtLog.i(it) },
-            publish = { ls ->
-                _state.update { it.copy(link = ls, waitingSinceMs = PumpBtWindow.waitingSince(it.waitingSinceMs, ls, System.currentTimeMillis())) }
-                onLinkState?.invoke(ls)
-                if (ls.front != lastFront) frontChanged(c, ls.front)
-                val before = lastStage
-                lastStage = ls.stage
-                if (PumpBtAlertRules.handshakeDone(before, ls.stage)) handshakeDone(c)
-            },
+            publish = { ls -> linkPublished(c, ls) },
             historyFrom = { historyFrom(c) },
             onCycle = { cycle -> cycles?.trySend(cycle) },
             verbose = { store(c).verbose },
@@ -1111,7 +1143,9 @@ internal object PumpBtSource {
         cancelAlert = null
         installedPackage = { c, pkg -> packageInstalled(c, pkg) }
         lastFront = null
-        intake = { c, e, p, n -> CareLinkIntake.accept(c, IntakeSource.BLUETOOTH, e, p, n) }
+        foreignAlert?.let { main.removeCallbacks(it) }
+        foreignAlert = null
+        intake ={ c, e, p, n -> CareLinkIntake.accept(c, IntakeSource.BLUETOOTH, e, p, n) }
         saveMemory = { st, m -> st.save(m) }
         lastStage = null
         bondTrusted = false

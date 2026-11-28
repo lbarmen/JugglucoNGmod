@@ -7,6 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import tk.glucodata.mod.pumpbt.PumpBtFront
 import tk.glucodata.mod.pumpbt.PumpBtLinkState
+import tk.glucodata.mod.pumpbt.PumpBtLinkStatus
 import tk.glucodata.mod.pumpbt.PumpBtSourceState
 import tk.glucodata.mod.pumpbt.PumpBtStage
 import tk.glucodata.mod.pumpbt.PumpBtUiState
@@ -18,7 +19,7 @@ import tk.glucodata.mod.pumpbt.ble.PumpLinkRules.Front
 
 /**
  * JugglucoNGmod, pump over Bluetooth (build 17): another app's GATT server in front of ours - where our SAKE stands,
- * what the phone learns of its first app handle, when the paired pump is called, the journal lines, the window's card
+ * when the paired pump is called (the person may let it come anyway), the journal lines, the window's card
  * and wizard line. Made-up handles and addresses only.
  */
 class PumpLinkFrontTest {
@@ -27,46 +28,29 @@ class PumpLinkFrontTest {
     fun whereOurSakeStands() {
         assertEquals(Front.CLEAR, PumpLinkRules.front(134, 134, null))
         assertEquals(Front.CLEAR, PumpLinkRules.front(120, 134, null))
-        assertEquals(Front.WORKED, PumpLinkRules.front(161, 134, 161))
-        assertEquals(Front.WORKED, PumpLinkRules.front(150, 134, 161))
+        assertEquals(Front.CLEAR, PumpLinkRules.front(134, 134, 161))
+        // the person let the pump come anyway: up to the handle accepted
+        assertEquals(Front.ACCEPTED, PumpLinkRules.front(161, 134, 161))
+        assertEquals(Front.ACCEPTED, PumpLinkRules.front(150, 134, 161))
         assertEquals(Front.FOREIGN, PumpLinkRules.front(165, 134, 161))
         assertEquals(Front.FOREIGN, PumpLinkRules.front(161, 134, null))
     }
 
     @Test
     fun theFirstAppHandle() {
-        assertEquals(140, PumpLinkRules.firstAppHandle(140, 34, 161))
-        assertEquals(140, PumpLinkRules.firstAppHandle(140, 30, 161))
-        assertEquals(PumpLinkRules.ANDROID14_FIRST_APP_HANDLE, PumpLinkRules.firstAppHandle(null, 34, 161))
-        assertEquals(134, PumpLinkRules.firstAppHandle(null, 35, 200))
-        // nothing known on older Android: counted as clear
-        assertEquals(161, PumpLinkRules.firstAppHandle(null, 33, 161))
-        assertEquals(Front.CLEAR, PumpLinkRules.front(161, PumpLinkRules.firstAppHandle(null, 33, 161), null))
+        assertEquals(PumpLinkRules.ANDROID14_FIRST_APP_HANDLE, PumpLinkRules.firstAppHandle(34, 161))
+        assertEquals(134, PumpLinkRules.firstAppHandle(35, 200))
+        assertEquals(134, PumpLinkRules.firstAppHandle(34, 120))
+        // nothing known on Android 13 and older: our own handle, counted as clear
+        assertEquals(161, PumpLinkRules.firstAppHandle(33, 161))
+        assertEquals(Front.CLEAR, PumpLinkRules.front(161, PumpLinkRules.firstAppHandle(33, 161), null))
+        assertEquals(Front.FOREIGN, PumpLinkRules.front(161, PumpLinkRules.firstAppHandle(34, 161), null))
     }
 
     @Test
-    fun whatThePhoneLearnsOfItsFirstAppHandle() {
-        // right after Bluetooth on our services come first: the smaller, and a first value even when larger
-        assertEquals(134, PumpLinkRules.learnFirstAppHandle(134, 34, 161, afterBluetoothOn = true))
-        assertEquals(130, PumpLinkRules.learnFirstAppHandle(134, 34, 130, afterBluetoothOn = true))
-        assertEquals(161, PumpLinkRules.learnFirstAppHandle(null, 34, 161, afterBluetoothOn = true))
-        assertEquals(45, PumpLinkRules.learnFirstAppHandle(null, 30, 45, afterBluetoothOn = true))
-        // at other times only a handle below the one compared with teaches
-        assertEquals(120, PumpLinkRules.learnFirstAppHandle(null, 34, 120, afterBluetoothOn = false))
-        assertNull(PumpLinkRules.learnFirstAppHandle(null, 34, 161, afterBluetoothOn = false))
-        assertNull(PumpLinkRules.learnFirstAppHandle(null, 33, 120, afterBluetoothOn = false))
-        assertEquals(134, PumpLinkRules.learnFirstAppHandle(134, 34, 161, afterBluetoothOn = false))
-        assertEquals(100, PumpLinkRules.learnFirstAppHandle(134, 34, 100, afterBluetoothOn = false))
-        assertEquals(40, PumpLinkRules.learnFirstAppHandle(50, 30, 40, afterBluetoothOn = false))
-    }
-
-    @Test
-    fun theWorkedHandleCountsOnlyInTheSameBoot() {
-        assertEquals(161, PumpLinkRules.workedHandle(161, 7, 7))
-        assertNull(PumpLinkRules.workedHandle(161, 7, 8))
-        assertNull(PumpLinkRules.workedHandle(null, 7, 7))
-        assertNull(PumpLinkRules.workedHandle(161, null, 7))
-        assertNull(PumpLinkRules.workedHandle(161, 7, null))
+    fun theFirstCheckAgainComesSooner() {
+        assertEquals(30_000L, PumpLinkRules.FRONT_FIRST_RECHECK_MS)
+        assertEquals(5 * 60_000L, PumpLinkRules.FRONT_RECHECK_MS)
     }
 
     @Test
@@ -101,9 +85,9 @@ class PumpLinkFrontTest {
             PumpLinkRules.frontLine(Front.CLEAR, 134, 134, null),
         )
         assertEquals(
-            "services of other apps lie in front of ours (handles 134-160), no more than when the pump last came through " +
-                "(SAKE then at 161): advertising",
-            PumpLinkRules.frontLine(Front.WORKED, 161, 134, 161),
+            "services of another app lie in front of ours (handles 134-160), the person let the pump come anyway " +
+                "(accepted at SAKE handle 161): advertising",
+            PumpLinkRules.frontLine(Front.ACCEPTED, 161, 134, 161),
         )
         assertEquals(
             "services of another app lie in front of ours (handles 134-160): no advertising for the pump - connecting now " +
@@ -149,10 +133,38 @@ class PumpLinkFrontTest {
         // a running link switched to pairing does not publish its pair mode, but its stage shows it
         assertFalse(PumpBtWindow.frontCard(PumpBtSourceState(enabled = true, link = waiting.copy(stage = PumpBtStage.ADVERTISING_PAIR))))
 
-        assertFalse(PumpBtWindow.heldBondLoss(PumpBtSourceState()))
-        assertTrue(PumpBtWindow.heldBondLoss(PumpBtSourceState(link = PumpBtLinkState(heldBondLossAtMs = 5_000))))
+        // with the bond lost one card says it ("the phone forgot the pump")
+        assertFalse(PumpBtWindow.frontCard(PumpBtSourceState(enabled = true, bondLost = true, link = waiting)))
+        // the source off gives no lost-bond card: the paused card stays
+        assertTrue(PumpBtWindow.frontCard(PumpBtSourceState(enabled = false, bondLost = true, link = waiting)))
+
         assertFalse(PumpBtWindow.foreignAppHint(PumpBtSourceState()))
         assertTrue(PumpBtWindow.foreignAppHint(PumpBtSourceState(foreignApps = PumpLinkRules.KNOWN_HOLDERS)))
+    }
+
+    @Test
+    fun theHeldBondLossIsToldForADay() {
+        val at = 5_000L
+        val lost = PumpBtSourceState(link = PumpBtLinkState(heldBondLossAtMs = at))
+        assertFalse(PumpBtWindow.heldBondLoss(PumpBtSourceState(), at))
+        assertTrue(PumpBtWindow.heldBondLoss(lost, at))
+        assertTrue(PumpBtWindow.heldBondLoss(lost, at + 24 * 3_600_000L))
+        assertFalse(PumpBtWindow.heldBondLoss(lost, at + 24 * 3_600_000L + 1))
+        assertFalse(PumpBtWindow.heldBondLoss(lost, at - 1))
+        assertEquals(24 * 3_600_000L, PumpBtWindow.HELD_SHOWN_MS)
+    }
+
+    @Test
+    fun theLinkLineSaysPaused() {
+        val ui = PumpBtUiState(hasBluetooth = true, bluetoothOn = true)
+        assertEquals(PumpBtLinkStatus.PAUSED, PumpBtWindow.linkStatus(ui, PumpBtSourceState(enabled = true, link = waiting)))
+        assertEquals(PumpBtLinkStatus.WAITING, PumpBtWindow.linkStatus(ui, PumpBtSourceState(enabled = true, link = waiting.copy(front = null))))
+        // a pump that came anyway is connected
+        assertEquals(
+            PumpBtLinkStatus.CONNECTED,
+            PumpBtWindow.linkStatus(ui, PumpBtSourceState(enabled = true, link = waiting.copy(stage = PumpBtStage.PUMP_CONNECTED))),
+        )
+        assertEquals(PumpBtLinkStatus.BLUETOOTH_OFF, PumpBtWindow.linkStatus(ui.copy(bluetoothOn = false), PumpBtSourceState(enabled = true, link = waiting)))
     }
 
     @Test

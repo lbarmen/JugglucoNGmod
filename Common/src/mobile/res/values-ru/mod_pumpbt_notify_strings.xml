@@ -14,7 +14,7 @@
     <string name="mod_pumpbt_notify_bond_lost_title">Телефон забыл помпу</string>
     <string name="mod_pumpbt_notify_bond_lost_text">Помпы больше нет среди сопряжённых устройств Bluetooth телефона, данные с неё не придут. Откройте окно помпы и сопрягите её заново.</string>
     <string name="mod_pumpbt_notify_front_title">Связь с помпой на паузе</string>
-    <string name="mod_pumpbt_notify_front_text">Bluetooth-сервер другого приложения (например, OMRON connect) мешает помпе. Сопряжение цело. Вернуть связь сразу: выключите и включите Bluetooth.</string>
-    <string name="mod_pumpbt_notify_foreign_app_title">OMRON connect мешает помпе</string>
-    <string name="mod_pumpbt_notify_foreign_app_text">Его Bluetooth-сервер не отвечает помпе, и телефон может стереть сопряжение. Добавьте OMRON connect в «Приложения в глубоком сне» в настройках батареи телефона.</string>
+    <string name="mod_pumpbt_notify_front_text">Другое приложение (например, OMRON connect) заняло Bluetooth раньше JugglucoNGmod. Сопряжение цело, данные помпы пока не приходят. Вернуть связь сразу: выключите и включите Bluetooth.</string>
+    <string name="mod_pumpbt_notify_foreign_app_title">OMRON connect может мешать помпе</string>
+    <string name="mod_pumpbt_notify_foreign_app_text">Если Bluetooth-сервер OMRON connect встанет раньше нашего, приложение поставит связь с помпой на паузу. Добавьте OMRON connect в список «Приложения в глубоком сне» в настройках батареи.</string>
 </resources>
