@@ -13,8 +13,11 @@
     <string name="mod_pumpbt_notify_drift_text">Время на помпе отличается от времени телефона. Поставьте время на помпе, иначе время записей в журнале может быть неверным.</string>
     <string name="mod_pumpbt_notify_bond_lost_title">Телефон забыл помпу</string>
     <string name="mod_pumpbt_notify_bond_lost_text">Помпы больше нет среди сопряжённых устройств Bluetooth телефона, данные с неё не придут. Откройте окно помпы и сопрягите её заново.</string>
-    <string name="mod_pumpbt_notify_front_title">Связь с помпой на паузе</string>
-    <string name="mod_pumpbt_notify_front_text">Другое приложение (например, OMRON connect) заняло Bluetooth раньше JugglucoNGmod. Сопряжение цело, данные помпы пока не приходят. Вернуть связь сразу: выключите и включите Bluetooth.</string>
+    <string name="mod_pumpbt_notify_front_title">Помпа: выключите и включите Bluetooth сейчас</string>
+    <string name="mod_pumpbt_notify_front_text">Иначе телефон может стереть сопряжение с помпой. Другое приложение (например, OMRON connect) заняло Bluetooth раньше JugglucoNGmod. Помпа может подключиться в любую минуту, даже если приложение её не зовёт; тогда она может зависнуть на этом приложении, и через 30 секунд телефон сотрёт сопряжение. Датчик и часы ненадолго отключатся.</string>
     <string name="mod_pumpbt_notify_foreign_app_title">OMRON connect может мешать помпе</string>
-    <string name="mod_pumpbt_notify_foreign_app_text">Если Bluetooth-сервер OMRON connect встанет раньше нашего, приложение поставит связь с помпой на паузу. Добавьте OMRON connect в список «Приложения в глубоком сне» в настройках батареи.</string>
+    <string name="mod_pumpbt_notify_foreign_app_text">Если Bluetooth-сервер OMRON connect встанет раньше нашего, помпа может зависнуть на нём, и телефон сотрёт сопряжение с ней. Добавьте OMRON connect в список «Приложения в глубоком сне» в настройках батареи.</string>
+    <!-- build 19: the urgent channel (high importance) -->
+    <string name="mod_pumpbt_urgent_channel_name">Помпа: срочно</string>
+    <string name="mod_pumpbt_urgent_channel_description">Срочно: телефон может стереть сопряжение с помпой</string>
 </resources>

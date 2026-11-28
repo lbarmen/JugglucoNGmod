@@ -187,6 +187,13 @@ internal class PumpLink(
     /** Another app's services lie in front of ours: no reconnect advertisement; null - nothing in front. */
     private var front: PumpBtFront? = null
     private val frontRecheck = Runnable { recheckFront() }
+    /**
+     * Build 19: our server is being opened anew by [recheckFront] (every minute during a pause) - its routine lines
+     * stay out of the journal, so that a long pause does not push the trial lines out (critic of build 19, N5).
+     */
+    private var rechecking = false
+    /** Checks in a row that found the same server in front at the same handle; every 10th is written. */
+    private var stillChecks = 0
     /** Addresses that encrypted the link or asked our server something during their current connection. */
     private val encryptedOrAsked = mutableSetOf<String>()
     /** "The pump hangs in front of our server" checks per address, [PumpLinkRules.STUCK_CHECK_MS] after it connected. */
@@ -546,6 +553,7 @@ internal class PumpLink(
      */
     private fun fail(reason: String) {
         if (!running) return
+        rechecking = false
         val delay = PumpLinkRules.recoverDelayMs(recoverFailures)
         recoverFailures++
         journal("error: $reason - link dropped, advertising again in ${delay / 1000} s")
@@ -838,10 +846,15 @@ internal class PumpLink(
         val first = PumpLinkRules.firstAppHandle(Build.VERSION.SDK_INT, handle)
         val accepted = acceptedHandle
         val f = PumpLinkRules.front(handle, first, accepted)
-        journal(
-            if (f == PumpLinkRules.Front.FOREIGN && front != null) PumpLinkRules.frontStillLine(handle)
-            else PumpLinkRules.frontLine(f, handle, first, accepted),
-        )
+        val still = f == PumpLinkRules.Front.FOREIGN && front != null
+        if (still && rechecking && front?.ourHandle == handle) {
+            stillChecks++
+            if (stillChecks % PumpLinkRules.FRONT_STILL_WRITTEN_EVERY == 1) journal(PumpLinkRules.frontStillLine(handle, stillChecks))
+        } else {
+            stillChecks = if (still) 1 else 0
+            journal(if (still) PumpLinkRules.frontStillLine(handle) else PumpLinkRules.frontLine(f, handle, first, accepted))
+        }
+        rechecking = false
         setFront(if (f == PumpLinkRules.Front.FOREIGN) PumpBtFront(front?.sinceMs ?: System.currentTimeMillis(), handle, first) else null)
         // the window shows the wait, not "not started"
         if (f == PumpLinkRules.Front.FOREIGN && state.stage in ADVERTISE_STAGES) {
@@ -870,14 +883,18 @@ internal class PumpLink(
         if (!running || front == null) return
         val a = adapter
         if (a == null || !isEnabled(a)) return
-        if (pairMode || pumpDevice != null || serverConnectedAt.keys.any { isPumpAddress(it) }) {
-            // not in the middle of a pairing or of the pump's session (or its connection to our server): later
+        if (pairMode || pumpDevice != null || serverConnectedAt.keys.any { isPumpAddress(it) } ||
+            server == null || !servicesReady || pendingServices.isNotEmpty()
+        ) {
+            // not in the middle of a pairing or of the pump's session (or its connection to our server), and not while
+            // our services are being added (a late onServiceAdded of the closed server would fail the new one): later
             main.postDelayed(frontRecheck, PumpLinkRules.FRONT_RECHECK_MS)
             return
         }
-        journal("checking again whether another app's server still lies in front: our GATT server opened anew")
+        if (stillChecks % PumpLinkRules.FRONT_STILL_WRITTEN_EVERY == 0) journal("checking again whether another app's server still lies in front: our GATT server opened anew")
         stopAdvertising()
         closeServer()
+        rechecking = true
         setUpServer()
     }
 
@@ -1001,7 +1018,7 @@ internal class PumpLink(
         val next = pendingServices.removeFirstOrNull()
         if (next == null) {
             servicesReady = true
-            journal("GATT server ready (SAKE 0xFE82 at handle $sakeHandle, device information 0x0900 at $infoHandle)")
+            if (!rechecking) journal("GATT server ready (SAKE 0xFE82 at handle $sakeHandle, device information 0x0900 at $infoHandle)")
             judgeFront()
             updateAdvertising()
             return
@@ -2099,7 +2116,7 @@ internal class PumpLink(
                     SAKE_SERVICE_UUID -> sakeHandle = handle
                     INFO_SERVICE_UUID -> infoHandle = handle
                 }
-                journal("service ${PumpUuid.short(service.uuid)} added (handle $handle)")
+                if (!rechecking) journal("service ${PumpUuid.short(service.uuid)} added (handle $handle)")
                 addNextService()
             }
         }

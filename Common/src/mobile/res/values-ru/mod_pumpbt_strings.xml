@@ -172,7 +172,7 @@
     <string name="mod_pumpbt_link_waiting_hint">Обычно она приходит за минуту; после обновления приложения или перезагрузки телефона бывает дольше.</string>
     <string name="mod_pumpbt_link_keep_bond">Сопряжение в настройках Bluetooth не удаляйте — если оно правда пропало, окно скажет само.</string>
     <string name="mod_pumpbt_link_bluetooth_off">Bluetooth выключен, данные помпы не придут. Включите его (быстрые настройки вверху экрана).</string>
-    <string name="mod_pumpbt_link_paused">Помпу пока не зовём</string>
+    <string name="mod_pumpbt_link_paused">Срочно: другое приложение мешает связи с помпой</string>
     <string name="mod_pumpbt_link_pairing">Идёт сопряжение</string>
     <string name="mod_pumpbt_link_error">Ошибка связи: %1$s</string>
     <string name="mod_pumpbt_link_off">Связь не запущена</string>
@@ -188,13 +188,13 @@
     <string name="mod_pumpbt_iob_old">старше 30 мин (%1$s) — смотрите на помпе</string>
     <string name="mod_pumpbt_download_key">Скачать базу ключей</string>
 
-    <string name="mod_pumpbt_front_title">Связь с помпой на паузе</string>
-    <string name="mod_pumpbt_front_text">Другое приложение (например, OMRON connect) заняло Bluetooth раньше JugglucoNGmod. Если помпа подключится сейчас, она зависнет, и через 30 секунд телефон сотрёт сопряжение с ней. Поэтому приложение помпу не зовёт: сопряжение цело, но данные помпы пока не приходят. Быстрее всего помогает выключить и включить Bluetooth (датчик и часы ненадолго отключатся). Иначе приложение проверяет каждые 5 минут и вернёт связь само, когда другое приложение закроется.</string>
+    <string name="mod_pumpbt_front_title">Выключите и включите Bluetooth сейчас</string>
+    <string name="mod_pumpbt_front_text">Иначе телефон может стереть сопряжение с помпой. Другое приложение (например, OMRON connect) заняло Bluetooth раньше JugglucoNGmod. Помпа может подключиться в любую минуту, даже если приложение её не зовёт; тогда она может зависнуть на этом приложении, и через 30 секунд телефон сотрёт сопряжение. Тогда помпу придётся сопрягать заново. Датчик и часы ненадолго отключатся. После этого предупреждение обычно пропадает само (приложение проверяет раз в минуту); появилось снова — повторите. Чтобы не повторялось, добавьте другое приложение в «Приложения в глубоком сне» в настройках батареи.</string>
     <string name="mod_pumpbt_front_settings">Настройки Bluetooth</string>
     <string name="mod_pumpbt_front_anyway">Всё равно звать помпу</string>
-    <string name="mod_pumpbt_front_anyway_ask">Скорее всего, помпа зависнет на другом приложении, и через 30 секунд телефон сотрёт сопряжение — тогда помпу придётся сопрягать заново. Звать помпу?</string>
+    <string name="mod_pumpbt_front_anyway_ask">Пока другое приложение мешает, помпа при подключении может зависнуть на нём, через 30 секунд телефон сотрёт сопряжение, и помпу придётся сопрягать заново. Если звать помпу, она будет подключаться чаще, и риск выше. Надёжнее выключить и включить Bluetooth. Всё равно звать помпу?</string>
     <string name="mod_pumpbt_front_anyway_confirm">Звать</string>
     <string name="mod_pumpbt_front_pairing">Сначала выключите и включите Bluetooth, потом продолжайте сопряжение на помпе: другое приложение заняло Bluetooth раньше JugglucoNGmod, и сопряжение может сорваться.</string>
-    <string name="mod_pumpbt_bond_lost_held">Сопряжение стёр сам телефон: помпа зависла на другом приложении с Bluetooth (например, OMRON connect). Поэтому сначала выключите и включите Bluetooth и только потом нажимайте «Сопрячь заново» — иначе сопряжение сорвётся так же.</string>
+    <string name="mod_pumpbt_bond_lost_held">Сопряжение стёр сам телефон: помпа зависла на Bluetooth-службе другого приложения (например, OMRON connect). Сначала выключите и включите Bluetooth и только потом нажимайте «Сопрячь заново» — иначе сопряжение сорвётся так же.</string>
     <string name="mod_pumpbt_foreign_app_hint">Установлен OMRON connect: его Bluetooth-сервер может мешать помпе. Если он ещё не в списке «Приложения в глубоком сне» в настройках батареи, добавьте его туда.</string>
 </resources>

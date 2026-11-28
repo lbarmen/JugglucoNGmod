@@ -28,6 +28,10 @@ For the user:
   The pump is not called while another app's Bluetooth server sits in front of ours (Android 14 and newer) (it would
   hang there and Android would erase the pairing); the pump window and a notification say so, Bluetooth off and on or the other app leaving
   brings it back; OMRON connect is named when installed.
+  Since 2026-11-28 (build 19) the warning is honest and urgent: not calling the pump does not keep it away (it may
+  still connect through the phone's own system advertisements, and the phone then erases the pairing 30 s later), so
+  a pop-up notification on its own "Pump: urgent" channel asks at once to turn Bluetooth off and on; the window says
+  the same; the app checks every minute whether the other server is gone (was every 5 minutes).
 - 2026-11-26 — the phone's always-on display ("Lock screen (AOD)", the author's accessibility overlay) in the look of
   the watch face's dim mode (`Common/src/main/java/tk/glucodata/mod/aod/`): the number centred (with the chart on, the
   author moves it towards the chart's last point, so it sat off to the right), the arrow to its right, the change and
