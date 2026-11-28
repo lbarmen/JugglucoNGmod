@@ -50,7 +50,9 @@ import tk.glucodata.mod.pumpbt.PumpBtAlert
 import tk.glucodata.mod.pumpbt.PumpBtAlertKind
 import tk.glucodata.mod.pumpbt.PumpBtBridge
 import tk.glucodata.mod.pumpbt.PumpBtHistoryStore
+import tk.glucodata.mod.pumpbt.PumpBtFront
 import tk.glucodata.mod.pumpbt.PumpBtKey
+import tk.glucodata.mod.pumpbt.PumpBtLinkState
 import tk.glucodata.mod.pumpbt.PumpBtStage
 import tk.glucodata.mod.pumpbt.PumpBtJournal
 import tk.glucodata.mod.pumpbt.PumpBtNameVariant
@@ -60,6 +62,7 @@ import tk.glucodata.mod.pumpbt.PumpHistoryMemory
 import tk.glucodata.mod.pumpbt.core.PumpCycle
 import tk.glucodata.mod.pumpbt.core.toHex
 import java.io.File
+import java.time.Duration
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -519,30 +522,57 @@ class PumpBtSourceTest {
     }
 
     @Test
-    fun theHandlesOfBuild17OutliveTheStore() {
+    fun thePauseIsToldAfterAMinuteOnlyIfItStaysAndTheBondIsNotLost() {
+        // build 17 review: the quick first check (30 s) clears a false pause right after an update without a notification
+        enable()
+        val main = Shadows.shadowOf(Looper.getMainLooper())
+        fun foreign() = alerts.toList().count { it.kind == PumpBtAlertKind.FOREIGN_SERVER }
+        fun publish(front: PumpBtFront?) =
+            PumpBtSource.linkPublishedForTest(app, PumpBtLinkState(running = true, stage = PumpBtStage.WAITING, front = front))
+        fun waitIo() = Thread.sleep(300)
+
+        // not at once; after a minute, the same pause still standing - once
+        publish(PumpBtFront(sinceMs = 1_000, ourHandle = 161, firstAppHandle = 134))
+        main.idleFor(Duration.ofMillis(PumpBtSource.FOREIGN_ALERT_DELAY_MS - 1))
+        waitIo()
+        assertEquals(0, foreign())
+        main.idleFor(Duration.ofMillis(2))
+        val until = System.currentTimeMillis() + 3_000
+        while (foreign() == 0 && System.currentTimeMillis() < until) Thread.sleep(20)
+        assertEquals(1, foreign())
+
+        // the pause goes within the minute: nothing
+        publish(null)
+        publish(PumpBtFront(sinceMs = 2_000, ourHandle = 161, firstAppHandle = 134))
+        main.idleFor(Duration.ofMillis(30_000))
+        publish(null)
+        main.idleFor(Duration.ofMillis(PumpBtSource.FOREIGN_ALERT_DELAY_MS))
+        waitIo()
+        assertEquals(1, foreign())
+
+        // the bond is lost: the lost-bond notification says it, not this one
+        runBlocking { PumpBtSource.applyBondForTest(app, paired = true, bonded = false) }
+        assertTrue(PumpBtSource.state.value.bondLost)
+        publish(PumpBtFront(sinceMs = 3_000, ourHandle = 161, firstAppHandle = 134))
+        main.idleFor(Duration.ofMillis(PumpBtSource.FOREIGN_ALERT_DELAY_MS + 1))
+        waitIo()
+        assertEquals(1, foreign())
+    }
+
+    @Test
+    fun theForeignAppNoticeOutlivesTheStore() {
         val tmp = File(app.cacheDir, "link-front-test").apply { deleteRecursively(); mkdirs() }
         val file = File(tmp, "link.json")
         val st = PumpBtStore(file, null)
-        assertNull(st.firstAppHandle("build-a"))
-        assertNull(st.workedHandle)
         assertFalse(st.foreignAppTold)
-        st.setFirstAppHandle("build-a", 134)
-        st.workedHandle = 161 to 7
         st.foreignAppTold = true
         st.awaitWrites()
         val again = PumpBtStore(file, null)
-        assertEquals(134, again.firstAppHandle("build-a"))
-        // another OS build may place the system services anew
-        assertNull(again.firstAppHandle("build-b"))
-        assertEquals(161 to 7, again.workedHandle)
         assertTrue(again.foreignAppTold)
-        again.workedHandle = null
         again.foreignAppTold = false
         again.awaitWrites()
         val third = PumpBtStore(file, null)
-        assertNull(third.workedHandle)
         assertFalse(third.foreignAppTold)
-        assertEquals(134, third.firstAppHandle("build-a"))
     }
 
     @Test

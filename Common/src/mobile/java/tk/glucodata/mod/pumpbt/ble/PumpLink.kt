@@ -52,7 +52,6 @@ import android.os.Looper
 import android.os.ParcelUuid
 import android.os.PowerManager
 import android.os.SystemClock
-import android.provider.Settings
 import tk.glucodata.mod.pumpbt.PumpBtFront
 import tk.glucodata.mod.pumpbt.PumpBtHistory
 import tk.glucodata.mod.pumpbt.PumpBtJournal
@@ -180,8 +179,11 @@ internal class PumpLink(
     /** Start handles of our services as Android gave them (onServiceAdded); 0 - not added. */
     private var sakeHandle = 0
     private var infoHandle = 0
-    /** The server is being opened anew right after Bluetooth came on: our services come before other apps'. */
-    private var afterBluetoothOn = false
+    /**
+     * Our SAKE handle when the person let the pump come anyway with another app in front ("Call the pump anyway"):
+     * kept in memory only, until the process ends, Bluetooth turns off or the link stops; null - not let.
+     */
+    private var acceptedHandle: Int? = null
     /** Another app's services lie in front of ours: no reconnect advertisement; null - nothing in front. */
     private var front: PumpBtFront? = null
     private val frontRecheck = Runnable { recheckFront() }
@@ -444,6 +446,7 @@ internal class PumpLink(
         pairMode = false
         main.removeCallbacks(recoverRun)
         recoverScheduled = false
+        acceptedHandle = null
         setFront(null)
         heldChecks.values.forEach { main.removeCallbacks(it) }
         heldChecks.clear()
@@ -476,7 +479,10 @@ internal class PumpLink(
     /** Watchdog: drop the link and advertise again at once (the pump comes back with a new handshake). */
     fun reconnect() {
         if (!running) return
-        journal("reconnect: dropping the link and advertising again")
+        journal(
+            if (front != null && !pairMode) "reconnect: another app's server lies in front - our GATT server opened anew to check again"
+            else "reconnect: dropping the link and advertising again",
+        )
         main.removeCallbacks(recoverRun)
         recoverScheduled = false
         dropPumpLink()
@@ -705,15 +711,13 @@ internal class PumpLink(
                         main.removeCallbacks(recoverRun)
                         recoverScheduled = false
                         if (state.stage == PumpBtStage.ERROR) setStage(if (pairMode) PumpBtStage.ADVERTISING_PAIR else PumpBtStage.WAITING)
-                        // our services now come before other apps' (build 17)
-                        afterBluetoothOn = true
                         closeServer()
                         setUpServer()
                     }
                 }
                 BluetoothAdapter.STATE_TURNING_OFF, BluetoothAdapter.STATE_OFF -> {
-                    // a new Bluetooth session follows: the handles given out in this one count no more (build 17)
-                    store.workedHandle = null
+                    // a new Bluetooth session follows: the person's "call anyway" counts no more (build 17)
+                    acceptedHandle = null
                     setFront(null)
                     if (server == null && !servicesReady && pumpDevice == null) return
                     journal("Bluetooth off")
@@ -823,35 +827,20 @@ internal class PumpLink(
 
     // MARK: - Another app's GATT server in front of ours (build 17, PumpLinkRules.Front)
 
-    /** The phone's boot count (Settings.Global.BOOT_COUNT); null - not readable. */
-    private fun bootCount(): Int? = try {
-        Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT)
-    } catch (_: Exception) {
-        null
-    }
-
     /** Our services are added: whether another app's services lie in front of ours (then no reconnect advertisement). */
     private fun judgeFront() {
-        val fromBtOn = afterBluetoothOn
-        afterBluetoothOn = false
         val handle = sakeHandle
         if (handle <= 0) {
             journal("our SAKE handle not known: not checked whether another app's server lies in front")
             setFront(null)
             return
         }
-        val build = Build.FINGERPRINT ?: ""
-        val sdk = Build.VERSION.SDK_INT
-        PumpLinkRules.learnFirstAppHandle(store.firstAppHandle(build), sdk, handle, fromBtOn)?.let {
-            if (it != store.firstAppHandle(build)) store.setFirstAppHandle(build, it)
-        }
-        val first = PumpLinkRules.firstAppHandle(store.firstAppHandle(build), sdk, handle)
-        val kept = store.workedHandle
-        val worked = PumpLinkRules.workedHandle(kept?.first, kept?.second, bootCount())
-        val f = PumpLinkRules.front(handle, first, worked)
+        val first = PumpLinkRules.firstAppHandle(Build.VERSION.SDK_INT, handle)
+        val accepted = acceptedHandle
+        val f = PumpLinkRules.front(handle, first, accepted)
         journal(
             if (f == PumpLinkRules.Front.FOREIGN && front != null) PumpLinkRules.frontStillLine(handle)
-            else PumpLinkRules.frontLine(f, handle, first, worked),
+            else PumpLinkRules.frontLine(f, handle, first, accepted),
         )
         setFront(if (f == PumpLinkRules.Front.FOREIGN) PumpBtFront(front?.sinceMs ?: System.currentTimeMillis(), handle, first) else null)
         // the window shows the wait, not "not started"
@@ -862,20 +851,27 @@ internal class PumpLink(
 
     private fun setFront(f: PumpBtFront?) {
         main.removeCallbacks(frontRecheck)
-        if (f != null && running) main.postDelayed(frontRecheck, PumpLinkRules.FRONT_RECHECK_MS)
+        if (f != null && running) {
+            // the first check soon: right after an update our own old process may still lie in front
+            val delay = if (front == null) PumpLinkRules.FRONT_FIRST_RECHECK_MS else PumpLinkRules.FRONT_RECHECK_MS
+            main.postDelayed(frontRecheck, delay)
+        }
         if (f != front) {
             front = f
             update { it.copy(front = f) }
         }
     }
 
-    /** Every [PumpLinkRules.FRONT_RECHECK_MS] with another app's server in front: our server opened anew shows whether it is still there. */
+    /**
+     * [PumpLinkRules.FRONT_FIRST_RECHECK_MS] after the pause appeared, then every [PumpLinkRules.FRONT_RECHECK_MS]
+     * with another app's server in front: our server opened anew shows whether it is still there.
+     */
     private fun recheckFront() {
         if (!running || front == null) return
         val a = adapter
         if (a == null || !isEnabled(a)) return
-        if (pairMode || pumpDevice != null) {
-            // not in the middle of a pairing or of the pump's session: later
+        if (pairMode || pumpDevice != null || serverConnectedAt.keys.any { isPumpAddress(it) }) {
+            // not in the middle of a pairing or of the pump's session (or its connection to our server): later
             main.postDelayed(frontRecheck, PumpLinkRules.FRONT_RECHECK_MS)
             return
         }
@@ -885,11 +881,14 @@ internal class PumpLink(
         setUpServer()
     }
 
-    /** The window's "Call the pump anyway": the person takes the risk; the current layout counts as worked in this boot. */
+    /**
+     * The window's "Call the pump anyway": the person takes the risk; the current layout is let through until the
+     * process ends, Bluetooth turns off or the link stops (memory only).
+     */
     fun acceptFront() {
         val f = front ?: return
         journal("the person lets the pump come although another app's server lies in front (SAKE at handle ${f.ourHandle})")
-        bootCount()?.let { store.workedHandle = f.ourHandle to it }
+        acceptedHandle = f.ourHandle
         setFront(null)
         if (!recoverScheduled) updateAdvertising()
     }
@@ -920,8 +919,6 @@ internal class PumpLink(
         heldAtMs = System.currentTimeMillis()
         journal(PumpLinkRules.heldLine(mac(address), (SystemClock.elapsedRealtime() - connectedAt) / 1000))
         logcat("pump held by a server in front of ours")
-        // this layout did not let the pump through
-        store.workedHandle = null
     }
 
     private fun clearOutbox() {
@@ -1245,16 +1242,7 @@ internal class PumpLink(
         recoverFailures = 0
         store.paired = true
         pumpDevice?.let { store.pumpAddress = it.address }
-        // build 17: this layout of services let the pump through - it counts for the rest of this Bluetooth session
-        val boot = bootCount()
-        if (sakeHandle > 0 && boot != null) {
-            val kept = sakeHandle to boot
-            if (store.workedHandle != kept) {
-                store.workedHandle = kept
-                journal("pump came through with our SAKE at handle $sakeHandle: kept for this Bluetooth session")
-            }
-        }
-        if (front != null) setFront(null)
+        // build 17: a pause for another app's server in front stays after the handshake (a pairing with it may pass once)
         if (state.heldBondLossAtMs != null) update { it.copy(heldBondLossAtMs = null) }
         if (pairMode) {
             pairMode = false

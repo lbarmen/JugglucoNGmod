@@ -25,8 +25,8 @@ For the user:
   update; the pump journal, the pump state and the pump settings stay. The pump's hooks in the author's files: still two
   (`carelink-settings`, `carelink-tempbasal`), 4 changed lines as `mod/check-hooks.py` counts them (3 lines of ours,
   1 of theirs replaced).
-  The pump is not called while another app's Bluetooth server sits in front of ours (it would hang there and Android
-  would erase the pairing); the pump window and a notification say so, Bluetooth off and on or the other app leaving
+  The pump is not called while another app's Bluetooth server sits in front of ours (Android 14 and newer) (it would
+  hang there and Android would erase the pairing); the pump window and a notification say so, Bluetooth off and on or the other app leaving
   brings it back; OMRON connect is named when installed.
 - 2026-11-26 — the phone's always-on display ("Lock screen (AOD)", the author's accessibility overlay) in the look of
   the watch face's dim mode (`Common/src/main/java/tk/glucodata/mod/aod/`): the number centred (with the chart on, the

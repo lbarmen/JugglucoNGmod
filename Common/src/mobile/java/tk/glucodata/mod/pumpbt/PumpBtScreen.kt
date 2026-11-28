@@ -182,6 +182,10 @@ private fun StateSection(state: PumpBtUiState, source: PumpBtSourceState, contro
         PumpBtLinkStatus.BLUETOOTH_OFF -> BtWarning(stringResource(R.string.mod_pumpbt_link_bluetooth_off))
         PumpBtLinkStatus.CONNECTED -> SettingsItem(title = stringResource(R.string.mod_pumpbt_link_connected), position = CardPosition.SINGLE)
         PumpBtLinkStatus.WAITING -> WaitingForPump(PumpBtWindow.waitShownSince(source.waitingSinceMs, state.bluetoothBackAtMs), now, keepBond = source.enabled)
+        PumpBtLinkStatus.PAUSED -> {
+            SettingsItem(title = stringResource(R.string.mod_pumpbt_link_paused), position = CardPosition.SINGLE)
+            if (source.enabled) BtHint(stringResource(R.string.mod_pumpbt_link_keep_bond), Modifier.padding(top = 4.dp))
+        }
         PumpBtLinkStatus.PAIRING -> SettingsItem(title = stringResource(R.string.mod_pumpbt_link_pairing), position = CardPosition.SINGLE)
         PumpBtLinkStatus.ERROR -> SettingsItem(
             title = stringResource(R.string.mod_pumpbt_link_error, source.link.error ?: "—"),
@@ -204,7 +208,7 @@ private fun StateSection(state: PumpBtUiState, source: PumpBtSourceState, contro
     if (PumpBtWindow.pairAgainShown(source)) {
         PairingAgainCard(state, source, actions)
     } else if (PumpBtWindow.bondAdvice(source)) {
-        BondLostCard(state, source, controls, actions)
+        BondLostCard(state, source, controls, actions, now)
     }
     if (PumpBtWindow.foreignAppHint(source)) BtHint(stringResource(R.string.mod_pumpbt_foreign_app_hint), Modifier.padding(top = 8.dp))
 }
@@ -273,9 +277,13 @@ internal fun turnOnHintText(hint: PumpBtTurnOnHint): String = when (hint) {
     PumpBtTurnOnHint.PAIRING -> stringResource(R.string.mod_pumpbt_permanent_wait_pairing)
 }
 
-/** "The phone forgot the pump" (BOND_LOST, journal 14): what to do and the pairing button (not pressable during a pairing). */
+/**
+ * "The phone forgot the pump" (BOND_LOST, journal 14): what to do and the pairing button (not pressable during a
+ * pairing). Build 17: first why it went (Android removed it after the pump hung on another app's server) or, while
+ * another app's server lies in front, to turn Bluetooth off and on before pairing.
+ */
 @Composable
-private fun BondLostCard(state: PumpBtUiState, source: PumpBtSourceState, controls: PumpBtControls, actions: PumpBtScreenActions) {
+private fun BondLostCard(state: PumpBtUiState, source: PumpBtSourceState, controls: PumpBtControls, actions: PumpBtScreenActions, now: Long) {
     Spacer(Modifier.padding(top = 8.dp))
     Card(
         Modifier.fillMaxWidth(),
@@ -286,8 +294,10 @@ private fun BondLostCard(state: PumpBtUiState, source: PumpBtSourceState, contro
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(R.string.mod_pumpbt_bond_lost_title), style = MaterialTheme.typography.titleMedium)
-            if (PumpBtWindow.heldBondLoss(source)) {
+            if (PumpBtWindow.heldBondLoss(source, now)) {
                 Text(stringResource(R.string.mod_pumpbt_bond_lost_held), style = MaterialTheme.typography.bodyMedium)
+            } else if (source.link.front != null) {
+                Text(stringResource(R.string.mod_pumpbt_front_pairing), style = MaterialTheme.typography.bodyMedium)
             }
             Text(stringResource(R.string.mod_pumpbt_bond_lost_text, state.advertisedName), style = MaterialTheme.typography.bodyMedium)
             Button(onClick = actions.onStartPairing, enabled = controls.canPair) {

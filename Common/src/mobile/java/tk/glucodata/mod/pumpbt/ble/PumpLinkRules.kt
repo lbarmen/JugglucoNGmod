@@ -193,57 +193,55 @@ internal object PumpLinkRules {
      * not answer that read (OMRON connect) keeps the pump waiting past 30 s. An app cannot drop the link before that:
      * the SMP channel holds it 60 s and `BluetoothGattServer.cancelConnection` does nothing for an incoming connection.
      * Android gives a new service the handles right after the service with the largest start handle and never hands
-     * out freed ranges again; on Android 14 (Galaxy S24 Ultra) the first app service starts at 134. 28.11: our SAKE got
-     * 134 after Bluetooth on, then 161 after our process restarted - behind OMRON at 157-160, and the pump hung.
+     * out freed ranges again; on Android 14 (a Samsung phone, logcat 28.11) the first app service starts at 134.
+     * 28.11: our SAKE got 134 after Bluetooth on, then 161 after our process restarted - behind OMRON at 157-160, and the pump hung.
      * So the paired pump is not called while another app's services may lie in front of ours.
+     *
+     * Why nothing is learned and "the pump came through once" does not count: on Android 14+ the first app service is
+     * always 134 (AOSP; logcat 28.11), so there is nothing to learn. A server that answered the pump once may stay
+     * silent later: on 28.11 the OMRON connect process was alive in the background and did not answer - likely frozen
+     * by Android as a cached app (a guess). So only the person's "call the pump anyway" lets the pump come with
+     * another app in front, and only until the process ends (kept in memory, not in a file; cleared when Bluetooth
+     * turns off and when the link stops). On Android 13 and older there is no protection: our handle is compared
+     * with itself and always counts as clear.
      */
     enum class Front {
         /** Our SAKE is the first app service: nothing in front. */
         CLEAR,
 
-        /** Services of other apps lie in front, but no more than when the pump came through in this Bluetooth session. */
-        WORKED,
+        /** Services of another app lie in front, but the person told the app to call the pump anyway (in this process). */
+        ACCEPTED,
 
         /** Services of another app lie in front: the paired pump is not called. */
         FOREIGN,
     }
 
-    /** Where our SAKE ([handle]) stands: [firstApp] - the first app service handle, [worked] - our SAKE handle when the pump last came through. */
-    fun front(handle: Int, firstApp: Int, worked: Int?): Front = when {
+    /**
+     * Where our SAKE ([handle]) stands: [firstApp] - the first app service handle, [accepted] - our SAKE handle when
+     * the person let the pump come anyway (in this process; null - not let).
+     */
+    fun front(handle: Int, firstApp: Int, accepted: Int?): Front = when {
         handle <= firstApp -> Front.CLEAR
-        worked != null && handle <= worked -> Front.WORKED
+        accepted != null && handle <= accepted -> Front.ACCEPTED
         else -> Front.FOREIGN
     }
 
-    /** The first app service handle on Android 14 (Galaxy S24 Ultra, logcat 28.11; LE Audio services at 40, 90, 130). */
+    /** The first app service handle on Android 14 (a Samsung phone, logcat 28.11; LE Audio services at 40, 90, 130). */
     const val ANDROID14_FIRST_APP_HANDLE = 134
 
     /**
-     * The first app service handle: [learned] on this phone, else 134 on Android 14+, else our own [handle] (nothing
-     * known - counted as clear: no protection on older Android until the phone shows its own value).
+     * The first app service handle: 134 on Android 14+, else our own [handle] (nothing known - counted as clear: no
+     * protection on Android 13 and older).
      */
-    fun firstAppHandle(learned: Int?, sdk: Int, handle: Int): Int = learned ?: (if (sdk >= 34) ANDROID14_FIRST_APP_HANDLE else handle)
+    fun firstAppHandle(sdk: Int, handle: Int): Int = if (sdk >= 34) ANDROID14_FIRST_APP_HANDLE else handle
 
     /**
-     * What to keep after our SAKE got [handle]: right after Bluetooth on we add our services before other apps (28.11 -
-     * 2 s before OMRON) → min(learned ?: handle, handle); at other times only a handle below the one compared with
-     * teaches. null - nothing to keep.
+     * The first check again after a pause appears comes this soon: right after an update the services of our own old
+     * process may still lie in front until the system removes them (a guess). [FRONT_RECHECK_MS] - for the next ones.
      */
-    fun learnFirstAppHandle(learned: Int?, sdk: Int, handle: Int, afterBluetoothOn: Boolean): Int? = when {
-        afterBluetoothOn -> minOf(learned ?: handle, handle)
-        learned == null && sdk < 34 -> null
-        handle < firstAppHandle(learned, sdk, handle) -> handle
-        else -> learned
-    }
+    const val FRONT_FIRST_RECHECK_MS = 30_000L
 
-    /**
-     * Our SAKE handle at the last complete handshake ([worked]) counts only in the same phone boot ([bootNow] -
-     * Settings.Global.BOOT_COUNT) and while Bluetooth was not turned off (that clears it in the link).
-     */
-    fun workedHandle(worked: Int?, workedBoot: Int?, bootNow: Int?): Int? =
-        if (worked != null && workedBoot != null && bootNow != null && workedBoot == bootNow) worked else null
-
-    /** With another app's server in front of ours the link opens its GATT server anew this often to check again. */
+    /** With another app's server in front of ours the link opens its GATT server anew this often to check again (after the first check). */
     const val FRONT_RECHECK_MS = 5 * 60_000L
 
     /**
@@ -268,10 +266,10 @@ internal object PumpLinkRules {
     }
 
     /** The journal line of [front] after our services were added. */
-    fun frontLine(front: Front, handle: Int, firstApp: Int, worked: Int?): String = when (front) {
+    fun frontLine(front: Front, handle: Int, firstApp: Int, accepted: Int?): String = when (front) {
         Front.CLEAR -> "our services are the first app services (SAKE at handle $handle)"
-        Front.WORKED -> "services of other apps lie in front of ours (handles $firstApp-${handle - 1}), " +
-            "no more than when the pump last came through (SAKE then at $worked): advertising"
+        Front.ACCEPTED -> "services of another app lie in front of ours (handles $firstApp-${handle - 1}), " +
+            "the person let the pump come anyway (accepted at SAKE handle $accepted): advertising"
         Front.FOREIGN -> "services of another app lie in front of ours (handles $firstApp-${handle - 1}): no advertising for the pump - " +
             "connecting now it could hang on that app's server and Android would remove the bond at 30 s; " +
             "Bluetooth off and on clears it, checked again every 5 min"

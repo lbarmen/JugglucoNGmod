@@ -262,6 +262,9 @@ internal enum class PumpBtLinkStatus {
 
     /** The link runs and waits for the pump to come (the time is shown, [PumpBtWindow.waitingSince]). */
     WAITING,
+
+    /** Another app's server lies in front - the pump is not called (build 17, [PumpBtLinkState.front]). */
+    PAUSED,
     PAIRING,
     ERROR,
 
@@ -495,6 +498,7 @@ internal object PumpBtWindow {
             pairing(link) -> PumpBtLinkStatus.PAIRING
             link.stage == PumpBtStage.ERROR -> PumpBtLinkStatus.ERROR
             link.stage in CONNECTED_STAGES -> PumpBtLinkStatus.CONNECTED
+            link.front != null -> PumpBtLinkStatus.PAUSED
             else -> PumpBtLinkStatus.WAITING
         }
     }
@@ -572,13 +576,23 @@ internal object PumpBtWindow {
 
     /**
      * The card "the pump connection is paused" (build 17): another app's GATT server lies in front of ours and the
-     * paired pump is not called. Not during a pairing - the wizard's PAIRING line says it there.
+     * paired pump is not called. Not during a pairing - the wizard's PAIRING line says it there; not with the bond lost
+     * either - then one card, "the phone forgot the pump", says it.
      */
     fun frontCard(source: PumpBtSourceState): Boolean =
-        source.link.running && source.link.front != null && !source.link.pairMode && !pairing(source.link)
+        source.link.running && source.link.front != null && !source.link.pairMode && !pairing(source.link) && !bondAdvice(source)
 
-    /** The lost-bond card adds that the bond went because of another app's server (Android removed it right after the pump hung). */
-    fun heldBondLoss(source: PumpBtSourceState): Boolean = source.link.heldBondLossAtMs != null
+    /** How long the lost-bond card says the bond went because of another app's server: 24 hours. */
+    const val HELD_SHOWN_MS = 24 * 3_600_000L
+
+    /**
+     * The lost-bond card adds that the bond went because of another app's server (Android removed it right after the
+     * pump hung), for [HELD_SHOWN_MS] after that ([nowMs] - phone clock).
+     */
+    fun heldBondLoss(source: PumpBtSourceState, nowMs: Long): Boolean {
+        val at = source.link.heldBondLossAtMs
+        return at != null && nowMs - at in 0..HELD_SHOWN_MS
+    }
 
     /** An app whose GATT server held the pump is installed (OMRON connect): the window gives a hint. */
     fun foreignAppHint(source: PumpBtSourceState): Boolean = source.foreignApps.isNotEmpty()
