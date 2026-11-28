@@ -171,14 +171,11 @@ internal object PumpBtSource {
     @Volatile private var lastFront: PumpBtFront? = null
 
     /**
-     * The notification about another app's server in front comes this long after the pause appeared, if it is still
-     * the same pause: the link's quick first check (30 s) clears a false pause right after an update without a
-     * notification.
+     * Build 19 (critic, N2): the first state published in this process without a server in front takes away a pause
+     * notification a previous process left (Android keeps notifications when the process dies). Main thread.
      */
-    internal const val FOREIGN_ALERT_DELAY_MS = 60_000L
+    private var staleFrontCleared = false
 
-    /** The pending notification about the pause ([FOREIGN_ALERT_DELAY_MS]); null - none. Main thread. */
-    private var foreignAlert: Runnable? = null
 
     /** Upstream's sensor Bluetooth switch; tests put their own (the native library is not there). */
     @Volatile
@@ -696,7 +693,12 @@ internal object PumpBtSource {
     private fun linkPublished(c: Context, ls: PumpBtLinkState) {
         _state.update { it.copy(link = ls, waitingSinceMs = PumpBtWindow.waitingSince(it.waitingSinceMs, ls, System.currentTimeMillis())) }
         onLinkState?.invoke(ls)
-        if (ls.front != lastFront) frontChanged(c, ls.front)
+        if (ls.front != lastFront) {
+            frontChanged(c, ls.front)
+        } else if (ls.front == null && !staleFrontCleared) {
+            staleFrontCleared = true
+            takeFrontAlertAway(c)
+        }
         val before = lastStage
         lastStage = ls.stage
         if (PumpBtAlertRules.handshakeDone(before, ls.stage)) handshakeDone(c)
@@ -706,34 +708,35 @@ internal object PumpBtSource {
     internal fun linkPublishedForTest(context: Context, ls: PumpBtLinkState) = linkPublished(attach(context), ls)
 
     /**
-     * The link's front changed: a notification [FOREIGN_ALERT_DELAY_MS] after another app's server appears in front
-     * (only if the same pause still stands, the source is on and the bond is not lost - then the lost-bond
-     * notification says it), taken away when it goes.
+     * The link's front changed: an urgent notification at once when another app's server appears in front (only if the
+     * source is on and the bond is not lost - then the lost-bond notification says it), taken away when it goes.
+     * Build 19: at once, not after a minute - the phone test of 28.11 18:00 showed that the pump may connect through
+     * Samsung's own connectable advertisement although we do not advertise, and Android erases the pairing 30 s later;
+     * turning Bluetooth off and on right away is the remedy.
      */
     private fun frontChanged(c: Context, front: PumpBtFront?) {
         val before = lastFront
         lastFront = front
         if (before == null && front != null) {
-            journal("source: another app's server lies in front - the pump is not called")
-            foreignAlert?.let { main.removeCallbacks(it) }
-            val since = front.sinceMs
-            val pending = Runnable {
-                foreignAlert = null
-                val s = _state.value
-                if (s.link.front?.sinceMs == since && s.enabled && !s.bondLost && PumpSourceSwitch.bluetoothOn(c)) {
-                    scope.launch { sendAlert(c, PumpBtAlert(PumpBtAlertKind.FOREIGN_SERVER)) }
+            journal("source: another app's server lies in front - no advertising for the pump, the person is told to turn Bluetooth off and on")
+            staleFrontCleared = true
+            val s = _state.value
+            if (s.enabled && !s.bondLost && PumpSourceSwitch.bluetoothOn(c)) {
+                scope.launch {
+                    // the pause went before this ran (critic of build 19, N3): nothing to tell
+                    if (lastFront?.sinceMs == front.sinceMs) sendAlert(c, PumpBtAlert(PumpBtAlertKind.FOREIGN_SERVER))
                 }
             }
-            foreignAlert = pending
-            main.postDelayed(pending, FOREIGN_ALERT_DELAY_MS)
         } else if (before != null && front == null) {
-            foreignAlert?.let { main.removeCallbacks(it) }
-            foreignAlert = null
-            try {
-                cancelAlert?.invoke(c, PumpBtAlertKind.FOREIGN_SERVER)
-            } catch (t: Throwable) {
-                PumpBtLog.w("pump alert not taken away (${t.javaClass.simpleName})")
-            }
+            takeFrontAlertAway(c)
+        }
+    }
+
+    private fun takeFrontAlertAway(c: Context) {
+        try {
+            cancelAlert?.invoke(c, PumpBtAlertKind.FOREIGN_SERVER)
+        } catch (t: Throwable) {
+            PumpBtLog.w("pump alert not taken away (${t.javaClass.simpleName})")
         }
     }
 
@@ -1143,8 +1146,7 @@ internal object PumpBtSource {
         cancelAlert = null
         installedPackage = { c, pkg -> packageInstalled(c, pkg) }
         lastFront = null
-        foreignAlert?.let { main.removeCallbacks(it) }
-        foreignAlert = null
+        staleFrontCleared = false
         intake ={ c, e, p, n -> CareLinkIntake.accept(c, IntakeSource.BLUETOOTH, e, p, n) }
         saveMemory = { st, m -> st.save(m) }
         lastStage = null

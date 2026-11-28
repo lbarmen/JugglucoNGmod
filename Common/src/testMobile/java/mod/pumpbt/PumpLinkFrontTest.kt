@@ -50,7 +50,8 @@ class PumpLinkFrontTest {
     @Test
     fun theFirstCheckAgainComesSooner() {
         assertEquals(30_000L, PumpLinkRules.FRONT_FIRST_RECHECK_MS)
-        assertEquals(5 * 60_000L, PumpLinkRules.FRONT_RECHECK_MS)
+        // build 19: every minute - the pause does not keep the pump away, the other server should be seen gone soon
+        assertEquals(60_000L, PumpLinkRules.FRONT_RECHECK_MS)
     }
 
     @Test
@@ -92,12 +93,19 @@ class PumpLinkFrontTest {
         assertEquals(
             "services of another app lie in front of ours (handles 134-160): no advertising for the pump - connecting now " +
                 "it could hang on that app's server and Android would remove the bond at 30 s; Bluetooth off and on clears it, " +
-                "checked again every 5 min",
+                "checked again every 1 min",
             PumpLinkRules.frontLine(Front.FOREIGN, 161, 134, null),
         )
         assertEquals(
-            "another app's server still lies in front of ours (SAKE at handle 161): checked again in 5 min",
+            "another app's server still lies in front of ours (SAKE at handle 161): checked again in 1 min",
             PumpLinkRules.frontStillLine(161),
+        )
+        // build 19: a long pause writes only every 10th check
+        assertEquals(10, PumpLinkRules.FRONT_STILL_WRITTEN_EVERY)
+        assertEquals(
+            "another app's server still lies in front of ours (SAKE at handle 161): checked again in 1 min " +
+                "(check 11 in a row, every 10th written)",
+            PumpLinkRules.frontStillLine(161, 11),
         )
         assertEquals(
             "GATT server: 00:11:22:33:44:55 link encryption on (status 0, key 16 bytes, LE) 20512 ms after it connected",

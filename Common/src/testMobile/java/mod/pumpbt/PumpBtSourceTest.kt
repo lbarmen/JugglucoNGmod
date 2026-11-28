@@ -62,7 +62,6 @@ import tk.glucodata.mod.pumpbt.PumpHistoryMemory
 import tk.glucodata.mod.pumpbt.core.PumpCycle
 import tk.glucodata.mod.pumpbt.core.toHex
 import java.io.File
-import java.time.Duration
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -522,41 +521,49 @@ class PumpBtSourceTest {
     }
 
     @Test
-    fun thePauseIsToldAfterAMinuteOnlyIfItStaysAndTheBondIsNotLost() {
-        // build 17 review: the quick first check (30 s) clears a false pause right after an update without a notification
+    fun thePauseIsToldAtOnceOncePerPauseAndNotWhenTheBondIsLost() {
+        // build 19: at once - the pump may connect through Samsung's own advertisement although we do not advertise
+        val cancelled = Collections.synchronizedList(mutableListOf<PumpBtAlertKind>())
+        PumpBtSource.cancelAlert = { _, k -> cancelled += k }
         enable()
-        val main = Shadows.shadowOf(Looper.getMainLooper())
         fun foreign() = alerts.toList().count { it.kind == PumpBtAlertKind.FOREIGN_SERVER }
+        fun taken() = cancelled.toList().count { it == PumpBtAlertKind.FOREIGN_SERVER }
+
+        // the first state without a server in front takes away what a previous process left - once per process
+        PumpBtSource.linkPublishedForTest(app, PumpBtLinkState(running = true, stage = PumpBtStage.WAITING))
+        PumpBtSource.linkPublishedForTest(app, PumpBtLinkState(running = true, stage = PumpBtStage.WAITING))
+        assertEquals(1, taken())
         fun publish(front: PumpBtFront?) =
             PumpBtSource.linkPublishedForTest(app, PumpBtLinkState(running = true, stage = PumpBtStage.WAITING, front = front))
-        fun waitIo() = Thread.sleep(300)
+        fun waitFor(n: Int) {
+            val until = System.currentTimeMillis() + 3_000
+            while (foreign() < n && System.currentTimeMillis() < until) Thread.sleep(20)
+        }
 
-        // not at once; after a minute, the same pause still standing - once
+        // at once, without waiting for the main looper's clock
         publish(PumpBtFront(sinceMs = 1_000, ourHandle = 161, firstAppHandle = 134))
-        main.idleFor(Duration.ofMillis(PumpBtSource.FOREIGN_ALERT_DELAY_MS - 1))
-        waitIo()
-        assertEquals(0, foreign())
-        main.idleFor(Duration.ofMillis(2))
-        val until = System.currentTimeMillis() + 3_000
-        while (foreign() == 0 && System.currentTimeMillis() < until) Thread.sleep(20)
+        waitFor(1)
         assertEquals(1, foreign())
 
-        // the pause goes within the minute: nothing
-        publish(null)
-        publish(PumpBtFront(sinceMs = 2_000, ourHandle = 161, firstAppHandle = 134))
-        main.idleFor(Duration.ofMillis(30_000))
-        publish(null)
-        main.idleFor(Duration.ofMillis(PumpBtSource.FOREIGN_ALERT_DELAY_MS))
-        waitIo()
+        // the same pause published again: not told a second time
+        publish(PumpBtFront(sinceMs = 1_000, ourHandle = 161, firstAppHandle = 134))
+        Thread.sleep(300)
         assertEquals(1, foreign())
+
+        // the pause goes: taken away; a new one comes: told again
+        publish(null)
+        assertEquals(2, taken())
+        publish(PumpBtFront(sinceMs = 2_000, ourHandle = 185, firstAppHandle = 134))
+        waitFor(2)
+        assertEquals(2, foreign())
 
         // the bond is lost: the lost-bond notification says it, not this one
+        publish(null)
         runBlocking { PumpBtSource.applyBondForTest(app, paired = true, bonded = false) }
         assertTrue(PumpBtSource.state.value.bondLost)
         publish(PumpBtFront(sinceMs = 3_000, ourHandle = 161, firstAppHandle = 134))
-        main.idleFor(Duration.ofMillis(PumpBtSource.FOREIGN_ALERT_DELAY_MS + 1))
-        waitIo()
-        assertEquals(1, foreign())
+        Thread.sleep(300)
+        assertEquals(2, foreign())
     }
 
     @Test

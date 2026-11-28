@@ -1,5 +1,6 @@
 package tk.glucodata.mod.pumpbt
 
+import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
@@ -19,10 +20,22 @@ import tk.glucodata.mod.carelink.CareLinkNotifier
  * Nothing personal in the text: record types in hex at most, no dose, no serial number. With the app's notifications
  * or our channel off nothing is posted and [show] throws: the source then does not mark the alert as told and tells it
  * again with a later cycle (critic B2c, C1).
+ *
+ * Build 19: the notification about another app's server in front ([PumpBtAlertKind.FOREIGN_SERVER]) goes on its own
+ * channel [URGENT_CHANNEL] with high importance, so that it pops up on the screen: while that server stands the pump
+ * may connect any minute (Samsung's own connectable advertisements let it in, phone 28.11 18:00) and Android erases the
+ * pairing 30 s later; turning Bluetooth off and on now is the remedy. The importance of a channel cannot be raised
+ * once made, hence a new channel. With that channel turned off it goes on the ordinary pump channel.
  */
 internal object PumpBtNotifier {
 
     internal const val ID_BASE = 1_947_010
+
+    /** The pump's urgent channel (build 19): high importance - a heads-up notification with sound. */
+    internal const val URGENT_CHANNEL = "mod_pump_urgent"
+
+    /** Whether [kind] goes on [URGENT_CHANNEL]. */
+    internal fun urgent(kind: PumpBtAlertKind): Boolean = kind == PumpBtAlertKind.FOREIGN_SERVER
 
     /** The record types an unknown-record notification shows (its extras: they outlive the process). */
     private const val EXTRA_TYPES = "tk.glucodata.mod.pumpbt.TYPES"
@@ -39,7 +52,7 @@ internal object PumpBtNotifier {
         val shown = try {
             val types = if (alert.kind == PumpBtAlertKind.UNKNOWN_RECORD) gatheredTypes(app, alert.recordType) else null
             val (title, text) = texts(app, alert, types)
-            post(app, id(alert.kind), title, text, types)
+            post(app, id(alert.kind), title, text, types, urgent(alert.kind))
         } catch (t: Throwable) {
             PumpBtLog.w("pump notification failed (${t.javaClass.simpleName})")
             false
@@ -107,27 +120,36 @@ internal object PumpBtNotifier {
         return (shown + listOfNotNull(type)).distinct()
     }
 
-    /** false - not shown (notifications off for the app, our channel off, or refused). */
-    private fun post(app: Context, id: Int, title: String, text: String, types: List<Int>?): Boolean {
+    /**
+     * false - not shown (notifications off for the app, our channel off, or refused). [urgent] - on [URGENT_CHANNEL]
+     * when it is on, else on the ordinary pump channel.
+     */
+    private fun post(app: Context, id: Int, title: String, text: String, types: List<Int>?, urgent: Boolean = false): Boolean {
         val nm = app.getSystemService(NotificationManager::class.java) ?: return false
         if (!nm.areNotificationsEnabled()) {
             PumpBtLog.i("pump notification not shown: notifications are off")
             return false
         }
-        CareLinkNotifier.ensureChannel(app)
-        if (CareLinkNotifier.channelOff(app)) {
-            PumpBtLog.i("pump notification not shown: the channel is off")
-            return false
+        val onUrgent = urgent && ensureUrgentChannel(app) &&
+            nm.getNotificationChannel(URGENT_CHANNEL)?.importance != NotificationManager.IMPORTANCE_NONE
+        if (urgent && !onUrgent) PumpBtLog.i("urgent pump channel off: the notification goes on the pump channel")
+        if (!onUrgent) {
+            CareLinkNotifier.ensureChannel(app)
+            if (CareLinkNotifier.channelOff(app)) {
+                PumpBtLog.i("pump notification not shown: the channel is off")
+                return false
+            }
         }
         val tap = tapIntent(app)?.let {
             PendingIntent.getActivity(app, id, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         }
-        val n = NotificationCompat.Builder(app, CareLinkNotifier.CHANNEL)
+        val n = NotificationCompat.Builder(app, if (onUrgent) URGENT_CHANNEL else CareLinkNotifier.CHANNEL)
             .setSmallIcon(R.drawable.novalue)
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setPriority(if (urgent) NotificationCompat.PRIORITY_HIGH else NotificationCompat.PRIORITY_DEFAULT)
+            .apply { if (urgent) setCategory(NotificationCompat.CATEGORY_ERROR) }
             .setOnlyAlertOnce(true)
             .setAutoCancel(true)
             .apply { if (tap != null) setContentIntent(tap) }
@@ -140,6 +162,34 @@ internal object PumpBtNotifier {
             PumpBtLog.w("pump notification refused (${e.javaClass.simpleName})")
             false
         }
+    }
+
+    /**
+     * Creates [URGENT_CHANNEL] (high importance) if it is not there or has an older name or text; made again with the
+     * same id, Android keeps the person's importance and sound. false - could not be made.
+     */
+    internal fun ensureUrgentChannel(context: Context): Boolean = try {
+        val app = context.applicationContext
+        val nm = app.getSystemService(NotificationManager::class.java)
+        if (nm == null) {
+            false
+        } else {
+            val name = app.getString(R.string.mod_pumpbt_urgent_channel_name)
+            val description = app.getString(R.string.mod_pumpbt_urgent_channel_description)
+            val existing = nm.getNotificationChannel(URGENT_CHANNEL)
+            if (existing == null || existing.name?.toString() != name || existing.description != description) {
+                nm.createNotificationChannel(
+                    NotificationChannel(URGENT_CHANNEL, name, NotificationManager.IMPORTANCE_HIGH).apply {
+                        this.description = description
+                        enableVibration(true)
+                    },
+                )
+            }
+            true
+        }
+    } catch (t: Throwable) {
+        PumpBtLog.w("urgent pump channel not made (${t.javaClass.simpleName})")
+        false
     }
 
     /** The pump window when this build has it (the `mod` manifest), else the app's main window. */

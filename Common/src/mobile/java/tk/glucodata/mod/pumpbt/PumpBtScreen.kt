@@ -182,10 +182,8 @@ private fun StateSection(state: PumpBtUiState, source: PumpBtSourceState, contro
         PumpBtLinkStatus.BLUETOOTH_OFF -> BtWarning(stringResource(R.string.mod_pumpbt_link_bluetooth_off))
         PumpBtLinkStatus.CONNECTED -> SettingsItem(title = stringResource(R.string.mod_pumpbt_link_connected), position = CardPosition.SINGLE)
         PumpBtLinkStatus.WAITING -> WaitingForPump(PumpBtWindow.waitShownSince(source.waitingSinceMs, state.bluetoothBackAtMs), now, keepBond = source.enabled)
-        PumpBtLinkStatus.PAUSED -> {
-            SettingsItem(title = stringResource(R.string.mod_pumpbt_link_paused), position = CardPosition.SINGLE)
-            if (source.enabled) BtHint(stringResource(R.string.mod_pumpbt_link_keep_bond), Modifier.padding(top = 4.dp))
-        }
+        // build 19: no calm "do not remove the pairing" hint here - the urgent card below says what to do now
+        PumpBtLinkStatus.PAUSED -> SettingsItem(title = stringResource(R.string.mod_pumpbt_link_paused), position = CardPosition.SINGLE)
         PumpBtLinkStatus.PAIRING -> SettingsItem(title = stringResource(R.string.mod_pumpbt_link_pairing), position = CardPosition.SINGLE)
         PumpBtLinkStatus.ERROR -> SettingsItem(
             title = stringResource(R.string.mod_pumpbt_link_error, source.link.error ?: "—"),
@@ -210,12 +208,15 @@ private fun StateSection(state: PumpBtUiState, source: PumpBtSourceState, contro
     } else if (PumpBtWindow.bondAdvice(source)) {
         BondLostCard(state, source, controls, actions, now)
     }
-    if (PumpBtWindow.foreignAppHint(source)) BtHint(stringResource(R.string.mod_pumpbt_foreign_app_hint), Modifier.padding(top = 8.dp))
+    // the urgent card already names the deep sleeping apps (build 19)
+    if (PumpBtWindow.foreignAppHint(source) && !PumpBtWindow.frontCard(source)) BtHint(stringResource(R.string.mod_pumpbt_foreign_app_hint), Modifier.padding(top = 8.dp))
 }
 
 /**
- * "The pump connection is paused" (build 17): another app's Bluetooth server lies in front of ours, the paired pump is
- * not called. Bluetooth settings (off and on clears it), or - after a warning - call the pump anyway.
+ * "Turn Bluetooth off and on now" (build 17, texts of build 19): another app's Bluetooth server lies in front of ours,
+ * the paired pump is not called - but it may still connect any minute (Samsung's own connectable advertisement, phone
+ * 28.11 18:00) and the phone would erase the pairing, so the card says that honestly. Bluetooth settings (off and on
+ * clears it), or - after a warning - call the pump anyway.
  */
 @Composable
 private fun ForeignServerCard(actions: PumpBtScreenActions) {

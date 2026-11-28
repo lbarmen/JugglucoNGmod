@@ -28,6 +28,10 @@ For the user:
   The pump is not called while another app's Bluetooth server sits in front of ours (Android 14 and newer) (it would
   hang there and Android would erase the pairing); the pump window and a notification say so, Bluetooth off and on or the other app leaving
   brings it back; OMRON connect is named when installed.
+  Since 2026-11-28 (build 19) the warning is honest and urgent: not calling the pump does not keep it away (it may
+  still connect through the phone's own system advertisements, and the phone then erases the pairing 30 s later), so
+  a pop-up notification on its own "Pump: urgent" channel asks at once to turn Bluetooth off and on; the window says
+  the same; the app checks every minute whether the other server is gone (was every 5 minutes).
 
 Build and checks:
 - 2026-11-27 — `mod/check-apk.py`: the phone manifest has none of the removed cloud's components

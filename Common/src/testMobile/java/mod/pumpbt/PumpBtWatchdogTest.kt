@@ -3,6 +3,7 @@ package mod.pumpbt
 import android.app.AlarmManager
 import android.app.Application
 import android.app.Notification
+import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
@@ -24,6 +25,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.ConscryptMode
 import org.robolectric.shadows.ShadowAlarmManager
+import tk.glucodata.R
 import tk.glucodata.mod.carelink.CareLinkClock
 import tk.glucodata.mod.carelink.CareLinkNotifier
 import tk.glucodata.mod.carelink.PumpSourceSwitch
@@ -663,6 +665,32 @@ class PumpBtWatchdogTest {
         assertTrue(ids.all { it >= 1_947_010 })
         val bond = shown(PumpBtNotifier.id(PumpBtAlertKind.BOND_LOST))!!
         assertTrue(text(bond)!!.contains("pair again"))
+    }
+
+    @Test
+    fun anotherAppsServerInFrontPopsUpOnTheUrgentChannelElseOnThePumpChannel() {
+        // build 19: high importance (a heads-up), its own channel; the others stay on the pump channel
+        PumpBtNotifier.show(app, PumpBtAlert(PumpBtAlertKind.FOREIGN_SERVER))
+        val n = shown(PumpBtNotifier.id(PumpBtAlertKind.FOREIGN_SERVER))!!
+        assertEquals(PumpBtNotifier.URGENT_CHANNEL, n.channelId)
+        assertEquals(NotificationManager.IMPORTANCE_HIGH, nm.getNotificationChannel(PumpBtNotifier.URGENT_CHANNEL)!!.importance)
+        assertTrue(text(n)!!.contains("30 seconds"))
+        assertFalse(PumpBtNotifier.urgent(PumpBtAlertKind.BOND_LOST))
+        PumpBtNotifier.show(app, PumpBtAlert(PumpBtAlertKind.BOND_LOST))
+        assertEquals(CareLinkNotifier.CHANNEL, shown(PumpBtNotifier.id(PumpBtAlertKind.BOND_LOST))!!.channelId)
+        // the person turned the urgent channel off: it still comes, on the pump channel (the switch-off is made up:
+        // Robolectric takes a channel made again with a lower importance, Android itself would keep the old one)
+        nm.cancelAll()
+        nm.createNotificationChannel(
+            NotificationChannel(
+                PumpBtNotifier.URGENT_CHANNEL,
+                app.getString(R.string.mod_pumpbt_urgent_channel_name),
+                NotificationManager.IMPORTANCE_NONE,
+            ).apply { description = app.getString(R.string.mod_pumpbt_urgent_channel_description) },
+        )
+        assertEquals(NotificationManager.IMPORTANCE_NONE, nm.getNotificationChannel(PumpBtNotifier.URGENT_CHANNEL)!!.importance)
+        PumpBtNotifier.show(app, PumpBtAlert(PumpBtAlertKind.FOREIGN_SERVER))
+        assertEquals(CareLinkNotifier.CHANNEL, shown(PumpBtNotifier.id(PumpBtAlertKind.FOREIGN_SERVER))!!.channelId)
     }
 
     @Test

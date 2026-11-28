@@ -17,8 +17,11 @@
     <string name="mod_pumpbt_notify_drift_text">The pump\'s clock differs from the phone\'s. Set the time on the pump, otherwise the journal times may be off.</string>
     <string name="mod_pumpbt_notify_bond_lost_title">The phone forgot the pump</string>
     <string name="mod_pumpbt_notify_bond_lost_text">The pump is no longer among the phone\'s paired Bluetooth devices, so its data cannot come. Open the pump window and pair again.</string>
-    <string name="mod_pumpbt_notify_front_title">The pump connection is paused</string>
-    <string name="mod_pumpbt_notify_front_text">Another app (for example, OMRON connect) got hold of Bluetooth before JugglucoNGmod. The pairing is safe; no pump data comes for now. To get the connection back right away, turn Bluetooth off and on.</string>
+    <string name="mod_pumpbt_notify_front_title">Pump: turn Bluetooth off and on now</string>
+    <string name="mod_pumpbt_notify_front_text">Otherwise the phone may erase the pump\'s pairing. Another app (for example, OMRON connect) got hold of Bluetooth before JugglucoNGmod. The pump may connect any minute, even though the app does not call it; then it may get stuck on that app, and after 30 seconds the phone erases the pairing. The sensor and the watch drop off for a moment.</string>
     <string name="mod_pumpbt_notify_foreign_app_title">OMRON connect may get in the pump\'s way</string>
-    <string name="mod_pumpbt_notify_foreign_app_text">If OMRON connect\'s Bluetooth server gets in before ours, the app pauses the pump connection. Add OMRON connect to the deep sleeping apps in the phone\'s battery settings.</string>
+    <string name="mod_pumpbt_notify_foreign_app_text">If OMRON connect\'s Bluetooth server gets in before ours, the pump may get stuck on it, and the phone erases its pairing. Add OMRON connect to the deep sleeping apps in the phone\'s battery settings.</string>
+    <!-- build 19: the urgent channel (high importance) -->
+    <string name="mod_pumpbt_urgent_channel_name">Pump: urgent</string>
+    <string name="mod_pumpbt_urgent_channel_description">Urgent: the phone may erase the pump\'s pairing</string>
 </resources>

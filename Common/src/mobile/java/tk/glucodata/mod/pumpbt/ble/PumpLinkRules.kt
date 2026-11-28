@@ -241,8 +241,23 @@ internal object PumpLinkRules {
      */
     const val FRONT_FIRST_RECHECK_MS = 30_000L
 
-    /** With another app's server in front of ours the link opens its GATT server anew this often to check again (after the first check). */
-    const val FRONT_RECHECK_MS = 5 * 60_000L
+    /**
+     * With another app's server in front of ours the link opens its GATT server anew this often to check again (after
+     * the first check). Build 19: every minute, not every 5 - the pause does not keep the pump away (it may connect
+     * through Samsung's own connectable advertisement, phone 28.11 18:00), so the sooner the other server is seen gone,
+     * the sooner the urgent notification goes and our advertising comes back. A check costs little: our services are
+     * removed and added again within a second (they are the last ones, so they get the same handles back - phone
+     * 28.11 17:59:42, 161 again), never while the pump is connected to our server, pairing or while our services are
+     * being added. Accepted risk (critic of build 19, N6): for about a second a minute our services are not there; a
+     * pump connecting just then sees only the other app's services - it would hang on that server anyway.
+     */
+    const val FRONT_RECHECK_MS = 60_000L
+
+    /** Of the checks in a row that find the same server in front, every this many is written to the journal. */
+    const val FRONT_STILL_WRITTEN_EVERY = 10
+
+    /** [FRONT_RECHECK_MS] in the journal lines ("1 min"). */
+    private val recheckText: String get() = "${FRONT_RECHECK_MS / 60_000} min"
 
     /**
      * The paired pump connected, and [STUCK_CHECK_MS] later the link is not encrypted and the pump asked our server
@@ -272,10 +287,12 @@ internal object PumpLinkRules {
             "the person let the pump come anyway (accepted at SAKE handle $accepted): advertising"
         Front.FOREIGN -> "services of another app lie in front of ours (handles $firstApp-${handle - 1}): no advertising for the pump - " +
             "connecting now it could hang on that app's server and Android would remove the bond at 30 s; " +
-            "Bluetooth off and on clears it, checked again every 5 min"
+            "Bluetooth off and on clears it, checked again every $recheckText"
     }
 
-    fun frontStillLine(handle: Int): String = "another app's server still lies in front of ours (SAKE at handle $handle): checked again in 5 min"
+    fun frontStillLine(handle: Int, checks: Int = 1): String =
+        "another app's server still lies in front of ours (SAKE at handle $handle): checked again in $recheckText" +
+            (if (checks > 1) " (check $checks in a row, every ${FRONT_STILL_WRITTEN_EVERY}th written)" else "")
 
     fun encryptionLine(device: String, enabled: Boolean, status: Int, keySize: Int, transport: Int, afterMs: Long?): String =
         "GATT server: $device link encryption ${if (enabled) "on" else "off"} (status $status, key $keySize bytes, ${transportName(transport)})" +
