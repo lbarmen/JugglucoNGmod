@@ -139,6 +139,8 @@ class PumpBtActivity : ComponentActivity() {
                         onBattery = ::askBatteryExemption,
                         onNotifications = ::askNotifications,
                         onSound = ::openChannelSettings,
+                        onAcceptFront = { PumpBtSource.acceptFront(this) },
+                        onBluetoothSettings = { launch { startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) } },
                     ),
                 )
             }

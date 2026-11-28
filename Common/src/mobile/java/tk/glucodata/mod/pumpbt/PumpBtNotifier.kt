@@ -79,6 +79,19 @@ internal object PumpBtNotifier {
                 app.getString(R.string.mod_pumpbt_notify_drift_title) to app.getString(R.string.mod_pumpbt_notify_drift_text)
             PumpBtAlertKind.BOND_LOST ->
                 app.getString(R.string.mod_pumpbt_notify_bond_lost_title) to app.getString(R.string.mod_pumpbt_notify_bond_lost_text)
+            PumpBtAlertKind.FOREIGN_SERVER ->
+                app.getString(R.string.mod_pumpbt_notify_front_title) to app.getString(R.string.mod_pumpbt_notify_front_text)
+            PumpBtAlertKind.FOREIGN_APP ->
+                app.getString(R.string.mod_pumpbt_notify_foreign_app_title) to app.getString(R.string.mod_pumpbt_notify_foreign_app_text)
+        }
+    }
+
+    /** Takes the notification of [kind] away ([PumpBtSource.cancelAlert], build 17); never throws. */
+    fun cancel(context: Context, kind: PumpBtAlertKind) {
+        try {
+            context.applicationContext.getSystemService(NotificationManager::class.java)?.cancel(id(kind))
+        } catch (t: Throwable) {
+            PumpBtLog.w("pump notification not removed (${t.javaClass.simpleName})")
         }
     }
 

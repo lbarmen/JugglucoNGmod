@@ -92,6 +92,10 @@ internal class PumpBtScreenActions(
     val onBattery: () -> Unit,
     val onNotifications: () -> Unit,
     val onSound: () -> Unit,
+    /** "Call the pump anyway" with another app's server in front of ours ([PumpBtSource.acceptFront], build 17). */
+    val onAcceptFront: () -> Unit,
+    /** The phone's Bluetooth settings (turn Bluetooth off and on). */
+    val onBluetoothSettings: () -> Unit,
 )
 
 /**
@@ -185,6 +189,7 @@ private fun StateSection(state: PumpBtUiState, source: PumpBtSourceState, contro
         )
         PumpBtLinkStatus.OFF -> SettingsItem(title = stringResource(R.string.mod_pumpbt_link_off), position = CardPosition.SINGLE)
     }
+    if (PumpBtWindow.frontCard(source)) ForeignServerCard(actions)
     if (source.enabled) {
         Spacer(Modifier.padding(top = 8.dp))
         SettingsSwitchItem(
@@ -199,7 +204,48 @@ private fun StateSection(state: PumpBtUiState, source: PumpBtSourceState, contro
     if (PumpBtWindow.pairAgainShown(source)) {
         PairingAgainCard(state, source, actions)
     } else if (PumpBtWindow.bondAdvice(source)) {
-        BondLostCard(state, controls, actions)
+        BondLostCard(state, source, controls, actions)
+    }
+    if (PumpBtWindow.foreignAppHint(source)) BtHint(stringResource(R.string.mod_pumpbt_foreign_app_hint), Modifier.padding(top = 8.dp))
+}
+
+/**
+ * "The pump connection is paused" (build 17): another app's Bluetooth server lies in front of ours, the paired pump is
+ * not called. Bluetooth settings (off and on clears it), or - after a warning - call the pump anyway.
+ */
+@Composable
+private fun ForeignServerCard(actions: PumpBtScreenActions) {
+    var ask by rememberSaveable { mutableStateOf(false) }
+    Spacer(Modifier.padding(top = 8.dp))
+    Card(
+        Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer,
+            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        ),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.mod_pumpbt_front_title), style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.mod_pumpbt_front_text), style = MaterialTheme.typography.bodyMedium)
+            Button(onClick = actions.onBluetoothSettings) { Text(stringResource(R.string.mod_pumpbt_front_settings)) }
+            TextButton(onClick = { ask = true }) { Text(stringResource(R.string.mod_pumpbt_front_anyway)) }
+        }
+    }
+    if (ask) {
+        AlertDialog(
+            onDismissRequest = { ask = false },
+            title = { Text(stringResource(R.string.mod_pumpbt_front_anyway)) },
+            text = { Text(stringResource(R.string.mod_pumpbt_front_anyway_ask)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    ask = false
+                    actions.onAcceptFront()
+                }) { Text(stringResource(R.string.mod_pumpbt_front_anyway_confirm)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { ask = false }) { Text(stringResource(R.string.mod_pumpbt_cancel)) }
+            },
+        )
     }
 }
 
@@ -229,7 +275,7 @@ internal fun turnOnHintText(hint: PumpBtTurnOnHint): String = when (hint) {
 
 /** "The phone forgot the pump" (BOND_LOST, journal 14): what to do and the pairing button (not pressable during a pairing). */
 @Composable
-private fun BondLostCard(state: PumpBtUiState, controls: PumpBtControls, actions: PumpBtScreenActions) {
+private fun BondLostCard(state: PumpBtUiState, source: PumpBtSourceState, controls: PumpBtControls, actions: PumpBtScreenActions) {
     Spacer(Modifier.padding(top = 8.dp))
     Card(
         Modifier.fillMaxWidth(),
@@ -240,6 +286,9 @@ private fun BondLostCard(state: PumpBtUiState, controls: PumpBtControls, actions
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(R.string.mod_pumpbt_bond_lost_title), style = MaterialTheme.typography.titleMedium)
+            if (PumpBtWindow.heldBondLoss(source)) {
+                Text(stringResource(R.string.mod_pumpbt_bond_lost_held), style = MaterialTheme.typography.bodyMedium)
+            }
             Text(stringResource(R.string.mod_pumpbt_bond_lost_text, state.advertisedName), style = MaterialTheme.typography.bodyMedium)
             Button(onClick = actions.onStartPairing, enabled = controls.canPair) {
                 Text(stringResource(R.string.mod_pumpbt_pair_again))

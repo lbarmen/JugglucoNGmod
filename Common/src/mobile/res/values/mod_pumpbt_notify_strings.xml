@@ -17,4 +17,8 @@
     <string name="mod_pumpbt_notify_drift_text">The pump\'s clock differs from the phone\'s. Set the time on the pump, otherwise the journal times may be off.</string>
     <string name="mod_pumpbt_notify_bond_lost_title">The phone forgot the pump</string>
     <string name="mod_pumpbt_notify_bond_lost_text">The pump is no longer among the phone\'s paired Bluetooth devices, so its data cannot come. Open the pump window and pair again.</string>
+    <string name="mod_pumpbt_notify_front_title">Pump connection paused</string>
+    <string name="mod_pumpbt_notify_front_text">Another app\'s Bluetooth server (for example, OMRON connect) gets in the pump\'s way. The pairing is safe. To get the connection back right away, turn Bluetooth off and on.</string>
+    <string name="mod_pumpbt_notify_foreign_app_title">OMRON connect gets in the pump\'s way</string>
+    <string name="mod_pumpbt_notify_foreign_app_text">Its Bluetooth server does not answer the pump, and the phone may erase the pairing. Add OMRON connect to the deep sleeping apps in the phone\'s battery settings.</string>
 </resources>

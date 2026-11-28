@@ -15,7 +15,8 @@
 // and bond receivers registered like upstream's (no export flag, system actions only); history read from the number
 // the caller gives, in pages, up to the newest, with an honest result; every finished cycle handed out as a
 // PumpCycle; the journal holds no serial number, doses or decrypted answers unless verbose; time in range is not asked
-// again once the pump said it does not support it.
+// again once the pump said it does not support it; the reconnect advertisement waits while another app's GATT
+// services lie in front of ours (build 17).
 //
 // Roles: the pump is the BLE central and SAKE client, the phone is the BLE peripheral and SAKE server. After the SAKE
 // handshake the phone additionally acts as GATT client on the same link to read the pump's services.
@@ -51,6 +52,8 @@ import android.os.Looper
 import android.os.ParcelUuid
 import android.os.PowerManager
 import android.os.SystemClock
+import android.provider.Settings
+import tk.glucodata.mod.pumpbt.PumpBtFront
 import tk.glucodata.mod.pumpbt.PumpBtHistory
 import tk.glucodata.mod.pumpbt.PumpBtJournal
 import tk.glucodata.mod.pumpbt.PumpBtLinkState
@@ -172,6 +175,22 @@ internal class PumpLink(
     private val recoverRun = Runnable { recoverNow() }
     private val handshakeDeadline: Runnable = Runnable { handshakeOverTime() }
     private var handshakeExtensions = 0
+
+    // Another app's GATT server in front of ours (build 17, PumpLinkRules.Front). Main thread.
+    /** Start handles of our services as Android gave them (onServiceAdded); 0 - not added. */
+    private var sakeHandle = 0
+    private var infoHandle = 0
+    /** The server is being opened anew right after Bluetooth came on: our services come before other apps'. */
+    private var afterBluetoothOn = false
+    /** Another app's services lie in front of ours: no reconnect advertisement; null - nothing in front. */
+    private var front: PumpBtFront? = null
+    private val frontRecheck = Runnable { recheckFront() }
+    /** Addresses that encrypted the link or asked our server something during their current connection. */
+    private val encryptedOrAsked = mutableSetOf<String>()
+    /** "The pump hangs in front of our server" checks per address, [PumpLinkRules.STUCK_CHECK_MS] after it connected. */
+    private val heldChecks = mutableMapOf<String, Runnable>()
+    /** When the last such check found the pump held (phone clock); null - none pending. */
+    private var heldAtMs: Long? = null
 
     // Central side (GATT client on the pump)
     private var gatt: BluetoothGatt? = null
@@ -425,6 +444,10 @@ internal class PumpLink(
         pairMode = false
         main.removeCallbacks(recoverRun)
         recoverScheduled = false
+        setFront(null)
+        heldChecks.values.forEach { main.removeCallbacks(it) }
+        heldChecks.clear()
+        heldAtMs = null
         unregisterReceivers()
         tearDown(cancelPump = true)
         PumpBtAdapterName.restore(context, store, nameJournal)
@@ -457,7 +480,9 @@ internal class PumpLink(
         main.removeCallbacks(recoverRun)
         recoverScheduled = false
         dropPumpLink()
-        if (server == null || !servicesReady) {
+        // with another app's server in front, opening ours anew is the check whether it is still there
+        if (server == null || !servicesReady || (front != null && !pairMode)) {
+            stopAdvertising()
             closeServer()
             if (adapter?.let { isEnabled(it) } == true) setUpServer()
         } else {
@@ -571,6 +596,21 @@ internal class PumpLink(
         } catch (e: Exception) {
             journal("receivers not registered (${e.javaClass.simpleName})")
         }
+        // build 17: only written to the journal (when the pump encrypts, whether it asks to pair)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                context.registerReceiver(encryptionReceiver, IntentFilter(BluetoothDevice.ACTION_ENCRYPTION_CHANGE))
+                encryptionReceiverOn = true
+            }
+        } catch (e: Exception) {
+            journal("encryption receiver not registered (${e.javaClass.simpleName})")
+        }
+        try {
+            context.registerReceiver(pairingReceiver, IntentFilter(BluetoothDevice.ACTION_PAIRING_REQUEST))
+            pairingReceiverOn = true
+        } catch (e: Exception) {
+            journal("pairing request receiver not registered (${e.javaClass.simpleName})")
+        }
     }
 
     private fun unregisterReceivers() {
@@ -584,6 +624,75 @@ internal class PumpLink(
             context.unregisterReceiver(bondReceiver)
         } catch (_: Exception) {
         }
+        if (encryptionReceiverOn) {
+            encryptionReceiverOn = false
+            try {
+                context.unregisterReceiver(encryptionReceiver)
+            } catch (_: Exception) {
+            }
+        }
+        if (pairingReceiverOn) {
+            pairingReceiverOn = false
+            try {
+                context.unregisterReceiver(pairingReceiver)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private var encryptionReceiverOn = false
+    private var pairingReceiverOn = false
+
+    /** The device of a Bluetooth broadcast. */
+    private fun deviceOf(intent: Intent): BluetoothDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+    } else {
+        @Suppress("DEPRECATION")
+        intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
+    }
+
+    /** [address] is the paired pump's (as kept in the store). */
+    private fun isPumpAddress(address: String): Boolean {
+        val pump = store.pumpAddress
+        return pump.isNotEmpty() && address.equals(pump, ignoreCase = true)
+    }
+
+    /** Milliseconds since [address] connected to our server; null - its connection was not seen. */
+    private fun sinceConnected(address: String): Long? = serverConnectedAt[address]?.let { SystemClock.elapsedRealtime() - it }
+
+    /** Encryption changes of devices on our server or of the pump (Android 14+): only written to the journal. */
+    private val encryptionReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, intent: Intent) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return
+            if (intent.action != BluetoothDevice.ACTION_ENCRYPTION_CHANGE) return
+            val address = deviceOf(intent)?.address ?: return
+            if (address !in serverConnectedAt && !isPumpAddress(address)) return
+            val enabled = intent.getBooleanExtra(BluetoothDevice.EXTRA_ENCRYPTION_ENABLED, false)
+            if (enabled) encryptedOrAsked += address
+            journal(
+                PumpLinkRules.encryptionLine(
+                    mac(address), enabled,
+                    intent.getIntExtra(BluetoothDevice.EXTRA_ENCRYPTION_STATUS, -1),
+                    intent.getIntExtra(BluetoothDevice.EXTRA_KEY_SIZE, -1),
+                    intent.getIntExtra(BluetoothDevice.EXTRA_TRANSPORT, -1),
+                    sinceConnected(address),
+                ),
+            )
+        }
+    }
+
+    /** Pairing requests of devices on our server, of the pump, or of any device while pairing: only recorded, no answer. */
+    private val pairingReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, intent: Intent) {
+            if (intent.action != BluetoothDevice.ACTION_PAIRING_REQUEST) return
+            val address = deviceOf(intent)?.address ?: return
+            if (address !in serverConnectedAt && !isPumpAddress(address) && !pairMode) return
+            journal(
+                PumpLinkRules.pairingRequestLine(
+                    mac(address), intent.getIntExtra(BluetoothDevice.EXTRA_PAIRING_VARIANT, -1), sinceConnected(address),
+                ),
+            )
+        }
     }
 
     private val stateReceiver = object : BroadcastReceiver() {
@@ -596,11 +705,16 @@ internal class PumpLink(
                         main.removeCallbacks(recoverRun)
                         recoverScheduled = false
                         if (state.stage == PumpBtStage.ERROR) setStage(if (pairMode) PumpBtStage.ADVERTISING_PAIR else PumpBtStage.WAITING)
+                        // our services now come before other apps' (build 17)
+                        afterBluetoothOn = true
                         closeServer()
                         setUpServer()
                     }
                 }
                 BluetoothAdapter.STATE_TURNING_OFF, BluetoothAdapter.STATE_OFF -> {
+                    // a new Bluetooth session follows: the handles given out in this one count no more (build 17)
+                    store.workedHandle = null
+                    setFront(null)
                     if (server == null && !servicesReady && pumpDevice == null) return
                     journal("Bluetooth off")
                     main.removeCallbacks(recoverRun)
@@ -615,17 +729,19 @@ internal class PumpLink(
     private val bondReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, intent: Intent) {
             if (intent.action != BluetoothDevice.ACTION_BOND_STATE_CHANGED) return
-            val extra: BluetoothDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
-            } else {
-                @Suppress("DEPRECATION")
-                intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
-            }
-            val device = extra ?: return
+            val device = deviceOf(intent) ?: return
             val now = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1)
             val before = intent.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, -1)
             val address = device.address ?: return
             journal(bondLine(mac(address), before, now, intent.getIntExtra(EXTRA_BOND_REASON, -1)))
+            if (now == BluetoothDevice.BOND_NONE && (isPumpAddress(address) || address == pumpDevice?.address) &&
+                PumpLinkRules.heldBondLoss(heldAtMs, System.currentTimeMillis())
+            ) {
+                journal(PumpLinkRules.heldBondLossLine(mac(address)))
+                val lostAt = System.currentTimeMillis()
+                update { it.copy(heldBondLossAtMs = lostAt) }
+                heldAtMs = null
+            }
             if (!running) return
             val onServer = isLinked(device)
             val ours = address == pumpDevice?.address || address == pairingShownAddress ||
@@ -685,6 +801,9 @@ internal class PumpLink(
         serverStates.clear()
         serverConnectedAt.clear()
         identifiedAddresses.clear()
+        heldChecks.values.forEach { main.removeCallbacks(it) }
+        heldChecks.clear()
+        encryptedOrAsked.clear()
         main.removeCallbacks(advertiseAgainLater)
         wake.release()
     }
@@ -698,6 +817,111 @@ internal class PumpLink(
         sakePort = null
         servicesReady = false
         pendingServices.clear()
+        sakeHandle = 0
+        infoHandle = 0
+    }
+
+    // MARK: - Another app's GATT server in front of ours (build 17, PumpLinkRules.Front)
+
+    /** The phone's boot count (Settings.Global.BOOT_COUNT); null - not readable. */
+    private fun bootCount(): Int? = try {
+        Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT)
+    } catch (_: Exception) {
+        null
+    }
+
+    /** Our services are added: whether another app's services lie in front of ours (then no reconnect advertisement). */
+    private fun judgeFront() {
+        val fromBtOn = afterBluetoothOn
+        afterBluetoothOn = false
+        val handle = sakeHandle
+        if (handle <= 0) {
+            journal("our SAKE handle not known: not checked whether another app's server lies in front")
+            setFront(null)
+            return
+        }
+        val build = Build.FINGERPRINT ?: ""
+        val sdk = Build.VERSION.SDK_INT
+        PumpLinkRules.learnFirstAppHandle(store.firstAppHandle(build), sdk, handle, fromBtOn)?.let {
+            if (it != store.firstAppHandle(build)) store.setFirstAppHandle(build, it)
+        }
+        val first = PumpLinkRules.firstAppHandle(store.firstAppHandle(build), sdk, handle)
+        val kept = store.workedHandle
+        val worked = PumpLinkRules.workedHandle(kept?.first, kept?.second, bootCount())
+        val f = PumpLinkRules.front(handle, first, worked)
+        journal(
+            if (f == PumpLinkRules.Front.FOREIGN && front != null) PumpLinkRules.frontStillLine(handle)
+            else PumpLinkRules.frontLine(f, handle, first, worked),
+        )
+        setFront(if (f == PumpLinkRules.Front.FOREIGN) PumpBtFront(front?.sinceMs ?: System.currentTimeMillis(), handle, first) else null)
+        // the window shows the wait, not "not started"
+        if (f == PumpLinkRules.Front.FOREIGN && state.stage in ADVERTISE_STAGES) {
+            setStage(if (pairMode) PumpBtStage.ADVERTISING_PAIR else PumpBtStage.WAITING)
+        }
+    }
+
+    private fun setFront(f: PumpBtFront?) {
+        main.removeCallbacks(frontRecheck)
+        if (f != null && running) main.postDelayed(frontRecheck, PumpLinkRules.FRONT_RECHECK_MS)
+        if (f != front) {
+            front = f
+            update { it.copy(front = f) }
+        }
+    }
+
+    /** Every [PumpLinkRules.FRONT_RECHECK_MS] with another app's server in front: our server opened anew shows whether it is still there. */
+    private fun recheckFront() {
+        if (!running || front == null) return
+        val a = adapter
+        if (a == null || !isEnabled(a)) return
+        if (pairMode || pumpDevice != null) {
+            // not in the middle of a pairing or of the pump's session: later
+            main.postDelayed(frontRecheck, PumpLinkRules.FRONT_RECHECK_MS)
+            return
+        }
+        journal("checking again whether another app's server still lies in front: our GATT server opened anew")
+        stopAdvertising()
+        closeServer()
+        setUpServer()
+    }
+
+    /** The window's "Call the pump anyway": the person takes the risk; the current layout counts as worked in this boot. */
+    fun acceptFront() {
+        val f = front ?: return
+        journal("the person lets the pump come although another app's server lies in front (SAKE at handle ${f.ourHandle})")
+        bootCount()?.let { store.workedHandle = f.ourHandle to it }
+        setFront(null)
+        if (!recoverScheduled) updateAdvertising()
+    }
+
+    /** The paired pump connected to our server: in [PumpLinkRules.STUCK_CHECK_MS] see whether it hangs in front of us. */
+    private fun armHeldCheck(address: String) {
+        heldChecks.remove(address)?.let { main.removeCallbacks(it) }
+        val check = Runnable { heldCheck(address) }
+        heldChecks[address] = check
+        main.postDelayed(check, PumpLinkRules.STUCK_CHECK_MS)
+    }
+
+    private fun heldCheck(address: String) {
+        heldChecks.remove(address)
+        if (!running) return
+        val connectedAt = serverConnectedAt[address] ?: return
+        val device = try {
+            adapter?.getRemoteDevice(address)
+        } catch (_: Exception) {
+            null
+        } ?: return
+        val bonded = try {
+            device.bondState == BluetoothDevice.BOND_BONDED
+        } catch (_: Exception) {
+            false
+        }
+        if (!PumpLinkRules.pumpHeld(isLinked(device), bonded, address in encryptedOrAsked)) return
+        heldAtMs = System.currentTimeMillis()
+        journal(PumpLinkRules.heldLine(mac(address), (SystemClock.elapsedRealtime() - connectedAt) / 1000))
+        logcat("pump held by a server in front of ours")
+        // this layout did not let the pump through
+        store.workedHandle = null
     }
 
     private fun clearOutbox() {
@@ -780,7 +1004,8 @@ internal class PumpLink(
         val next = pendingServices.removeFirstOrNull()
         if (next == null) {
             servicesReady = true
-            journal("GATT server ready (SAKE 0xFE82, device information 0x0900)")
+            journal("GATT server ready (SAKE 0xFE82 at handle $sakeHandle, device information 0x0900 at $infoHandle)")
+            judgeFront()
             updateAdvertising()
             return
         }
@@ -796,7 +1021,9 @@ internal class PumpLink(
     private fun updateAdvertising() {
         stopAdvertising()
         val a = adapter
-        val mode = PumpLinkRules.advertising(running && servicesReady && a != null && isEnabled(a), pumpDevice != null, pairMode) ?: return
+        val mode = PumpLinkRules.advertising(
+            running && servicesReady && a != null && isEnabled(a), pumpDevice != null, pairMode, foreignInFront = front != null,
+        ) ?: return
         if (a == null) return
         val advertiser = try {
             if (a.isMultipleAdvertisementSupported) a.bluetoothLeAdvertiser else null
@@ -1018,6 +1245,17 @@ internal class PumpLink(
         recoverFailures = 0
         store.paired = true
         pumpDevice?.let { store.pumpAddress = it.address }
+        // build 17: this layout of services let the pump through - it counts for the rest of this Bluetooth session
+        val boot = bootCount()
+        if (sakeHandle > 0 && boot != null) {
+            val kept = sakeHandle to boot
+            if (store.workedHandle != kept) {
+                store.workedHandle = kept
+                journal("pump came through with our SAKE at handle $sakeHandle: kept for this Bluetooth session")
+            }
+        }
+        if (front != null) setFront(null)
+        if (state.heldBondLossAtMs != null) update { it.copy(heldBondLossAtMs = null) }
         if (pairMode) {
             pairMode = false
             update { it.copy(pairMode = false) }
@@ -1858,22 +2096,33 @@ internal class PumpLink(
 
     private val serverCallback = object : BluetoothGattServerCallback() {
         override fun onServiceAdded(status: Int, service: BluetoothGattService) {
+            // the start handle Android gave the service (BluetoothGattServer writes it into our object)
+            val handle = try {
+                service.instanceId
+            } catch (_: Exception) {
+                0
+            }
             main.post {
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     fail("service ${PumpUuid.short(service.uuid)} not added to the GATT server (status $status)")
                     return@post
                 }
-                journal("service ${PumpUuid.short(service.uuid)} added")
+                when (service.uuid) {
+                    SAKE_SERVICE_UUID -> sakeHandle = handle
+                    INFO_SERVICE_UUID -> infoHandle = handle
+                }
+                journal("service ${PumpUuid.short(service.uuid)} added (handle $handle)")
                 addNextService()
             }
         }
 
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
-            val bond = try {
-                bondName(device.bondState)
+            val bondState = try {
+                device.bondState
             } catch (_: Exception) {
-                "unknown"
+                -1
             }
+            val bond = if (bondState == -1) "unknown" else bondName(bondState)
             main.post {
                 val address = device.address
                 serverStates[address] = newState
@@ -1885,9 +2134,13 @@ internal class PumpLink(
                 )
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     serverConnectedAt.getOrPut(address) { SystemClock.elapsedRealtime() }
+                    encryptedOrAsked.remove(address)
+                    if (bondState == BluetoothDevice.BOND_BONDED && isPumpAddress(address)) armHeldCheck(address)
                     return@post
                 }
                 if (newState != BluetoothProfile.STATE_DISCONNECTED) return@post
+                heldChecks.remove(address)?.let { main.removeCallbacks(it) }
+                encryptedOrAsked.remove(address)
                 val connectedFor = serverConnectedAt.remove(address)?.let { SystemClock.elapsedRealtime() - it }
                 val identified = identifiedAddresses.remove(address) || isPump
                 if (running && PumpLinkRules.pairingFailedByDrop(pairMode, identified, connectedFor)) {
@@ -1928,6 +2181,7 @@ internal class PumpLink(
                 else -> s.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value.copyOfRange(offset, value.size))
             }
             main.post {
+                encryptedOrAsked += device.address
                 if (value == null) {
                     journal("${mac(device.address)} reads $short: refused")
                     return@post
@@ -1948,6 +2202,7 @@ internal class PumpLink(
             }
             val copy = value?.copyOf()
             main.post {
+                encryptedOrAsked += device.address
                 if (!served || copy == null) {
                     journal("${mac(device.address)} writes ${PumpUuid.short(characteristic.uuid)}: refused")
                     return@post
@@ -1965,6 +2220,7 @@ internal class PumpLink(
             } else {
                 server?.sendResponse(device, requestId, BluetoothGatt.GATT_READ_NOT_PERMITTED, 0, null)
             }
+            main.post { encryptedOrAsked += device.address }
         }
 
         override fun onDescriptorWriteRequest(
@@ -1977,6 +2233,7 @@ internal class PumpLink(
             if (responseNeeded) {
                 server?.sendResponse(device, requestId, if (served) BluetoothGatt.GATT_SUCCESS else BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED, offset, null)
             }
+            main.post { encryptedOrAsked += device.address }
             if (!served || value == null || value.size < 2) return
             val subscribed = value[0].toInt() and 0x03 != 0
             main.post {
@@ -2189,6 +2446,10 @@ internal class PumpLink(
         private val IDD_FEATURES = PumpUuid.normalize(PumpUuid.IDD_FEATURES)
         private val GST_BATTERY = PumpUuid.normalize(PumpUuid.GST_BATTERY_LEVEL)
         private val BATTERY_LEVEL = PumpUuid.normalize(PumpUuid.BATTERY_LEVEL)
+
+        /** Our services, to tell their handles apart in onServiceAdded (build 17). */
+        private val SAKE_SERVICE_UUID = PumpUuid.parse(PumpUuid.SAKE_SERVICE)
+        private val INFO_SERVICE_UUID = PumpUuid.parse(PumpUuid.APP_DEVICE_INFO_SERVICE)
 
         /** Stages an advertisement start may replace (not the pump's own stages, not LOST). */
         private val ADVERTISE_STAGES = setOf(

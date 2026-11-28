@@ -118,6 +118,7 @@ internal interface StarterSteps {
 internal object RealStarterSteps : StarterSteps {
     override fun notifier() {
         PumpBtSource.alert = PumpBtNotifier::show
+        PumpBtSource.cancelAlert = PumpBtNotifier::cancel
     }
 
     override fun trial(app: Context) = ModPumpStarter.installTrial(app)

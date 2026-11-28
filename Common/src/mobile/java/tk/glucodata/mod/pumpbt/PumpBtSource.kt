@@ -58,7 +58,16 @@ import java.io.File
 import java.time.ZoneId
 
 /** What the source asks the notifier (part B2c) to tell the person. */
-internal enum class PumpBtAlertKind { UNKNOWN_RECORD, UNPARSED_BOLUS, CONFIRM_BACKFILL, NO_RESULT_BOLUS, CLOCK_DRIFT, BOND_LOST }
+internal enum class PumpBtAlertKind {
+    UNKNOWN_RECORD, UNPARSED_BOLUS, CONFIRM_BACKFILL, NO_RESULT_BOLUS, CLOCK_DRIFT, BOND_LOST,
+
+    // build 17 - always at the end: notification ids follow the ordinal
+    /** Another app's GATT server lies in front of ours: the pump is not called. */
+    FOREIGN_SERVER,
+
+    /** An app whose GATT server held the pump (OMRON connect) is installed: told once. */
+    FOREIGN_APP,
+}
 
 /** [recordType] - the record type of [PumpBtAlertKind.UNKNOWN_RECORD] and [PumpBtAlertKind.UNPARSED_BOLUS]. */
 internal data class PumpBtAlert(val kind: PumpBtAlertKind, val recordType: Int? = null)
@@ -100,6 +109,8 @@ internal data class PumpBtSourceState(
     val verbose: Boolean = false,
     /** The history memory file could not be read at the start of this process: it began again. */
     val memoryLoadFailed: Boolean = false,
+    /** Installed apps whose GATT server held the pump ([PumpLinkRules.KNOWN_HOLDERS], build 17). */
+    val foreignApps: List<String> = emptyList(),
 )
 
 /**
@@ -147,6 +158,17 @@ internal object PumpBtSource {
      */
     @Volatile
     internal var alert: ((Context, PumpBtAlert) -> Unit)? = null
+
+    /** Set by the notifier before [init]: takes a notification of this kind away (build 17); null - nobody to ask. */
+    @Volatile
+    internal var cancelAlert: ((Context, PumpBtAlertKind) -> Unit)? = null
+
+    /** Whether a package is installed; tests put their own. */
+    @Volatile
+    internal var installedPackage: (Context, String) -> Boolean = { c, pkg -> packageInstalled(c, pkg) }
+
+    /** The link's last published [PumpBtLinkState.front]: a notification when it appears, taken away when it goes. */
+    @Volatile private var lastFront: PumpBtFront? = null
 
     /** Upstream's sensor Bluetooth switch; tests put their own (the native library is not there). */
     @Volatile
@@ -230,6 +252,7 @@ internal object PumpBtSource {
             it.copy(enabled = PumpSourceSwitch.bluetoothOn(c), sensorBluetooth = sensorBluetooth(), verbose = s.verbose, journalHasDetail = s.journalHasDetail)
         }
         watchBonds(c)
+        checkForeignApps(c)
         return scope.launch {
             // each step on its own: a card that failed must not skip the bond check, and the journal names what failed
             // (critic of the joints 2, N-3)
@@ -618,6 +641,63 @@ internal object PumpBtSource {
     /** Drop the link and advertise again. */
     fun reconnect() = onMain { link?.reconnect() }
 
+    /** The window's "Call the pump anyway" with another app's server in front of ours (build 17). */
+    fun acceptFront(context: Context) {
+        attach(context)
+        onMain { link?.acceptFront() }
+    }
+
+    /**
+     * Installed apps whose GATT server held the pump ([PumpLinkRules.KNOWN_HOLDERS], build 17): the window's hint, and
+     * one notification while the source is on (told again only after the app was gone).
+     */
+    private fun checkForeignApps(c: Context) {
+        val found = PumpLinkRules.KNOWN_HOLDERS.filter {
+            try {
+                installedPackage(c, it)
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        _state.update { it.copy(foreignApps = found) }
+        val s = store(c)
+        if (found.isEmpty()) {
+            s.foreignAppTold = false
+            return
+        }
+        if (s.foreignAppTold || !PumpSourceSwitch.bluetoothOn(c)) return
+        // the notifier is called off the main thread
+        scope.launch {
+            if (!s.foreignAppTold && sendAlert(c, PumpBtAlert(PumpBtAlertKind.FOREIGN_APP))) {
+                s.foreignAppTold = true
+                journal("OMRON connect is installed: its Bluetooth server held the pump on 28.11 - told once")
+            }
+        }
+    }
+
+    private fun packageInstalled(c: Context, pkg: String): Boolean = try {
+        c.packageManager.getPackageInfo(pkg, 0)
+        true
+    } catch (_: PackageManager.NameNotFoundException) {
+        false
+    }
+
+    /** The link's front changed: a notification when another app's server appears in front, taken away when it goes. */
+    private fun frontChanged(c: Context, front: PumpBtFront?) {
+        val before = lastFront
+        lastFront = front
+        if (before == null && front != null) {
+            journal("source: another app's server lies in front - the pump is not called")
+            if (PumpSourceSwitch.bluetoothOn(c)) scope.launch { sendAlert(c, PumpBtAlert(PumpBtAlertKind.FOREIGN_SERVER)) }
+        } else if (before != null && front == null) {
+            try {
+                cancelAlert?.invoke(c, PumpBtAlertKind.FOREIGN_SERVER)
+            } catch (t: Throwable) {
+                PumpBtLog.w("pump alert not taken away (${t.javaClass.simpleName})")
+            }
+        }
+    }
+
     /**
      * The source is on, but the link is not running - started (waiting); running, neither connected nor advertising
      * (a recovery pause or a lost advertisement) - advertising again.
@@ -827,6 +907,7 @@ internal object PumpBtSource {
             publish = { ls ->
                 _state.update { it.copy(link = ls, waitingSinceMs = PumpBtWindow.waitingSince(it.waitingSinceMs, ls, System.currentTimeMillis())) }
                 onLinkState?.invoke(ls)
+                if (ls.front != lastFront) frontChanged(c, ls.front)
                 val before = lastStage
                 lastStage = ls.stage
                 if (PumpBtAlertRules.handshakeDone(before, ls.stage)) handshakeDone(c)
@@ -1027,6 +1108,9 @@ internal object PumpBtSource {
         cycles?.close()
         cycles = null
         alert = null
+        cancelAlert = null
+        installedPackage = { c, pkg -> packageInstalled(c, pkg) }
+        lastFront = null
         intake = { c, e, p, n -> CareLinkIntake.accept(c, IntakeSource.BLUETOOTH, e, p, n) }
         saveMemory = { st, m -> st.save(m) }
         lastStage = null

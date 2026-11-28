@@ -13,4 +13,8 @@
     <string name="mod_pumpbt_notify_drift_text">Время на помпе отличается от времени телефона. Поставьте время на помпе, иначе время записей в журнале может быть неверным.</string>
     <string name="mod_pumpbt_notify_bond_lost_title">Телефон забыл помпу</string>
     <string name="mod_pumpbt_notify_bond_lost_text">Помпы больше нет среди сопряжённых устройств Bluetooth телефона, данные с неё не придут. Откройте окно помпы и сопрягите её заново.</string>
+    <string name="mod_pumpbt_notify_front_title">Связь с помпой на паузе</string>
+    <string name="mod_pumpbt_notify_front_text">Bluetooth-сервер другого приложения (например, OMRON connect) мешает помпе. Сопряжение цело. Вернуть связь сразу: выключите и включите Bluetooth.</string>
+    <string name="mod_pumpbt_notify_foreign_app_title">OMRON connect мешает помпе</string>
+    <string name="mod_pumpbt_notify_foreign_app_text">Его Bluetooth-сервер не отвечает помпе, и телефон может стереть сопряжение. Добавьте OMRON connect в «Приложения в глубоком сне» в настройках батареи телефона.</string>
 </resources>
