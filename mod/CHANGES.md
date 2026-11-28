@@ -25,6 +25,9 @@ For the user:
   update; the pump journal, the pump state and the pump settings stay. Hooks in the author's files: still two
   (`carelink-settings`, `carelink-tempbasal`), 4 changed lines as `mod/check-hooks.py` counts them (3 lines of ours,
   1 of theirs replaced).
+  The pump is not called while another app's Bluetooth server sits in front of ours (it would hang there and Android
+  would erase the pairing); the pump window and a notification say so, Bluetooth off and on or the other app leaving
+  brings it back; OMRON connect is named when installed.
 
 Build and checks:
 - 2026-11-27 — `mod/check-apk.py`: the phone manifest has none of the removed cloud's components

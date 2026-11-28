@@ -519,6 +519,33 @@ class PumpBtSourceTest {
     }
 
     @Test
+    fun theHandlesOfBuild17OutliveTheStore() {
+        val tmp = File(app.cacheDir, "link-front-test").apply { deleteRecursively(); mkdirs() }
+        val file = File(tmp, "link.json")
+        val st = PumpBtStore(file, null)
+        assertNull(st.firstAppHandle("build-a"))
+        assertNull(st.workedHandle)
+        assertFalse(st.foreignAppTold)
+        st.setFirstAppHandle("build-a", 134)
+        st.workedHandle = 161 to 7
+        st.foreignAppTold = true
+        st.awaitWrites()
+        val again = PumpBtStore(file, null)
+        assertEquals(134, again.firstAppHandle("build-a"))
+        // another OS build may place the system services anew
+        assertNull(again.firstAppHandle("build-b"))
+        assertEquals(161 to 7, again.workedHandle)
+        assertTrue(again.foreignAppTold)
+        again.workedHandle = null
+        again.foreignAppTold = false
+        again.awaitWrites()
+        val third = PumpBtStore(file, null)
+        assertNull(third.workedHandle)
+        assertFalse(third.foreignAppTold)
+        assertEquals(134, third.firstAppHandle("build-a"))
+    }
+
+    @Test
     fun aValueIsWrittenOnlyWhenItChanges() {
         // critic B2a, N-9: off the caller's thread and only on a change
         val tmp = File(app.cacheDir, "link-change-test").apply { deleteRecursively(); mkdirs() }

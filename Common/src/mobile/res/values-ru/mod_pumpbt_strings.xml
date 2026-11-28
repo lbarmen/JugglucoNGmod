@@ -186,4 +186,14 @@
 
     <string name="mod_pumpbt_iob_old">старше 30 мин (%1$s) — смотрите на помпе</string>
     <string name="mod_pumpbt_download_key">Скачать базу ключей</string>
+
+    <string name="mod_pumpbt_front_title">Связь с помпой на паузе</string>
+    <string name="mod_pumpbt_front_text">Перед нашим приложением встал Bluetooth-сервер другого приложения (например, OMRON connect). Помпа застревает на нём, и через 30 секунд телефон стирает сопряжение. Поэтому сейчас помпу не зовём — сопряжение цело. Вернуть связь сразу: выключите и включите Bluetooth. Без этого приложение проверяет каждые 5 минут и вернёт связь само, когда другое приложение уйдёт.</string>
+    <string name="mod_pumpbt_front_settings">Настройки Bluetooth</string>
+    <string name="mod_pumpbt_front_anyway">Всё равно звать помпу</string>
+    <string name="mod_pumpbt_front_anyway_ask">Если сервер другого приложения не ответит помпе, телефон сотрёт сопряжение и помпу придётся сопрягать заново. Звать помпу?</string>
+    <string name="mod_pumpbt_front_anyway_confirm">Звать</string>
+    <string name="mod_pumpbt_front_pairing">Перед сопряжением выключите и включите Bluetooth: перед нашим приложением стоит Bluetooth-сервер другого приложения, и сопряжение на нём сорвётся.</string>
+    <string name="mod_pumpbt_bond_lost_held">Сопряжение стёрто из-за другого приложения с Bluetooth (например, OMRON connect). Сначала выключите и включите Bluetooth, потом сопрягайте.</string>
+    <string name="mod_pumpbt_foreign_app_hint">Установлен OMRON connect: его Bluetooth-сервер мешает помпе. Держите его в «Приложениях в глубоком сне» в настройках батареи телефона.</string>
 </resources>

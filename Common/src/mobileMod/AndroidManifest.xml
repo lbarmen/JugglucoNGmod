@@ -3,6 +3,11 @@
      Common/src/mobile/java/tk/glucodata/mod/ (compiled by every phone build, never by the watch); declared here they
      start only in MOD. No package attribute: the namespace comes from Common/build.gradle. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Pump over Bluetooth: OMRON connect's GATT server held the pump - the window and one notification say so while
+         it is installed (package visibility of Android 11+). -->
+    <queries>
+        <package android:name="com.omronhealthcare.omronconnect" />
+    </queries>
     <application>
         <!-- Pump data starter (old name kept): on every process start, in the background, the one-time removal of what
              the CareLink cloud left on the phone and the pump launcher shortcut. Not exported: nobody queries it. -->

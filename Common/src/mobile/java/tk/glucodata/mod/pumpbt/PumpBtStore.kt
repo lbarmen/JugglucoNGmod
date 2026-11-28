@@ -114,6 +114,46 @@ internal class PumpBtStore internal constructor(private val file: File, private 
         }
 
     /**
+     * The first app service handle learned on this phone (build 17, [tk.glucodata.mod.pumpbt.ble.PumpLinkRules.learnFirstAppHandle]):
+     * only for the same OS build ([build] - Build.FINGERPRINT), else null - an OS update may place the system services anew.
+     */
+    fun firstAppHandle(build: String): Int? = synchronized(lock) {
+        if (values.has(K_FIRST_APP_HANDLE) && values.optString(K_FIRST_APP_BUILD, "\u0000") == build) values.optInt(K_FIRST_APP_HANDLE) else null
+    }
+
+    fun setFirstAppHandle(build: String, handle: Int) = synchronized(lock) {
+        if (firstAppHandle(build) == handle) return@synchronized
+        values.put(K_FIRST_APP_HANDLE, handle)
+        values.put(K_FIRST_APP_BUILD, build)
+        write()
+    }
+
+    /**
+     * Our SAKE handle when the pump last came through and the phone's boot count then (build 17,
+     * [tk.glucodata.mod.pumpbt.ble.PumpLinkRules.workedHandle]); null - none in this Bluetooth session.
+     */
+    var workedHandle: Pair<Int, Int>?
+        get() = synchronized(lock) {
+            if (values.has(K_WORKED_HANDLE) && values.has(K_WORKED_BOOT)) values.optInt(K_WORKED_HANDLE) to values.optInt(K_WORKED_BOOT) else null
+        }
+        set(v) = synchronized(lock) {
+            if (v == workedHandle) return@synchronized
+            if (v == null) {
+                values.remove(K_WORKED_HANDLE)
+                values.remove(K_WORKED_BOOT)
+            } else {
+                values.put(K_WORKED_HANDLE, v.first)
+                values.put(K_WORKED_BOOT, v.second)
+            }
+            write()
+        }
+
+    /** The notification about an installed app whose GATT server held the pump (OMRON connect) was given (build 17). */
+    var foreignAppTold: Boolean
+        get() = synchronized(lock) { values.optBoolean(K_FOREIGN_APP_TOLD, false) }
+        set(v) = synchronized(lock) { put(K_FOREIGN_APP_TOLD, v) }
+
+    /**
      * The phone's Bluetooth name before variant B changed it; null while it is not changed. On disk (synced) before
      * the setter returns: the process may die right after the change. An empty name is never saved (it could not be
      * given back).
@@ -271,6 +311,11 @@ internal class PumpBtStore internal constructor(private val file: File, private 
         const val K_ALERTS = "alerts"
         const val K_JOURNAL_DETAIL = "journal_has_detail"
         const val K_WARNINGS = "warnings_accepted"
+        const val K_FIRST_APP_HANDLE = "first_app_handle"
+        const val K_FIRST_APP_BUILD = "first_app_build"
+        const val K_WORKED_HANDLE = "worked_handle"
+        const val K_WORKED_BOOT = "worked_boot"
+        const val K_FOREIGN_APP_TOLD = "foreign_app_told"
 
         /** In the old preferences: their values were moved to the file. */
         const val K_MOVED = "moved_to_file"

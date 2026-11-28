@@ -69,7 +69,17 @@ internal data class PumpBtLinkState(
      */
     val pairingFailedAtMs: Long? = null,
     val values: PumpBtValues = PumpBtValues(),
+    /** Another app's GATT server lies in front of ours - no advertisement for the paired pump (build 17); null - nothing in front. */
+    val front: PumpBtFront? = null,
+    /** When Android last removed the pump's bond right after it hung on another app's server; phone clock; null - not since the start. */
+    val heldBondLossAtMs: Long? = null,
 )
+
+/**
+ * Another app's GATT server lies in front of ours (build 17): since [sinceMs] (phone clock), our SAKE at [ourHandle],
+ * the first app service handle [firstAppHandle] - services from there up to ours belong to other apps.
+ */
+internal data class PumpBtFront(val sinceMs: Long, val ourHandle: Int, val firstAppHandle: Int)
 
 /** How far a trial got and what came back: plain functions (tested without Android). */
 internal object PumpBtProgress {
@@ -319,6 +329,8 @@ internal enum class PumpBtWizardLine {
     KEY_FAILED,
 
     // PAIRING
+    /** Another app's GATT server lies in front of ours: turn Bluetooth off and on before pairing (build 17). */
+    FRONT_BLOCKS_PAIRING,
     PAIR_WAIT,
     PAIRING_FAILED,
     OTHER_NAME_HINT,
@@ -541,6 +553,7 @@ internal object PumpBtWindow {
             PumpBtWizardStep.PAIRING -> {
                 val failed = pairingAdvice(source.link, ui.pairingStartedAtMs)
                 listOfNotNull(
+                    PumpBtWizardLine.FRONT_BLOCKS_PAIRING.takeIf { source.link.running && source.link.front != null },
                     PumpBtWizardLine.PAIR_WAIT.takeIf { pairWaitShown(source.link) },
                     // the failure advice repeats the pump and phone steps itself
                     PumpBtWizardLine.PAIR_ON_PUMP.takeIf { !failed },
@@ -556,6 +569,19 @@ internal object PumpBtWindow {
             )
             PumpBtWizardStep.NONE -> emptyList()
         }
+
+    /**
+     * The card "the pump connection is paused" (build 17): another app's GATT server lies in front of ours and the
+     * paired pump is not called. Not during a pairing - the wizard's PAIRING line says it there.
+     */
+    fun frontCard(source: PumpBtSourceState): Boolean =
+        source.link.running && source.link.front != null && !source.link.pairMode && !pairing(source.link)
+
+    /** The lost-bond card adds that the bond went because of another app's server (Android removed it right after the pump hung). */
+    fun heldBondLoss(source: PumpBtSourceState): Boolean = source.link.heldBondLossAtMs != null
+
+    /** An app whose GATT server held the pump is installed (OMRON connect): the window gives a hint. */
+    fun foreignAppHint(source: PumpBtSourceState): Boolean = source.foreignApps.isNotEmpty()
 
     /** The state section (link, last reading, permanent operation, cards): once paired, or with the source on. */
     fun stateShown(step: PumpBtWizardStep): Boolean = step == PumpBtWizardStep.NONE || step == PumpBtWizardStep.PAIRED

@@ -171,12 +171,135 @@ internal object PumpLinkRules {
 
     enum class Advertising { PAIR, RECONNECT }
 
-    /** No advertising while stopped or once the pump is there; pairing (FE82) or reconnect (FE81) otherwise. */
-    fun advertising(active: Boolean, pumpPresent: Boolean, pairMode: Boolean): Advertising? = when {
+    /**
+     * No advertising while stopped or once the pump is there; pairing (FE82) otherwise - also with another app's
+     * server in front of ours ([foreignInFront]: there is no bond to lose, and the window asks to turn Bluetooth off and
+     * on first); no reconnect advertisement (FE81) while another app's server lies in front of ours (build 17: the
+     * paired pump would hang on it and Android would remove the bond); reconnect otherwise.
+     */
+    fun advertising(active: Boolean, pumpPresent: Boolean, pairMode: Boolean, foreignInFront: Boolean = false): Advertising? = when {
         !active || pumpPresent -> null
         pairMode -> Advertising.PAIR
+        foreignInFront -> null
         else -> Advertising.RECONNECT
     }
+
+    // MARK: - Another app's GATT server in front of ours (build 17)
+
+    /**
+     * Phone log of 28.11: on every connection of the paired pump Android asks it to encrypt the link (SMP Security
+     * Request) and removes the bond when that does not happen within 30 s. Before encrypting, the pump reads the CCCDs
+     * (0x2902) of all phone services from handle 1 up to the end of ours; a service of another app whose server does
+     * not answer that read (OMRON connect) keeps the pump waiting past 30 s. An app cannot drop the link before that:
+     * the SMP channel holds it 60 s and `BluetoothGattServer.cancelConnection` does nothing for an incoming connection.
+     * Android gives a new service the handles right after the service with the largest start handle and never hands
+     * out freed ranges again; on Android 14 (Galaxy S24 Ultra) the first app service starts at 134. 28.11: our SAKE got
+     * 134 after Bluetooth on, then 161 after our process restarted - behind OMRON at 157-160, and the pump hung.
+     * So the paired pump is not called while another app's services may lie in front of ours.
+     */
+    enum class Front {
+        /** Our SAKE is the first app service: nothing in front. */
+        CLEAR,
+
+        /** Services of other apps lie in front, but no more than when the pump came through in this Bluetooth session. */
+        WORKED,
+
+        /** Services of another app lie in front: the paired pump is not called. */
+        FOREIGN,
+    }
+
+    /** Where our SAKE ([handle]) stands: [firstApp] - the first app service handle, [worked] - our SAKE handle when the pump last came through. */
+    fun front(handle: Int, firstApp: Int, worked: Int?): Front = when {
+        handle <= firstApp -> Front.CLEAR
+        worked != null && handle <= worked -> Front.WORKED
+        else -> Front.FOREIGN
+    }
+
+    /** The first app service handle on Android 14 (Galaxy S24 Ultra, logcat 28.11; LE Audio services at 40, 90, 130). */
+    const val ANDROID14_FIRST_APP_HANDLE = 134
+
+    /**
+     * The first app service handle: [learned] on this phone, else 134 on Android 14+, else our own [handle] (nothing
+     * known - counted as clear: no protection on older Android until the phone shows its own value).
+     */
+    fun firstAppHandle(learned: Int?, sdk: Int, handle: Int): Int = learned ?: (if (sdk >= 34) ANDROID14_FIRST_APP_HANDLE else handle)
+
+    /**
+     * What to keep after our SAKE got [handle]: right after Bluetooth on we add our services before other apps (28.11 -
+     * 2 s before OMRON) → min(learned ?: handle, handle); at other times only a handle below the one compared with
+     * teaches. null - nothing to keep.
+     */
+    fun learnFirstAppHandle(learned: Int?, sdk: Int, handle: Int, afterBluetoothOn: Boolean): Int? = when {
+        afterBluetoothOn -> minOf(learned ?: handle, handle)
+        learned == null && sdk < 34 -> null
+        handle < firstAppHandle(learned, sdk, handle) -> handle
+        else -> learned
+    }
+
+    /**
+     * Our SAKE handle at the last complete handshake ([worked]) counts only in the same phone boot ([bootNow] -
+     * Settings.Global.BOOT_COUNT) and while Bluetooth was not turned off (that clears it in the link).
+     */
+    fun workedHandle(worked: Int?, workedBoot: Int?, bootNow: Int?): Int? =
+        if (worked != null && workedBoot != null && bootNow != null && workedBoot == bootNow) worked else null
+
+    /** With another app's server in front of ours the link opens its GATT server anew this often to check again. */
+    const val FRONT_RECHECK_MS = 5 * 60_000L
+
+    /**
+     * The paired pump connected, and [STUCK_CHECK_MS] later the link is not encrypted and the pump asked our server
+     * nothing (it usually encrypts at about 20 s after reading our CCCD; 28.11): it hangs on a server in front of ours.
+     * Only written to the journal.
+     */
+    fun pumpHeld(stillConnected: Boolean, bonded: Boolean, encryptedOrAsked: Boolean): Boolean = stillConnected && bonded && !encryptedOrAsked
+
+    const val STUCK_CHECK_MS = 24_000L
+
+    /** The pump's bond went to "none" no later than [HELD_BOND_LOSS_MS] after [pumpHeld]: Android's 30 s time limit. */
+    fun heldBondLoss(heldAtMs: Long?, nowMs: Long): Boolean = heldAtMs != null && nowMs - heldAtMs in 0..HELD_BOND_LOSS_MS
+
+    const val HELD_BOND_LOSS_MS = 15_000L
+
+    /** BluetoothDevice.TRANSPORT_* of an encryption change, for the journal. */
+    fun transportName(transport: Int): String = when (transport) {
+        1 -> "BR/EDR"
+        2 -> "LE"
+        else -> "transport $transport"
+    }
+
+    /** The journal line of [front] after our services were added. */
+    fun frontLine(front: Front, handle: Int, firstApp: Int, worked: Int?): String = when (front) {
+        Front.CLEAR -> "our services are the first app services (SAKE at handle $handle)"
+        Front.WORKED -> "services of other apps lie in front of ours (handles $firstApp-${handle - 1}), " +
+            "no more than when the pump last came through (SAKE then at $worked): advertising"
+        Front.FOREIGN -> "services of another app lie in front of ours (handles $firstApp-${handle - 1}): no advertising for the pump - " +
+            "connecting now it could hang on that app's server and Android would remove the bond at 30 s; " +
+            "Bluetooth off and on clears it, checked again every 5 min"
+    }
+
+    fun frontStillLine(handle: Int): String = "another app's server still lies in front of ours (SAKE at handle $handle): checked again in 5 min"
+
+    fun encryptionLine(device: String, enabled: Boolean, status: Int, keySize: Int, transport: Int, afterMs: Long?): String =
+        "GATT server: $device link encryption ${if (enabled) "on" else "off"} (status $status, key $keySize bytes, ${transportName(transport)})" +
+            (if (afterMs != null) " $afterMs ms after it connected" else "")
+
+    fun pairingRequestLine(device: String, variant: Int, afterMs: Long?): String =
+        "pairing request from $device (variant $variant)" + (if (afterMs != null) " $afterMs ms after it connected" else "") +
+            " - only recorded, the system asks the person"
+
+    fun heldLine(device: String, seconds: Long): String =
+        "the pump $device has been connected $seconds s without encrypting the link or asking our server anything: " +
+            "most likely it hangs on another app's Bluetooth server in front of ours - Android removes the bond at 30 s, " +
+            "an app cannot drop the link before that"
+
+    fun heldBondLossLine(device: String): String =
+        "Android removed the bond of $device right after it hung on another app's server: turn Bluetooth off and on, then pair again"
+
+    /** OMRON connect: its GATT server held the pump on 28.11. */
+    const val OMRON_CONNECT = "com.omronhealthcare.omronconnect"
+
+    /** Apps whose GATT server held the pump (28.11): the window and one notification name them while installed. */
+    val KNOWN_HOLDERS = listOf(OMRON_CONNECT)
 
     /** Variant A: Medtronic manufacturer data (company 0x01F9): `00 + "Mobile NNNNNN" + 00`. */
     fun manufacturerData(advertisedName: String): ByteArray = byteArrayOf(0) + advertisedName.toByteArray(Charsets.US_ASCII) + byteArrayOf(0)

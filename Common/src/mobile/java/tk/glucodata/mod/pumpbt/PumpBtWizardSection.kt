@@ -89,7 +89,8 @@ private fun WizardLines(step: PumpBtWizardStep, state: PumpBtUiState, source: Pu
         val text = lineText(line, step, state, source)
         when {
             line == PumpBtWizardLine.PAIR_WAIT -> PairWait(state.pairingStartedAtMs)
-            line == PumpBtWizardLine.PAIRING_FAILED || line == PumpBtWizardLine.KEY_FAILED -> BtWarning(text)
+            line == PumpBtWizardLine.PAIRING_FAILED || line == PumpBtWizardLine.KEY_FAILED ||
+                line == PumpBtWizardLine.FRONT_BLOCKS_PAIRING -> BtWarning(text)
             line == PumpBtWizardLine.KEY_NEEDS_INTERNET || line == PumpBtWizardLine.TURN_ON_HINT ||
                 line == PumpBtWizardLine.OTHER_NAME_HINT -> BtHint(text)
             step == PumpBtWizardStep.WARNINGS -> BtBody("• $text")
@@ -157,6 +158,7 @@ private fun lineText(line: PumpBtWizardLine, step: PumpBtWizardStep, state: Pump
         PumpBtWizardLine.KEY_NEEDS_INTERNET -> stringResource(R.string.mod_pumpbt_key_needs_internet)
         PumpBtWizardLine.KEY_LOADING -> stringResource(R.string.mod_pumpbt_key_loading)
         PumpBtWizardLine.KEY_FAILED -> stringResource(R.string.mod_pumpbt_key_failed, keyFailureText(state) ?: "—")
+        PumpBtWizardLine.FRONT_BLOCKS_PAIRING -> stringResource(R.string.mod_pumpbt_front_pairing)
         PumpBtWizardLine.PAIR_WAIT -> ""
         PumpBtWizardLine.PAIRING_FAILED -> stringResource(R.string.mod_pumpbt_pairing_failed, state.advertisedName)
         PumpBtWizardLine.OTHER_NAME_HINT -> stringResource(R.string.mod_pumpbt_variant_hint)
